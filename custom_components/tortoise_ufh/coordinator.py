@@ -39,18 +39,6 @@ from homeassistant.core import callback
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from tortoise_ufh.config import ControllerConfig
-from tortoise_ufh.controller import BuildingController
-from tortoise_ufh.models import (
-    FastSourceKind,
-    FastSourceMode,
-    LoopInput,
-    Mode,
-    RoomInputs,
-    RoomOutputs,
-    RoomReport,
-)
-
 from .config_flow import CONF_CONTROLLER
 from .const import (
     CONF_COOLING_ENABLED,
@@ -75,6 +63,17 @@ from .const import (
     UPDATE_INTERVAL_MINUTES,
     WATCHDOG_RECOVERY_MINUTES,
     WATCHDOG_TIMEOUT_MINUTES,
+)
+from .core.config import ControllerConfig
+from .core.controller import BuildingController
+from .core.models import (
+    FastSourceKind,
+    FastSourceMode,
+    LoopInput,
+    Mode,
+    RoomInputs,
+    RoomOutputs,
+    RoomReport,
 )
 
 if TYPE_CHECKING:

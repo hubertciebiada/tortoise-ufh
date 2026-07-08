@@ -19,7 +19,7 @@ minutes (simulation horizons).
 
 from __future__ import annotations
 
-from tortoise_ufh.building_profiles import (
+from .building_profiles import (
     BUILDING_PROFILES,
     MODERN_BUNGALOW_ROOMS,
     heavy_construction,
@@ -28,7 +28,7 @@ from tortoise_ufh.building_profiles import (
     thin_screed,
     well_insulated,
 )
-from tortoise_ufh.config import (
+from .config import (
     BuildingConfig,
     ControllerConfig,
     Orientation,
@@ -36,7 +36,7 @@ from tortoise_ufh.config import (
     SimScenario,
     WindowConfig,
 )
-from tortoise_ufh.const import (
+from .const import (
     DEFAULT_DT_COOLING,
     DEFAULT_DT_HEATING,
     DEFAULT_HOME_SETPOINT_C,
@@ -48,14 +48,14 @@ from tortoise_ufh.const import (
     VALID_POWER_UNITS,
     VALID_TEMP_UNITS,
 )
-from tortoise_ufh.controller import BuildingController, RoomController
-from tortoise_ufh.dew_point import (
+from .controller import BuildingController, RoomController
+from .dew_point import (
     condensation_margin,
     cooling_throttle_factor,
     dew_point,
     dew_point_simplified,
 )
-from tortoise_ufh.metrics import (
+from .metrics import (
     SimMetrics,
     assert_comfort,
     assert_floor_temp_safe,
@@ -63,7 +63,7 @@ from tortoise_ufh.metrics import (
     assert_no_freezing,
     assert_no_prolonged_cold,
 )
-from tortoise_ufh.models import (
+from .models import (
     BuildingOutputs,
     FastSourceCommand,
     FastSourceKind,
@@ -74,16 +74,16 @@ from tortoise_ufh.models import (
     RoomOutputs,
     RoomReport,
 )
-from tortoise_ufh.pid import PIDController
-from tortoise_ufh.rc_model import ModelOrder, RCModel, RCParams
-from tortoise_ufh.safety import (
+from .pid import PIDController
+from .rc_model import ModelOrder, RCModel, RCParams
+from .safety import (
     SafetyAction,
     SafetyEvaluator,
     SafetyRule,
     SafetyRuleResult,
     SensorSnapshot,
 )
-from tortoise_ufh.scenarios import (
+from .scenarios import (
     SCENARIO_LIBRARY,
     cold_snap,
     hot_july_floor_cooling,
@@ -92,21 +92,21 @@ from tortoise_ufh.scenarios import (
     spring_transition,
     steady_heating,
 )
-from tortoise_ufh.sensor_noise import SensorNoise
-from tortoise_ufh.simulation_log import SimRecord, SimulationLog
+from .sensor_noise import SensorNoise
+from .simulation_log import SimRecord, SimulationLog
 
 # ``SimulatedRoom`` is defined in :mod:`tortoise_ufh.simulator` (the canonical
 # BuildingSimulator bridge listed in the BUILD_SPEC) and re-exported here.
-from tortoise_ufh.simulator import BuildingSimulator, HeatPumpMode, SimulatedRoom
-from tortoise_ufh.ufh_loop import LoopGeometry, loop_power, loop_power_with_valve
-from tortoise_ufh.weather import (
+from .simulator import BuildingSimulator, HeatPumpMode, SimulatedRoom
+from .ufh_loop import LoopGeometry, loop_power, loop_power_with_valve
+from .weather import (
     ChannelProfile,
     ProfileKind,
     SyntheticWeather,
     WeatherPoint,
     WeatherSource,
 )
-from tortoise_ufh.weather_comp import CoolingCompCurve, WeatherCompCurve
+from .weather_comp import CoolingCompCurve, WeatherCompCurve
 
 __version__ = "0.1.0"
 

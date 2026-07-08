@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 
-from tortoise_ufh.pid import PIDController
+from custom_components.tortoise_ufh.core.pid import PIDController
 
 
 @pytest.mark.unit

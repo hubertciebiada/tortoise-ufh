@@ -20,7 +20,10 @@ Units (repo-wide):
 
 Typical usage::
 
-    from tortoise_ufh.building_profiles import modern_bungalow, BUILDING_PROFILES
+    from custom_components.tortoise_ufh.core.building_profiles import (
+        BUILDING_PROFILES,
+        modern_bungalow,
+    )
 
     building = modern_bungalow()
     assert len(building.rooms) == 13
@@ -33,14 +36,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from tortoise_ufh.config import (
+from .config import (
     BuildingConfig,
     Orientation,
     RoomConfig,
     WindowConfig,
 )
-from tortoise_ufh.rc_model import RCParams
-from tortoise_ufh.ufh_loop import LoopGeometry
+from .rc_model import RCParams
+from .ufh_loop import LoopGeometry
 
 __all__ = [
     "BUILDING_PROFILES",

@@ -26,14 +26,14 @@ from typing import Any
 
 import pytest
 
-from tortoise_ufh.config import (
+from custom_components.tortoise_ufh.core.config import (
     BuildingConfig,
     ControllerConfig,
     Orientation,
     RoomConfig,
     WindowConfig,
 )
-from tortoise_ufh.models import (
+from custom_components.tortoise_ufh.core.models import (
     BuildingOutputs,
     FastSourceCommand,
     FastSourceMode,
@@ -41,7 +41,7 @@ from tortoise_ufh.models import (
     RoomOutputs,
     RoomReport,
 )
-from tortoise_ufh.rc_model import RCParams
+from custom_components.tortoise_ufh.core.rc_model import RCParams
 
 # ---------------------------------------------------------------------------
 # Helpers — minimal valid building blocks (no test fixtures assumed)
@@ -256,7 +256,7 @@ class TestRoomConfigValidation:
     @pytest.mark.unit
     def test_fast_source_kind_none_when_enabled_rejected(self) -> None:
         """has_fast_source=True with kind NONE is inconsistent and rejected."""
-        from tortoise_ufh.models import FastSourceKind
+        from custom_components.tortoise_ufh.core.models import FastSourceKind
 
         with pytest.raises(ValueError, match="must not be NONE when has_fast_source"):
             RoomConfig(
@@ -271,7 +271,7 @@ class TestRoomConfigValidation:
     @pytest.mark.unit
     def test_fast_source_kind_set_when_disabled_rejected(self) -> None:
         """has_fast_source=False with a non-NONE kind is rejected."""
-        from tortoise_ufh.models import FastSourceKind
+        from custom_components.tortoise_ufh.core.models import FastSourceKind
 
         with pytest.raises(ValueError, match="must be NONE when has_fast_source=False"):
             RoomConfig(
@@ -285,7 +285,7 @@ class TestRoomConfigValidation:
     @pytest.mark.unit
     def test_fast_source_zero_power_when_enabled_rejected(self) -> None:
         """has_fast_source=True requires strictly positive power."""
-        from tortoise_ufh.models import FastSourceKind
+        from custom_components.tortoise_ufh.core.models import FastSourceKind
 
         with pytest.raises(ValueError, match="fast_source_power_w must be > 0 when"):
             RoomConfig(

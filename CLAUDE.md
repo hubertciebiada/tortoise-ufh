@@ -13,9 +13,16 @@ Authoritative sources, in order: `docs/BUILD_SPEC.md` (frozen contract — alway
 
 ## THE ONE HARD RULE
 
-**`tortoise_ufh/` (the pure core) MUST NEVER `import homeassistant`.** It is pure Python
-(numpy/scipy + stdlib), ships `py.typed`, and is fully unit- and simulation-testable offline.
-`custom_components/tortoise_ufh/` (the HA adapter) imports FROM the core and never the reverse.
+**`custom_components/tortoise_ufh/core/` (the pure core) MUST NEVER `import homeassistant`.**
+It is pure Python (numpy/scipy + stdlib), ships `py.typed`, and is fully unit- and
+simulation-testable offline. The core is **vendored inside the integration** so a HACS install
+(which ships only `custom_components/tortoise_ufh/`) is self-contained, but it stays *logically
+separate*: the HA adapter `custom_components/tortoise_ufh/` imports FROM the core via `.core`
+and never the reverse; the core imports its own siblings **relatively** (`from .models import
+...`) and nothing from the adapter. Because importing any core submodule first runs
+`custom_components/tortoise_ufh/__init__.py`, that adapter `__init__` must ALSO stay importable
+WITHOUT homeassistant — so every HA import there is lazy (deferred into function bodies or
+`TYPE_CHECKING`), and it does not even import the HA-dependent `.const` at module top level.
 Core talks to the outside only through plain frozen dataclasses and structural `Protocol`s
 (e.g. `WeatherSource`). Any core file that does `import homeassistant` is a bug and is rejected.
 
@@ -23,17 +30,21 @@ Core talks to the outside only through plain frozen dataclasses and structural `
 
 ## Architecture map (four layers)
 
-- **Core** — `tortoise_ufh/`. Pure library: RC thermal model, `PIDController`, `RoomController`
-  (the per-room black box) + `BuildingController` (orchestrator), dew point, weather-comp
-  feedforward, EN 1264 loop power, safety rules, metrics. No HA import, ever.
+- **Core** — `custom_components/tortoise_ufh/core/`. Pure library: RC thermal model,
+  `PIDController`, `RoomController` (the per-room black box) + `BuildingController`
+  (orchestrator), dew point, weather-comp feedforward, EN 1264 loop power, safety rules,
+  metrics. No HA import, ever. Vendored inside the integration for a self-contained HACS
+  install; imports its siblings relatively (`from .X import ...`).
 - **Adapter** — `custom_components/tortoise_ufh/`. Thin HA shim: `TortoiseUfhCoordinator`
   (`DataUpdateCoordinator`, 5-min) reads source entity states, builds `dict[str, RoomInputs]`,
   calls `BuildingController.step`, and writes commands. Entities (number/sensor/binary_sensor/
-  switch), config_flow, websocket, panel registration. Imports core; is imported by nothing.
+  switch), config_flow, websocket, panel registration. Imports the core via `.core`; is
+  imported by nothing.
 - **Panel** — `custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js`. Self-contained
   vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Renders the black-box report.
-- **Simulator** — `tortoise_ufh/simulator.py` (`BuildingSimulator` + `SimulatedRoom`). Digital
-  twin for offline tests. Crucially, `get_all_measurements()` produces the SAME `RoomInputs` the
+- **Simulator** — `custom_components/tortoise_ufh/core/simulator.py` (`BuildingSimulator` +
+  `SimulatedRoom`). Digital twin for offline tests. Crucially, `get_all_measurements()`
+  produces the SAME `RoomInputs` the
   coordinator builds, so `BuildingController.step` is exercised identically in tests and in HA.
 
 Core module layout is frozen in BUILD_SPEC §2 — use the EXACT module paths, class names, and
@@ -105,7 +116,7 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
 ```bash
 python -m pytest -m unit          # fast unit suite (seed 42; numpy/scipy/pytest only, no HA)
 python -m pytest -m simulation    # scenario/digital-twin suite (seed 12345; hard merge gate)
-python -m mypy tortoise_ufh       # strict typecheck of the core only
+python -m mypy custom_components/tortoise_ufh/core   # strict typecheck of the core only
 ruff check                        # lint (E,F,I,UP,B,SIM); add `ruff format --check` for style
 ```
 

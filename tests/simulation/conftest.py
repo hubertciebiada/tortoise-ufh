@@ -28,18 +28,22 @@ from typing import TYPE_CHECKING, Protocol
 
 import pytest
 
-from tortoise_ufh.controller import BuildingController
-from tortoise_ufh.metrics import SimMetrics
-from tortoise_ufh.models import Mode
-from tortoise_ufh.rc_model import ModelOrder, RCModel
-from tortoise_ufh.sensor_noise import SensorNoise
-from tortoise_ufh.simulation_log import SimulationLog
-from tortoise_ufh.simulator import BuildingSimulator, HeatPumpMode, SimulatedRoom
-from tortoise_ufh.ufh_loop import LoopGeometry, loop_power
+from custom_components.tortoise_ufh.core.controller import BuildingController
+from custom_components.tortoise_ufh.core.metrics import SimMetrics
+from custom_components.tortoise_ufh.core.models import Mode
+from custom_components.tortoise_ufh.core.rc_model import ModelOrder, RCModel
+from custom_components.tortoise_ufh.core.sensor_noise import SensorNoise
+from custom_components.tortoise_ufh.core.simulation_log import SimulationLog
+from custom_components.tortoise_ufh.core.simulator import (
+    BuildingSimulator,
+    HeatPumpMode,
+    SimulatedRoom,
+)
+from custom_components.tortoise_ufh.core.ufh_loop import LoopGeometry, loop_power
 
 if TYPE_CHECKING:
-    from tortoise_ufh.config import RoomConfig, SimScenario
-    from tortoise_ufh.models import RoomInputs
+    from custom_components.tortoise_ufh.core.config import RoomConfig, SimScenario
+    from custom_components.tortoise_ufh.core.models import RoomInputs
 
 # ---------------------------------------------------------------------------
 # Harness constants

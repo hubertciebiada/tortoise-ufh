@@ -20,10 +20,10 @@ from collections.abc import Callable
 
 import pytest
 
-from tortoise_ufh.config import SimScenario
-from tortoise_ufh.metrics import SimMetrics
-from tortoise_ufh.scenarios import steady_heating
-from tortoise_ufh.simulation_log import SimulationLog
+from custom_components.tortoise_ufh.core.config import SimScenario
+from custom_components.tortoise_ufh.core.metrics import SimMetrics
+from custom_components.tortoise_ufh.core.scenarios import steady_heating
+from custom_components.tortoise_ufh.core.simulation_log import SimulationLog
 
 # A "handful" of 1-minute simulation ticks: enough to produce records without
 # paying for the scenario's full 48 h duration.

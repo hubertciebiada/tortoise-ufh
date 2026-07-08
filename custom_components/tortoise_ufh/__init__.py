@@ -5,6 +5,16 @@ Home Assistant adapter entry point. Wires a :class:`TortoiseUfhCoordinator`
 instance, registers the sidebar panel (with its static JS path) and the panel
 websocket API. Temperatures are in degrees Celsius; this module holds no
 physical values of its own.
+
+Nothing that depends on Home Assistant is imported at module top level. The pure
+control core is vendored under this package at
+``custom_components.tortoise_ufh.core``; importing any of its submodules runs
+*this* package ``__init__`` first, so the top level must stay importable without
+``homeassistant`` (the core is unit- and simulation-tested in an HA-free
+environment). Every Home Assistant symbol, every HA-importing submodule, and even
+:mod:`.const` (which imports the HA ``Platform`` enum) is therefore deferred to
+:data:`typing.TYPE_CHECKING` or to a local import inside the function that needs
+it — the module top level pulls in stdlib only.
 """
 
 from __future__ import annotations
@@ -13,16 +23,11 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-
-from .const import DOMAIN, PLATFORMS
-from .coordinator import TortoiseUfhCoordinator
-from .panel import async_register_panel, async_unregister_panel
-from .services import async_register_services, async_unregister_services
-from .websocket import async_register_ws
-
 if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
+
+    from .coordinator import TortoiseUfhCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -59,6 +64,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: TortoiseUfhConfigEntry) 
     Returns:
         ``True`` when setup succeeded.
     """
+    from .const import DOMAIN, PLATFORMS
+    from .coordinator import TortoiseUfhCoordinator
+    from .panel import async_register_panel
+    from .services import async_register_services
+    from .websocket import async_register_ws
+
     _LOGGER.debug("Setting up Tortoise-UFH entry: %s", entry.entry_id)
 
     coordinator = TortoiseUfhCoordinator(hass, entry)
@@ -113,6 +124,12 @@ async def async_unload_entry(
     Returns:
         ``True`` when every platform unloaded cleanly.
     """
+    from homeassistant.config_entries import ConfigEntryState
+
+    from .const import DOMAIN, PLATFORMS
+    from .panel import async_unregister_panel
+    from .services import async_unregister_services
+
     unload_ok: bool = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:

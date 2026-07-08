@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from tortoise_ufh.dew_point import (
+from custom_components.tortoise_ufh.core.dew_point import (
     cooling_throttle_factor,
     dew_point,
     dew_point_simplified,

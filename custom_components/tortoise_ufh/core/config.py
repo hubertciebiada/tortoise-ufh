@@ -32,12 +32,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from tortoise_ufh.models import FastSourceKind, Mode
+from .models import FastSourceKind, Mode
 
 if TYPE_CHECKING:
-    from tortoise_ufh.rc_model import RCParams
-    from tortoise_ufh.ufh_loop import LoopGeometry
-    from tortoise_ufh.weather import WeatherSource
+    from .rc_model import RCParams
+    from .ufh_loop import LoopGeometry
+    from .weather import WeatherSource
 
 
 # ---------------------------------------------------------------------------

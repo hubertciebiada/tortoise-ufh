@@ -43,7 +43,7 @@ from typing import Literal
 import numpy as np
 from numpy.typing import NDArray
 
-from tortoise_ufh.models import (
+from .models import (
     FastSourceKind,
     FastSourceMode,
     LoopInput,
@@ -51,16 +51,16 @@ from tortoise_ufh.models import (
     RoomInputs,
     RoomOutputs,
 )
-from tortoise_ufh.rc_model import RCModel
-from tortoise_ufh.sensor_noise import SensorNoise
-from tortoise_ufh.ufh_loop import (
+from .rc_model import RCModel
+from .sensor_noise import SensorNoise
+from .ufh_loop import (
     DEFAULT_DT_COOLING,
     DEFAULT_DT_HEATING,
     LoopGeometry,
     loop_power,
 )
-from tortoise_ufh.weather import WeatherPoint, WeatherSource
-from tortoise_ufh.weather_comp import CoolingCompCurve, WeatherCompCurve
+from .weather import WeatherPoint, WeatherSource
+from .weather_comp import CoolingCompCurve, WeatherCompCurve
 
 __all__ = [
     "BuildingSimulator",

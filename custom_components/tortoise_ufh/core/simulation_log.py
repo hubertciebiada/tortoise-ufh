@@ -27,8 +27,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, overload
 
-from tortoise_ufh.models import FastSourceMode, Mode, RoomInputs, RoomOutputs
-from tortoise_ufh.weather import WeatherPoint
+from .models import FastSourceMode, Mode, RoomInputs, RoomOutputs
+from .weather import WeatherPoint
 
 if TYPE_CHECKING:
     import pandas as pd

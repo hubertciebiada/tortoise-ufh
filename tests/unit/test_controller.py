@@ -27,14 +27,14 @@ from __future__ import annotations
 
 import pytest
 
-from tortoise_ufh.config import ControllerConfig
-from tortoise_ufh.controller import (
+from custom_components.tortoise_ufh.core.config import ControllerConfig
+from custom_components.tortoise_ufh.core.controller import (
     GLOBAL_SAFE_DEW_MARGIN_K,
     BuildingController,
     RoomController,
 )
-from tortoise_ufh.dew_point import dew_point
-from tortoise_ufh.models import (
+from custom_components.tortoise_ufh.core.dew_point import dew_point
+from custom_components.tortoise_ufh.core.models import (
     FastSourceKind,
     FastSourceMode,
     LoopInput,

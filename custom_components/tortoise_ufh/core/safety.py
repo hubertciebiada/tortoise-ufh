@@ -35,8 +35,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from tortoise_ufh.const import DEW_MARGIN_DEFAULT_K
-from tortoise_ufh.dew_point import dew_point
+from .const import DEW_MARGIN_DEFAULT_K
+from .dew_point import dew_point
 
 # ---------------------------------------------------------------------------
 # Default thresholds (degrees Celsius, or minutes for the watchdog)

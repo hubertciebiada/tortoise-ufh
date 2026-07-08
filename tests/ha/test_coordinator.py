@@ -17,9 +17,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from pytest_homeassistant_custom_component.common import async_mock_service
 
-from tortoise_ufh.controller import GLOBAL_SAFE_DEW_MARGIN_K
-from tortoise_ufh.dew_point import dew_point
-from tortoise_ufh.models import RoomOutputs
+from custom_components.tortoise_ufh.core.controller import GLOBAL_SAFE_DEW_MARGIN_K
+from custom_components.tortoise_ufh.core.dew_point import dew_point
+from custom_components.tortoise_ufh.core.models import RoomOutputs
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall

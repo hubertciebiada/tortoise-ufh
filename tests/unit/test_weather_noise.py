@@ -20,8 +20,8 @@ import math
 import numpy as np
 import pytest
 
-from tortoise_ufh.sensor_noise import SensorNoise
-from tortoise_ufh.weather import (
+from custom_components.tortoise_ufh.core.sensor_noise import SensorNoise
+from custom_components.tortoise_ufh.core.weather import (
     ChannelProfile,
     ProfileKind,
     SyntheticWeather,

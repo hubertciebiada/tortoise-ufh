@@ -50,8 +50,6 @@ from homeassistant.helpers.selector import (
     TextSelector,
 )
 
-from tortoise_ufh.config import ControllerConfig
-
 from .const import (
     CONF_ADD_ANOTHER,
     CONF_COOLING_ENABLED,
@@ -85,6 +83,7 @@ from .const import (
     VALID_PERCENT_UNITS,
     VALID_TEMP_UNITS,
 )
+from .core.config import ControllerConfig
 from .entity_validator import EntityValidator
 
 if TYPE_CHECKING:

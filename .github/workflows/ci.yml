@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install -e ".[dev]"
-      - run: mypy tortoise_ufh
+      - run: mypy custom_components/tortoise_ufh/core
 
   unit:
     name: Unit tests
@@ -38,7 +38,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install -e ".[dev]"
-      - run: pytest tests/unit -m unit --cov=tortoise_ufh --cov-report=term-missing
+      - run: pytest tests/unit -m unit --cov=custom_components/tortoise_ufh/core --cov-report=term-missing
 
   simulation:
     name: Simulation tests

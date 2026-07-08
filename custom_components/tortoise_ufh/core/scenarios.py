@@ -25,7 +25,10 @@ Units:
 
 Usage::
 
-    from tortoise_ufh.scenarios import SCENARIO_LIBRARY, steady_heating
+    from custom_components.tortoise_ufh.core.scenarios import (
+        SCENARIO_LIBRARY,
+        steady_heating,
+    )
 
     scenario = steady_heating()
     assert scenario.name == "steady_heating"
@@ -39,10 +42,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from tortoise_ufh.building_profiles import modern_bungalow, well_insulated
-from tortoise_ufh.config import SimScenario
-from tortoise_ufh.models import Mode
-from tortoise_ufh.weather import ChannelProfile, ProfileKind, SyntheticWeather
+from .building_profiles import modern_bungalow, well_insulated
+from .config import SimScenario
+from .models import Mode
+from .weather import ChannelProfile, ProfileKind, SyntheticWeather
 
 __all__ = [
     "SCENARIO_LIBRARY",

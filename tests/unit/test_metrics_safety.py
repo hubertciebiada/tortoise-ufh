@@ -26,8 +26,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from tortoise_ufh.dew_point import dew_point
-from tortoise_ufh.metrics import (
+from custom_components.tortoise_ufh.core.dew_point import dew_point
+from custom_components.tortoise_ufh.core.metrics import (
     SimMetrics,
     assert_comfort,
     assert_floor_temp_safe,
@@ -35,7 +35,7 @@ from tortoise_ufh.metrics import (
     assert_no_freezing,
     assert_no_prolonged_cold,
 )
-from tortoise_ufh.models import (
+from custom_components.tortoise_ufh.core.models import (
     FastSourceCommand,
     FastSourceMode,
     Mode,
@@ -43,9 +43,9 @@ from tortoise_ufh.models import (
     RoomOutputs,
     RoomReport,
 )
-from tortoise_ufh.safety import SafetyEvaluator, SensorSnapshot
-from tortoise_ufh.simulation_log import SimulationLog
-from tortoise_ufh.weather import WeatherPoint
+from custom_components.tortoise_ufh.core.safety import SafetyEvaluator, SensorSnapshot
+from custom_components.tortoise_ufh.core.simulation_log import SimulationLog
+from custom_components.tortoise_ufh.core.weather import WeatherPoint
 
 # Shared constants for the synthetic fixtures (degC).
 _SETPOINT_C: float = 21.0

@@ -32,17 +32,17 @@ from typing import Protocol
 
 import pytest
 
-from tortoise_ufh.config import SimScenario
-from tortoise_ufh.metrics import (
+from custom_components.tortoise_ufh.core.config import SimScenario
+from custom_components.tortoise_ufh.core.metrics import (
     SimMetrics,
     assert_comfort,
     assert_floor_temp_safe,
     assert_no_condensation,
     assert_no_freezing,
 )
-from tortoise_ufh.models import Mode
-from tortoise_ufh.scenarios import SCENARIO_LIBRARY
-from tortoise_ufh.simulation_log import SimulationLog
+from custom_components.tortoise_ufh.core.models import Mode
+from custom_components.tortoise_ufh.core.scenarios import SCENARIO_LIBRARY
+from custom_components.tortoise_ufh.core.simulation_log import SimulationLog
 
 # ---------------------------------------------------------------------------
 # Scenario tier + grading constants

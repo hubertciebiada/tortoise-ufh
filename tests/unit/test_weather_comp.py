@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import pytest
 
-from tortoise_ufh.weather_comp import CoolingCompCurve, WeatherCompCurve
+from custom_components.tortoise_ufh.core.weather_comp import (
+    CoolingCompCurve,
+    WeatherCompCurve,
+)
 
 pytestmark = pytest.mark.unit
 

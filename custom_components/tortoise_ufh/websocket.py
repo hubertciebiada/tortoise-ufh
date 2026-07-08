@@ -33,8 +33,6 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import callback
 
-from tortoise_ufh.models import Mode
-
 from .const import (
     CONF_COOLING_ENABLED,
     CONF_ENTITY_FAST_SOURCE,
@@ -60,6 +58,7 @@ from .const import (
     ROOM_OFFSET_MAX_C,
     ROOM_OFFSET_MIN_C,
 )
+from .core.models import Mode
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant

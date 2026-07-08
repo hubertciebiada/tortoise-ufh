@@ -34,9 +34,9 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from tortoise_ufh.config import ControllerConfig
-from tortoise_ufh.dew_point import cooling_throttle_factor, dew_point
-from tortoise_ufh.models import (
+from .config import ControllerConfig
+from .dew_point import cooling_throttle_factor, dew_point
+from .models import (
     BuildingOutputs,
     FastSourceCommand,
     FastSourceKind,
@@ -46,8 +46,8 @@ from tortoise_ufh.models import (
     RoomOutputs,
     RoomReport,
 )
-from tortoise_ufh.pid import PIDController
-from tortoise_ufh.safety import SafetyAction, SafetyEvaluator, SensorSnapshot
+from .pid import PIDController
+from .safety import SafetyAction, SafetyEvaluator, SensorSnapshot
 
 __all__ = [
     "BuildingController",

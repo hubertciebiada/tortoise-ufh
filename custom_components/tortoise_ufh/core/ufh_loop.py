@@ -33,10 +33,10 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from tortoise_ufh.const import K_PEX
+from .const import K_PEX
 
 if TYPE_CHECKING:
-    from tortoise_ufh.config import RoomConfig
+    from .config import RoomConfig
 
 # ---------------------------------------------------------------------------
 # Module constants (defaults; K_PEX comes from tortoise_ufh.const)

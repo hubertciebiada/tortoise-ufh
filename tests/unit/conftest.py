@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from numpy.random import Generator
 
-from tortoise_ufh.rc_model import ModelOrder, RCModel, RCParams
+from custom_components.tortoise_ufh.core.rc_model import ModelOrder, RCModel, RCParams
 
 
 @pytest.fixture

@@ -34,8 +34,16 @@ ha-test = [
     "pytest-homeassistant-custom-component>=0.13",
 ]
 
-[tool.setuptools.packages.find]
-include = ["tortoise_ufh*"]
+[tool.setuptools]
+# The pure control core is vendored inside the HA integration at
+# custom_components/tortoise_ufh/core so a HACS install (which ships only the
+# custom_components subtree) is self-contained. There is no importable top-level
+# package left to build, so auto-discovery is disabled: `pip install -e .`
+# installs project metadata + dependencies only. Tests and the type checker
+# reach the core/adapter via the repo root on sys.path (see `pythonpath` below
+# and `mypy_path`), matching the Docker harness PYTHONPATH.
+packages = []
+py-modules = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -64,6 +72,21 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+# The pure core now lives at custom_components/tortoise_ufh/core. These let
+# `mypy custom_components/tortoise_ufh/core` resolve the core's relative imports
+# using the repo root as the package base (custom_components is a namespace
+# package, so the modules are custom_components.tortoise_ufh.core.*).
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "."
+# `mypy custom_components/tortoise_ufh/core` checks ONLY the core (its files are
+# the explicit targets). Vendoring made the HA adapter the core's package
+# ancestor, so mypy would otherwise follow the adapter `__init__` into HA-typed
+# modules (untyped websocket/voluptuous decorators) and report on them. The
+# adapter is intentionally not strict-typed (it is exercised by the HA test tier,
+# not mypy — as before, when the standalone core was the only mypy target), so
+# follow dependencies silently: use their types without reporting their errors.
+follow_imports = "silent"
 
 [[tool.mypy.overrides]]
 module = ["homeassistant.*"]

@@ -15,12 +15,12 @@ from homeassistant.exceptions import ServiceValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.tortoise_ufh.const import DOMAIN
+from custom_components.tortoise_ufh.core.models import Mode
 from custom_components.tortoise_ufh.services import (
     SERVICE_SET_HOME_TEMPERATURE,
     SERVICE_SET_MODE,
     SERVICE_SET_ROOM_OFFSET,
 )
-from tortoise_ufh.models import Mode
 
 pytestmark = pytest.mark.ha
 

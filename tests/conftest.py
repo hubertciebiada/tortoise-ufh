@@ -24,15 +24,15 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from tortoise_ufh.config import (
+from custom_components.tortoise_ufh.core.config import (
     BuildingConfig,
     ControllerConfig,
     Orientation,
     RoomConfig,
     WindowConfig,
 )
-from tortoise_ufh.rc_model import ModelOrder, RCModel, RCParams
-from tortoise_ufh.ufh_loop import LoopGeometry
+from custom_components.tortoise_ufh.core.rc_model import ModelOrder, RCModel, RCParams
+from custom_components.tortoise_ufh.core.ufh_loop import LoopGeometry
 
 # ---------------------------------------------------------------------------
 # RC parameter / model fixtures

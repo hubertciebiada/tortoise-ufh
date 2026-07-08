@@ -23,8 +23,6 @@ from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 
-from tortoise_ufh.models import Mode
-
 from .const import (
     DOMAIN,
     HOME_SETPOINT_MAX_C,
@@ -33,6 +31,7 @@ from .const import (
     ROOM_OFFSET_MAX_C,
     ROOM_OFFSET_MIN_C,
 )
+from .core.models import Mode
 
 if TYPE_CHECKING:
     from .coordinator import TortoiseUfhCoordinator

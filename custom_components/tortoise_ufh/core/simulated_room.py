@@ -45,9 +45,9 @@ import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
-    from tortoise_ufh.rc_model import RCModel
-    from tortoise_ufh.ufh_loop import LoopGeometry
-    from tortoise_ufh.weather import WeatherPoint
+    from .rc_model import RCModel
+    from .ufh_loop import LoopGeometry
+    from .weather import WeatherPoint
 
 
 class SimulatedRoom:

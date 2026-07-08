@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import pytest
 
-from tortoise_ufh.const import DEFAULT_DT_COOLING, DEFAULT_DT_HEATING
-from tortoise_ufh.ufh_loop import LoopGeometry, loop_power
+from custom_components.tortoise_ufh.core.const import (
+    DEFAULT_DT_COOLING,
+    DEFAULT_DT_HEATING,
+)
+from custom_components.tortoise_ufh.core.ufh_loop import LoopGeometry, loop_power
 
 # ---------------------------------------------------------------------------
 # Fixtures — one realistic ~20 m^2 UFH loop group

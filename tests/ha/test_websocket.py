@@ -15,7 +15,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.tortoise_ufh.const import DOMAIN
-from tortoise_ufh.models import Mode
+from custom_components.tortoise_ufh.core.models import Mode
 
 if TYPE_CHECKING:
     from pytest_homeassistant_custom_component.common import MockConfigEntry

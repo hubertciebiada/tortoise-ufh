@@ -32,10 +32,10 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING
 
-from tortoise_ufh.dew_point import dew_point as _dew_point
+from .dew_point import dew_point as _dew_point
 
 if TYPE_CHECKING:
-    from tortoise_ufh.simulation_log import SimRecord, SimulationLog
+    from .simulation_log import SimRecord, SimulationLog
 
 # Fixed condensation margin used by the metric counter (Axiom: T_floor >= T_dew
 # + 2 K). The assertion helper exposes it as a tunable ``margin`` parameter.

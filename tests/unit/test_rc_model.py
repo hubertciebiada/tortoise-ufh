@@ -19,7 +19,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from tortoise_ufh.rc_model import ModelOrder, RCModel, RCParams
+from custom_components.tortoise_ufh.core.rc_model import ModelOrder, RCModel, RCParams
 
 # Physically realistic reference parameters (BUILD_SPEC 8 / blueprint 13):
 # ~20 m^2 room, C_air ~ 60 kJ/K, C_slab ~ 3.25 MJ/K (80 mm screed).
