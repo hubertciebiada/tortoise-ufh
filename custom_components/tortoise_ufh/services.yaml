@@ -58,4 +58,4 @@ set_mode:
             - heating
             - transitional
             - cooling
-            - off
+            - "off"

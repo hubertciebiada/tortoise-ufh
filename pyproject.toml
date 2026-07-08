@@ -39,6 +39,10 @@ include = ["tortoise_ufh*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Put the repo root on sys.path so the HA adapter package `custom_components`
+# is importable when running `tests/ha` (matches the Docker harness's
+# PYTHONPATH=/workspace; without it CI fails with ModuleNotFoundError).
+pythonpath = ["."]
 markers = [
     "unit: Fast, isolated unit tests",
     "simulation: Slow scenario-based simulation tests",
