@@ -1,0 +1,185 @@
+# =============================================================================
+# Tortoise-UFH — FALLBACK Lovelace dashboard (OPTIONAL)
+# =============================================================================
+# The custom sidebar panel (frontend/tortoise-ufh-panel.js, registered by
+# panel.py) is the PRIMARY UI. This YAML exists only as a plain-Lovelace
+# fallback for owners who prefer standard cards, want a printable overview,
+# or are debugging the integration's entities directly.
+#
+# HOW TO USE (all optional):
+#   1. Settings -> Dashboards -> Add dashboard -> "New dashboard from scratch".
+#   2. Open the new dashboard -> (three dots) -> "Edit Dashboard" ->
+#      "Raw configuration editor".
+#   3. Paste the contents below (everything under `title:`), then Save.
+#
+# ENTITY IDS: the integration slugifies friendly names. The ids below follow
+# Home Assistant's default slug convention for this integration:
+#   Global:   switch.tortoise_ufh_kill_switch
+#             number.tortoise_ufh_home_temperature
+#             sensor.tortoise_ufh_global_safe_dew_point   (°C)
+#             sensor.tortoise_ufh_algorithm_status
+#             sensor.tortoise_ufh_watchdog_status
+#   Per room <room> (slug of the configured room name), e.g. "living_room":
+#             sensor.tortoise_ufh_<room>_temperature       (°C)
+#             number.tortoise_ufh_<room>_offset            (°C, -5..+5)
+#             sensor.tortoise_ufh_<room>_recommended_valve (%)
+#             sensor.tortoise_ufh_<room>_fast_source_mode
+# Adjust the ids to match your actual entity registry if you renamed rooms.
+# The two rooms below (living_room, bathroom) are EXAMPLES — copy/edit the
+# per-room blocks for each of your configured rooms.
+# =============================================================================
+
+# title: Tortoise-UFH (fallback)
+# views:
+#   - title: Tortoise-UFH
+#     path: tortoise-ufh
+#     icon: mdi:tortoise
+#     cards:
+#
+#       # ---------------------------------------------------------------------
+#       # GLOBAL — system-wide controls and status
+#       # ---------------------------------------------------------------------
+#       - type: entities
+#         title: Tortoise-UFH — Global
+#         show_header_toggle: false
+#         entities:
+#           - entity: switch.tortoise_ufh_kill_switch
+#             name: Kill switch (on = emit no commands)
+#             icon: mdi:power-off
+#           - entity: number.tortoise_ufh_home_temperature
+#             name: Home temperature (°C)
+#             icon: mdi:home-thermometer
+#           - entity: sensor.tortoise_ufh_global_safe_dew_point
+#             name: Global safe dew point (°C -> HP)
+#             icon: mdi:water-percent
+#           - entity: sensor.tortoise_ufh_algorithm_status
+#             name: Algorithm status
+#             icon: mdi:state-machine
+#           - entity: sensor.tortoise_ufh_watchdog_status
+#             name: Watchdog status
+#             icon: mdi:dog-side
+#
+#       # ---------------------------------------------------------------------
+#       # ROOM: Living room
+#       # ---------------------------------------------------------------------
+#       - type: glance
+#         title: Living room
+#         show_state: true
+#         columns: 4
+#         entities:
+#           - entity: sensor.tortoise_ufh_living_room_temperature
+#             name: Temp (°C)
+#           - entity: number.tortoise_ufh_living_room_offset
+#             name: Offset (°C)
+#           - entity: sensor.tortoise_ufh_living_room_recommended_valve
+#             name: Valve (%)
+#           - entity: sensor.tortoise_ufh_living_room_fast_source_mode
+#             name: Fast source
+#
+#       - type: history-graph
+#         title: Living room — temp vs recommended valve
+#         hours_to_show: 24
+#         refresh_interval: 300
+#         entities:
+#           - entity: sensor.tortoise_ufh_living_room_temperature
+#             name: Temperature (°C)
+#           - entity: sensor.tortoise_ufh_living_room_recommended_valve
+#             name: Recommended valve (%)
+#
+#       # ---------------------------------------------------------------------
+#       # ROOM: Bathroom
+#       # ---------------------------------------------------------------------
+#       - type: glance
+#         title: Bathroom
+#         show_state: true
+#         columns: 4
+#         entities:
+#           - entity: sensor.tortoise_ufh_bathroom_temperature
+#             name: Temp (°C)
+#           - entity: number.tortoise_ufh_bathroom_offset
+#             name: Offset (°C)
+#           - entity: sensor.tortoise_ufh_bathroom_recommended_valve
+#             name: Valve (%)
+#           - entity: sensor.tortoise_ufh_bathroom_fast_source_mode
+#             name: Fast source
+#
+#       - type: history-graph
+#         title: Bathroom — temp vs recommended valve
+#         hours_to_show: 24
+#         refresh_interval: 300
+#         entities:
+#           - entity: sensor.tortoise_ufh_bathroom_temperature
+#             name: Temperature (°C)
+#           - entity: sensor.tortoise_ufh_bathroom_recommended_valve
+#             name: Recommended valve (%)
+#
+#   # =======================================================================
+#   # VIEW: Strojenie / Tuning — per-room PI + trend controller internals
+#   # =======================================================================
+#   # Pairs, per room, the setpoint / temperature / valve response with the raw
+#   # PI + trend-damping term contributions, so a gain change (kp / ki / kt) can
+#   # be judged against overshoot and settling. error_c, trend_c_per_h and the
+#   # *_term sensors carry state_class=measurement, so statistics-graph can chart
+#   # their long-term statistics.
+#   - title: Strojenie / Tuning
+#     path: tuning
+#     icon: mdi:tune
+#     cards:
+#
+#       # --- ROOM: Living room ---------------------------------------------
+#       - type: history-graph
+#         title: Living room — setpoint, temperature & valve
+#         hours_to_show: 24
+#         refresh_interval: 300
+#         entities:
+#           - entity: number.tortoise_ufh_living_room_offset
+#             name: Room offset (K)
+#           - entity: sensor.tortoise_ufh_living_room_temperature
+#             name: Temperature (°C)
+#           - entity: sensor.tortoise_ufh_living_room_recommended_valve
+#             name: Recommended valve (%)
+#
+#       - type: statistics-graph
+#         title: Living room — PI + trend internals
+#         period: hour
+#         stat_types:
+#           - mean
+#         chart_type: line
+#         entities:
+#           - entity: sensor.tortoise_ufh_living_room_error_c
+#             name: Error (°C)
+#           - entity: sensor.tortoise_ufh_living_room_trend_c_per_h
+#             name: Trend (°C/h)
+#           - entity: sensor.tortoise_ufh_living_room_i_term
+#             name: Integral term (%)
+#           - entity: sensor.tortoise_ufh_living_room_trend_term
+#             name: Trend-damping term (%)
+#
+#       # --- ROOM: Bathroom ------------------------------------------------
+#       - type: history-graph
+#         title: Bathroom — setpoint, temperature & valve
+#         hours_to_show: 24
+#         refresh_interval: 300
+#         entities:
+#           - entity: number.tortoise_ufh_bathroom_offset
+#             name: Room offset (K)
+#           - entity: sensor.tortoise_ufh_bathroom_temperature
+#             name: Temperature (°C)
+#           - entity: sensor.tortoise_ufh_bathroom_recommended_valve
+#             name: Recommended valve (%)
+#
+#       - type: statistics-graph
+#         title: Bathroom — PI + trend internals
+#         period: hour
+#         stat_types:
+#           - mean
+#         chart_type: line
+#         entities:
+#           - entity: sensor.tortoise_ufh_bathroom_error_c
+#             name: Error (°C)
+#           - entity: sensor.tortoise_ufh_bathroom_trend_c_per_h
+#             name: Trend (°C/h)
+#           - entity: sensor.tortoise_ufh_bathroom_i_term
+#             name: Integral term (%)
+#           - entity: sensor.tortoise_ufh_bathroom_trend_term
+#             name: Trend-damping term (%)

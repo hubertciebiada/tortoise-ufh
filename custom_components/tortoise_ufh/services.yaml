@@ -1,0 +1,61 @@
+set_home_temperature:
+  name: Set home temperature
+  description: >-
+    Set the global home target temperature in degrees Celsius. Per-room
+    setpoints are derived as home temperature plus each room's offset.
+  fields:
+    temperature:
+      name: Temperature
+      description: Global home target temperature in degrees Celsius.
+      required: true
+      example: 21
+      selector:
+        number:
+          min: 5
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: box
+
+set_room_offset:
+  name: Set room offset
+  description: >-
+    Set the temperature offset for a single room in kelvin. The room setpoint
+    equals the global home temperature plus this offset.
+  fields:
+    room:
+      name: Room
+      description: Identifier of the room to adjust.
+      required: true
+      example: living_room
+      selector:
+        text:
+    offset:
+      name: Offset
+      description: Temperature offset for the room in kelvin (relative to home).
+      required: true
+      example: 1.5
+      selector:
+        number:
+          min: -5
+          max: 5
+          step: 0.5
+          unit_of_measurement: "K"
+          mode: box
+
+set_mode:
+  name: Set mode
+  description: Set the global operating mode of the Tortoise-UFH system.
+  fields:
+    mode:
+      name: Mode
+      description: Operating mode of the system.
+      required: true
+      example: heating
+      selector:
+        select:
+          options:
+            - heating
+            - transitional
+            - cooling
+            - off

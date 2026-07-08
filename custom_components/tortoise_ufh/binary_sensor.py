@@ -1,0 +1,239 @@
+"""Per-room diagnostic binary sensors for the Tortoise-UFH integration.
+
+Publishes four per-room binary sensors, all read strictly from the
+coordinator's typed :class:`~.coordinator.CoordinatorData`:
+
+* ``sensor_lost`` (device class ``PROBLEM``) — the room temperature reading was
+  missing this cycle, so the controller safe-degraded (held valve, split off).
+* ``output_saturated`` — the computed valve position hit a 0 % or 100 % bound.
+* ``s2_condensation_active`` (device class ``PROBLEM``) — the per-room S2
+  dew-point protection fully throttled floor cooling to avoid condensation.
+* ``live_control`` (device class ``RUNNING``) — the room is in live control
+  (commands written to actuators) rather than shadow / dry-run.
+
+Every sensor is ``EntityCategory.DIAGNOSTIC`` and read-only. The entities are
+description-driven: each :class:`TortoiseUfhBinarySensorEntityDescription`
+carries a ``value_fn`` that maps a room's
+:class:`~.coordinator.RoomRuntime` to a boolean (or ``None`` when the room is
+absent from the current payload).
+
+Units: no physical units — every value is a boolean flag.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+    BinarySensorEntityDescription,
+)
+from homeassistant.const import EntityCategory
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import CONF_ROOM_NAME, CONF_ROOMS
+from .coordinator import RoomRuntime, TortoiseUfhCoordinator
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
+# Core report flag strings surfaced as binary sensors (mirrors the strings the
+# core RoomController emits in ``RoomReport.flags``).
+_FLAG_SENSOR_LOST = "sensor_lost"
+_FLAG_S2_CONDENSATION = "s2_condensation"
+
+
+# ---------------------------------------------------------------------------
+# Binary-sensor descriptions
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, kw_only=True)
+class TortoiseUfhBinarySensorEntityDescription(BinarySensorEntityDescription):
+    """Binary-sensor description with a boolean value extractor.
+
+    Attributes:
+        value_fn: Maps a room's :class:`~.coordinator.RoomRuntime` to the
+            sensor's boolean state (``True`` = flag active / on).
+    """
+
+    value_fn: Callable[[RoomRuntime], bool]
+
+
+def _sensor_lost(runtime: RoomRuntime) -> bool:
+    """Return whether the room reported a lost temperature sensor.
+
+    Args:
+        runtime: The room's runtime payload.
+
+    Returns:
+        ``True`` when ``"sensor_lost"`` is present in the report flags.
+    """
+    return _FLAG_SENSOR_LOST in runtime.report.flags
+
+
+def _output_saturated(runtime: RoomRuntime) -> bool:
+    """Return whether the room's valve output hit a 0/100 % bound.
+
+    Args:
+        runtime: The room's runtime payload.
+
+    Returns:
+        The report's ``saturated`` flag.
+    """
+    return runtime.report.saturated
+
+
+def _s2_condensation_active(runtime: RoomRuntime) -> bool:
+    """Return whether per-room S2 dew-point protection fully throttled cooling.
+
+    Args:
+        runtime: The room's runtime payload.
+
+    Returns:
+        ``True`` when ``"s2_condensation"`` is present in the report flags.
+    """
+    return _FLAG_S2_CONDENSATION in runtime.report.flags
+
+
+def _live_control(runtime: RoomRuntime) -> bool:
+    """Return whether the room is in live control (writing commands).
+
+    Args:
+        runtime: The room's runtime payload.
+
+    Returns:
+        The runtime's ``live_control_enabled`` flag.
+    """
+    return runtime.live_control_enabled
+
+
+# Per-room binary-sensor descriptions.
+ROOM_BINARY_SENSORS: tuple[TortoiseUfhBinarySensorEntityDescription, ...] = (
+    TortoiseUfhBinarySensorEntityDescription(
+        key="sensor_lost",
+        translation_key="sensor_lost",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_sensor_lost,
+    ),
+    TortoiseUfhBinarySensorEntityDescription(
+        key="output_saturated",
+        translation_key="output_saturated",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_output_saturated,
+    ),
+    TortoiseUfhBinarySensorEntityDescription(
+        key="s2_condensation_active",
+        translation_key="s2_condensation_active",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_s2_condensation_active,
+    ),
+    TortoiseUfhBinarySensorEntityDescription(
+        key="live_control",
+        translation_key="live_control",
+        device_class=BinarySensorDeviceClass.RUNNING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_live_control,
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Platform setup
+# ---------------------------------------------------------------------------
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the Tortoise-UFH binary sensors from a config entry.
+
+    One set of per-room diagnostic binary sensors is created for every room
+    in the configured room list (not the coordinator's current payload), so
+    rooms missing from the first payload — e.g. after an error cycle — still
+    get sensors and render as unavailable until the coordinator recovers.
+
+    Args:
+        hass: The Home Assistant instance (unused; required by the platform).
+        entry: The config entry whose ``runtime_data`` holds the coordinator.
+        async_add_entities: Callback registering the new entities.
+    """
+    coordinator: TortoiseUfhCoordinator = entry.runtime_data.coordinator  # type: ignore[attr-defined]
+
+    entities: list[TortoiseUfhBinarySensorEntity] = []
+    rooms = list(entry.data.get(CONF_ROOMS, []) or [])
+    for room_cfg in rooms:
+        room_name = str(room_cfg[CONF_ROOM_NAME])
+        entities.extend(
+            TortoiseUfhBinarySensorEntity(
+                coordinator=coordinator,
+                description=description,
+                entry_id=entry.entry_id,
+                room_name=room_name,
+            )
+            for description in ROOM_BINARY_SENSORS
+        )
+
+    async_add_entities(entities)
+
+
+# ---------------------------------------------------------------------------
+# Binary-sensor entity
+# ---------------------------------------------------------------------------
+
+
+class TortoiseUfhBinarySensorEntity(
+    CoordinatorEntity[TortoiseUfhCoordinator], BinarySensorEntity
+):
+    """Read-only per-room diagnostic binary sensor for Tortoise-UFH."""
+
+    entity_description: TortoiseUfhBinarySensorEntityDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: TortoiseUfhCoordinator,
+        description: TortoiseUfhBinarySensorEntityDescription,
+        entry_id: str,
+        room_name: str,
+    ) -> None:
+        """Initialise a per-room binary sensor.
+
+        Args:
+            coordinator: The Tortoise-UFH data coordinator.
+            description: The binary-sensor description with its ``value_fn``.
+            entry_id: Config entry id, used to build a stable ``unique_id``.
+            room_name: The room this sensor belongs to.
+        """
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._room_name = room_name
+
+        safe_room = room_name.lower().replace(" ", "_")
+        self._attr_unique_id = f"{entry_id}_{safe_room}_{description.key}"
+        self._attr_name = f"{room_name} {description.key.replace('_', ' ')}"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return the sensor state, or ``None`` when the room is absent.
+
+        Returns:
+            The boolean from the description's ``value_fn``, or ``None`` if the
+            coordinator has no data yet or the room dropped out of the payload.
+        """
+        data = self.coordinator.data
+        if data is None:
+            return None
+        runtime = data.rooms.get(self._room_name)
+        if runtime is None:
+            return None
+        return self.entity_description.value_fn(runtime)

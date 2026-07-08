@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Simulation output
+tests/simulation/output/
+*.png
+
+# HA dev container runtime state (keep only the hand-written config)
+docker/config/*
+!docker/config/configuration.yaml
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

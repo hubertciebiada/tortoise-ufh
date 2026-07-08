@@ -1,0 +1,110 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Lokalizacja",
+        "description": "Podaj lokalizację budynku. Tortoise-UFH używa szerokości i długości geograficznej do kompensacji pogodowej i sprzężenia w przód od zysków słonecznych.",
+        "data": {
+          "latitude": "Szerokość geograficzna",
+          "longitude": "Długość geograficzna"
+        }
+      },
+      "rooms": {
+        "title": "Zdefiniuj pomieszczenia",
+        "description": "Dodaj pomieszczenia (strefy), którymi ma sterować Tortoise-UFH. Każde pomieszczenie ma własny, niezależny regulator w pętli zamkniętej. Dodaj co najmniej jedno pomieszczenie.",
+        "data": {
+          "room_name": "Nazwa pomieszczenia",
+          "room_area": "Powierzchnia podłogi (m²)",
+          "fast_source_kind": "Szybkie źródło (split / grzałka)",
+          "has_fast_source": "To pomieszczenie ma szybkie źródło pomocnicze",
+          "cooling_enabled": "Udział w chłodzeniu podłogowym",
+          "add_another": "Dodaj kolejne pomieszczenie"
+        }
+      },
+      "entities": {
+        "title": "Przypisanie encji: {room_name}",
+        "description": "Wybierz encje Home Assistant dla pomieszczenia {room_name}. Tortoise-UFH sprawdza wyłącznie jednostki (°C, %, W) i pozostaje niezależny od sprzętu. Pomieszczenie może mieć kilka pętli ogrzewania podłogowego, dlatego zawory, zasilanie i powrót przyjmują wiele encji. Encje globalne pokazywane są raz, przy pierwszym pomieszczeniu.",
+        "data": {
+          "entity_temp_room": "Czujnik temperatury pomieszczenia",
+          "entity_humidity": "Czujnik wilgotności (wymagany dla pomieszczeń chłodzonych)",
+          "entity_temp_outdoor": "Czujnik temperatury zewnętrznej (opcjonalnie)",
+          "entity_valves": "Siłowniki zaworów podłogówki (po jednym na pętlę)",
+          "entity_supply": "Czujniki temperatury zasilania (po jednym na pętlę)",
+          "entity_return": "Czujniki temperatury powrotu (po jednym na pętlę)",
+          "entity_fast_source": "Encja klimatyzacji szybkiego źródła (split / grzałka)",
+          "room_offset": "Korekta pomieszczenia względem nastawy domu (K)",
+          "entity_mode": "Globalna encja trybu (grzanie / przejściowy / chłodzenie / wył.)"
+        }
+      },
+      "algorithm": {
+        "title": "Parametry algorytmu",
+        "description": "Skonfiguruj nastawę dla całego domu oraz wzmocnienia regulatora PI + trend. Wartości domyślne są odpowiednie dla domu z podłogówką o dużej bezwładności cieplnej; nie zmieniaj ich, jeśli nie wiesz, co stroisz.",
+        "data": {
+          "kp": "Wzmocnienie proporcjonalne kp (%/K)",
+          "ki": "Wzmocnienie całkujące ki (%/(K·s))",
+          "kt": "Wzmocnienie tłumienia trendu kt (%/(K/h))",
+          "deadband_c": "Strefa nieczułości (K)",
+          "valve_floor_pct": "Minimalne otwarcie zaworu przy grzaniu (%)",
+          "boost_offset_c": "Próg załączenia szybkiego źródła (K)",
+          "fast_min_on_minutes": "Minimalny czas załączenia szybkiego źródła (min)",
+          "fast_min_off_minutes": "Minimalny czas wyłączenia szybkiego źródła (min)",
+          "dew_margin_k": "Margines punktu rosy (K)",
+          "dew_ramp_k": "Pasmo narastania punktu rosy (K)",
+          "outdoor_ff_enabled": "Sprzężenie w przód od temperatury zewnętrznej"
+        }
+      },
+      "confirm": {
+        "title": "Potwierdź konfigurację",
+        "description": "Tortoise-UFH zostanie skonfigurowany z liczbą pomieszczeń: {num_rooms}, w lokalizacji ({latitude}, {longitude}), z nastawą domu {home_setpoint} °C. Pomieszczenia startują w trybie cichym (tylko odczyt) do czasu włączenia sterowania na żywo. Potwierdź, aby zakończyć konfigurację."
+      }
+    },
+    "error": {
+      "invalid_location": "Nieprawidłowa lokalizacja domu — szerokość musi mieścić się w zakresie od -90 do 90, a długość od -180 do 180",
+      "empty_room_name": "Nazwa pomieszczenia nie może być pusta",
+      "duplicate_room_name": "Pomieszczenie o tej nazwie już istnieje",
+      "invalid_room": "Nieprawidłowa definicja pomieszczenia",
+      "valve_required": "Należy wybrać co najmniej jeden siłownik zaworu",
+      "humidity_required": "Czujnik wilgotności jest wymagany dla pomieszczeń biorących udział w chłodzeniu podłogowym",
+      "invalid_controller": "Nieprawidłowe strojenie regulatora",
+      "entity_not_found": "Nie znaleziono encji w Home Assistant",
+      "invalid_unit": "Encja ma nieprawidłową jednostkę miary",
+      "invalid_device_class": "Encja ma nieprawidłową klasę urządzenia",
+      "entity_unavailable": "Encja jest obecnie niedostępna — może pojawić się później"
+    },
+    "abort": {
+      "already_configured": "Tortoise-UFH jest już skonfigurowany dla tej lokalizacji"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Sterowanie Tortoise-UFH",
+        "description": "Włącz sterowanie na żywo dla poszczególnych pomieszczeń. Po włączeniu Tortoise-UFH aktywnie steruje zaworami i szybkim źródłem danego pomieszczenia; pomieszczenia wyłączone pozostają w trybie cichym (tylko odczyt). Załączenie wyłącznika awaryjnego wstrzymuje wysyłanie wszystkich poleceń, a regulator nadal liczy i raportuje.",
+        "data": {
+          "kill_switch": "Wyłącznik awaryjny (nie wysyłaj poleceń)",
+          "kp": "Wzmocnienie proporcjonalne kp (%/K)",
+          "ki": "Wzmocnienie całkujące ki (%/(K·s))",
+          "kt": "Wzmocnienie tłumienia trendu kt (%/(K/h))",
+          "deadband_c": "Strefa nieczułości (K)",
+          "valve_floor_pct": "Minimalne otwarcie zaworu przy grzaniu (%)",
+          "boost_offset_c": "Próg załączenia szybkiego źródła (K)",
+          "fast_min_on_minutes": "Minimalny czas załączenia szybkiego źródła (min)",
+          "fast_min_off_minutes": "Minimalny czas wyłączenia szybkiego źródła (min)",
+          "dew_margin_k": "Margines punktu rosy (K)",
+          "dew_ramp_k": "Pasmo narastania punktu rosy (K)",
+          "outdoor_ff_enabled": "Sprzężenie w przód od temperatury zewnętrznej"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "i_term": {
+        "name": "Człon całkujący (% zaworu)"
+      },
+      "trend_term": {
+        "name": "Człon tłumienia trendu (% zaworu)"
+      }
+    }
+  }
+}

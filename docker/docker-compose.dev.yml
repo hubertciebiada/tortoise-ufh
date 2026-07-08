@@ -1,0 +1,23 @@
+# Interactive Home Assistant for manually debugging Tortoise-UFH before touching
+# your real instance.
+#
+#   docker compose -f docker/docker-compose.dev.yml up
+#   # then open http://localhost:8123 , create an account, and add the
+#   # "Tortoise-UFH" integration (Settings -> Devices & Services -> Add).
+#
+# The integration is bind-mounted read-only into the container's config dir, so
+# editing custom_components/tortoise_ufh/ on the host + restarting the container
+# reloads your changes. HA installs the manifest requirements (numpy/scipy) on
+# first setup.
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: tortoise-ufh-ha-dev
+    volumes:
+      - ./config:/config
+      - ../custom_components/tortoise_ufh:/config/custom_components/tortoise_ufh:ro
+    ports:
+      - "8123:8123"
+    environment:
+      TZ: Europe/Warsaw
+    restart: unless-stopped

@@ -1,0 +1,25 @@
+# Minimal Home Assistant config for the Tortoise-UFH dev container.
+# `default_config` pulls in the config-flow UI, history, and the frontend so you
+# can add the integration and open its sidebar panel.
+default_config:
+
+logger:
+  default: info
+  logs:
+    custom_components.tortoise_ufh: debug
+    tortoise_ufh: debug
+
+# Convenience helpers for a manual end-to-end test. The global mode entity below
+# can be pointed at from the integration's config flow; add fake room sensors via
+# the UI (Settings -> Devices & Services -> Helpers) or template entities to
+# exercise the controller without real hardware.
+input_select:
+  tortoise_home_mode:
+    name: Tortoise home mode
+    options:
+      - heating
+      - transitional
+      - cooling
+      - off
+    initial: heating
+    icon: mdi:sun-snowflake

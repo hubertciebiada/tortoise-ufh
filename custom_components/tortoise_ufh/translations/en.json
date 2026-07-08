@@ -1,0 +1,110 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Location",
+        "description": "Enter the building location. Tortoise-UFH uses latitude and longitude for weather compensation and solar-gain feedforward.",
+        "data": {
+          "latitude": "Latitude",
+          "longitude": "Longitude"
+        }
+      },
+      "rooms": {
+        "title": "Define Rooms",
+        "description": "Add the rooms (zones) that Tortoise-UFH should control. Each room runs its own independent closed-loop controller. Add at least one room.",
+        "data": {
+          "room_name": "Room name",
+          "room_area": "Floor area (m²)",
+          "fast_source_kind": "Fast source (split / heater)",
+          "cooling_enabled": "Participates in floor cooling",
+          "has_fast_source": "This room has a fast auxiliary source",
+          "add_another": "Add another room"
+        }
+      },
+      "entities": {
+        "title": "Entity Mapping: {room_name}",
+        "description": "Select the Home Assistant entities for {room_name}. Tortoise-UFH validates units only (°C, %, W) and stays hardware-agnostic. A room may have several UFH loops, so valve, supply, and return accept multiple entities. Global entities are shown once, on the first room.",
+        "data": {
+          "entity_temp_room": "Room temperature sensor",
+          "entity_humidity": "Humidity sensor (required for cooled rooms)",
+          "entity_temp_outdoor": "Outdoor temperature sensor (optional)",
+          "entity_valves": "UFH valve actuators (one per loop)",
+          "entity_supply": "Supply water temperature sensors (one per loop)",
+          "entity_return": "Return water temperature sensors (one per loop)",
+          "entity_fast_source": "Fast-source climate entity (split / heater)",
+          "room_offset": "Room offset from home setpoint (K)",
+          "entity_mode": "Global mode entity (heating / transitional / cooling / off)"
+        }
+      },
+      "algorithm": {
+        "title": "Algorithm Parameters",
+        "description": "Configure the whole-home setpoint and the PI + trend controller gains. Defaults are sensible for a high-thermal-mass UFH house; leave them unless you know what you are tuning.",
+        "data": {
+          "kp": "Proportional gain kp (%/K)",
+          "ki": "Integral gain ki (%/(K·s))",
+          "kt": "Trend-damping gain kt (%/(K/h))",
+          "deadband_c": "Deadband (K)",
+          "valve_floor_pct": "Valve floor when heating (%)",
+          "boost_offset_c": "Fast-source boost offset (K)",
+          "fast_min_on_minutes": "Fast-source minimum on time (min)",
+          "fast_min_off_minutes": "Fast-source minimum off time (min)",
+          "dew_margin_k": "Dew-point margin (K)",
+          "dew_ramp_k": "Dew-point ramp band (K)",
+          "outdoor_ff_enabled": "Outdoor feedforward enabled"
+        }
+      },
+      "confirm": {
+        "title": "Confirm Setup",
+        "description": "Tortoise-UFH will be set up with {num_rooms} room(s) at location ({latitude}, {longitude}), home setpoint {home_setpoint} °C. Rooms start in shadow (read-only) mode until promoted to live control. Confirm to complete setup."
+      }
+    },
+    "error": {
+      "invalid_location": "Invalid home location — latitude must be between -90 and 90 and longitude between -180 and 180",
+      "empty_room_name": "Room name cannot be empty",
+      "duplicate_room_name": "A room with this name already exists",
+      "invalid_room": "Invalid room definition",
+      "valve_required": "At least one valve actuator must be selected",
+      "humidity_required": "A humidity sensor is required for rooms participating in floor cooling",
+      "invalid_controller": "Invalid controller tuning",
+      "entity_not_found": "Entity not found in Home Assistant",
+      "invalid_unit": "Entity has an incorrect unit of measurement",
+      "invalid_device_class": "Entity has an incorrect device class",
+      "entity_unavailable": "Entity is currently unavailable — it may come online later"
+    },
+    "abort": {
+      "already_configured": "Tortoise-UFH is already configured for this location"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tortoise-UFH Control",
+        "description": "Enable live control per room. When enabled, Tortoise-UFH actively drives valves and the fast source for that room; disabled rooms stay in shadow (read-only) mode. Engaging the kill switch stops all command output while the controller keeps computing and reporting.",
+        "data": {
+          "kill_switch": "Kill switch (emit no commands)",
+          "kp": "Proportional gain kp (%/K)",
+          "ki": "Integral gain ki (%/(K·s))",
+          "kt": "Trend-damping gain kt (%/(K/h))",
+          "deadband_c": "Deadband (K)",
+          "valve_floor_pct": "Valve floor when heating (%)",
+          "boost_offset_c": "Fast-source boost offset (K)",
+          "fast_min_on_minutes": "Fast-source minimum on time (min)",
+          "fast_min_off_minutes": "Fast-source minimum off time (min)",
+          "dew_margin_k": "Dew-point margin (K)",
+          "dew_ramp_k": "Dew-point ramp band (K)",
+          "outdoor_ff_enabled": "Outdoor feedforward enabled"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "i_term": {
+        "name": "Integral term (valve %)"
+      },
+      "trend_term": {
+        "name": "Trend-damping term (valve %)"
+      }
+    }
+  }
+}

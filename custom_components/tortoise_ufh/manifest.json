@@ -1,0 +1,15 @@
+{
+  "domain": "tortoise_ufh",
+  "name": "Tortoise-UFH",
+  "after_dependencies": ["frontend"],
+  "codeowners": ["@hubertciebiada"],
+  "config_flow": true,
+  "dependencies": ["http"],
+  "documentation": "https://github.com/hubertciebiada/tortoise-ufh",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/hubertciebiada/tortoise-ufh/issues",
+  "loggers": ["tortoise_ufh"],
+  "requirements": ["numpy>=1.26", "scipy>=1.12"],
+  "version": "0.1.0"
+}

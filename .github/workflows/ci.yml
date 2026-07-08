@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+
+  typecheck:
+    name: Type check (mypy, core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: mypy tortoise_ufh
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/unit -m unit --cov=tortoise_ufh --cov-report=term-missing
+
+  simulation:
+    name: Simulation tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/simulation -m simulation --tb=long
+
+  ha-integration:
+    name: HA integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[ha-test]"
+      - run: >
+          pytest tests/ha -m ha
+          -o asyncio_mode=auto
+          -o filterwarnings=default

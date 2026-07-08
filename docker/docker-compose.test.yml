@@ -1,0 +1,32 @@
+# Automated Home Assistant integration tests for Tortoise-UFH, in a container.
+#
+#   docker compose -f docker/docker-compose.test.yml build
+#   docker compose -f docker/docker-compose.test.yml run --rm ha-tests
+#
+# The repo is bind-mounted read-write at /workspace, so edits to
+# custom_components/ or tests/ are picked up on the next run without rebuilding.
+services:
+  ha-tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    image: tortoise-ufh-ha-tests
+    volumes:
+      - ..:/workspace:rw
+    working_dir: /workspace
+    environment:
+      PYTHONPATH: /workspace
+    command:
+      - python
+      - -m
+      - pytest
+      - tests/ha
+      - -m
+      - ha
+      - -p
+      - no:cacheprovider
+      - -o
+      - filterwarnings=default
+      - -o
+      - asyncio_mode=auto
+      - -q

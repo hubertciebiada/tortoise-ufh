@@ -1,0 +1,36 @@
+# Test image for the Tortoise-UFH Home Assistant integration tests (tests/ha).
+#
+# It installs a real Home Assistant test harness
+# (pytest-homeassistant-custom-component pins a compatible homeassistant) plus the
+# integration's runtime deps (numpy/scipy), then runs the `ha`-marked tests against
+# an in-process HA instance. The repo is bind-mounted at /workspace by
+# docker-compose.test.yml, so source edits are picked up without a rebuild.
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Home Assistant pulls C-extension deps (lru-dict, etc.) that have no cp313 wheels
+# yet, so a compiler toolchain + git are needed at install time.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# The HA test harness pins a compatible homeassistant; numpy/scipy are the
+# integration's own runtime requirements (see manifest.json / pyproject).
+RUN pip install \
+    "pytest-homeassistant-custom-component>=0.13" \
+    "numpy>=1.26" \
+    "scipy>=1.12"
+
+WORKDIR /workspace
+ENV PYTHONPATH=/workspace
+
+# Default: run the HA integration test tier. filterwarnings is relaxed here
+# (HA + its deps emit many warnings; the strict `error` policy is for the pure
+# core tiers only). Overridable via the compose `command`.
+CMD ["python", "-m", "pytest", "tests/ha", "-m", "ha", \
+     "-p", "no:cacheprovider", "-o", "filterwarnings=default", \
+     "-o", "asyncio_mode=auto", "-q"]
