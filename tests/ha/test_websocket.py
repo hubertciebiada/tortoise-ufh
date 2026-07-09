@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.tortoise_ufh.const import DOMAIN
 from custom_components.tortoise_ufh.core.models import Mode
@@ -65,6 +66,60 @@ async def test_get_config_returns_globals_and_rooms(
     # Cooling opt-out from the PRD survives the round-trip.
     assert rooms["Salon"]["cooling_enabled"] is True
     assert rooms["Lazienka"]["cooling_enabled"] is False
+
+
+async def test_get_config_exposes_diagnostic_entity_ids(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """get_config maps each room's diagnostic sensors to real registered ids."""
+    entry_id = setup_integration.entry_id
+    registry = er.async_get(hass)
+
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/get_config"})
+
+    assert msg["success"] is True
+    result = msg["result"]
+
+    # The chartable diagnostic subset the panel resolves for history/statistics.
+    expected_keys = {
+        "recommended_valve",
+        "error_c",
+        "trend_c_per_h",
+        "room_dew_point",
+        "i_term",
+        "trend_term",
+    }
+
+    rooms = {room["name"]: room for room in result["rooms"]}
+    assert set(rooms) == {"Salon", "Lazienka"}
+    for name, room in rooms.items():
+        # New additive field: a {sensor_key: entity_id} map.
+        assert "diagnostic_entities" in room
+        diag = room["diagnostic_entities"]
+        assert isinstance(diag, dict)
+        # The sensor platform is set up by the fixture, so every key resolves.
+        assert set(diag) == expected_keys
+        safe_room = name.lower().replace(" ", "_")
+        for key, entity_id in diag.items():
+            # Each value is exactly the registry's id for the frozen unique_id...
+            unique_id = f"{entry_id}_{safe_room}_{key}"
+            assert (
+                registry.async_get_entity_id("sensor", DOMAIN, unique_id) == entity_id
+            )
+            # ...and points at a real, registered entity.
+            assert registry.async_get(entity_id) is not None
+
+    # The global safe dew-point sensor id is exposed at the top level.
+    assert "global_safe_dew_point_entity_id" in result
+    global_id = result["global_safe_dew_point_entity_id"]
+    assert global_id == registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry_id}_global_safe_dew_point"
+    )
+    assert global_id is not None
+    assert registry.async_get(global_id) is not None
 
 
 async def test_get_live_returns_outputs_and_dew_point(

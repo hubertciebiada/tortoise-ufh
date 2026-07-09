@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_COOLING_ENABLED,
@@ -79,6 +80,25 @@ WS_SET_KILL_SWITCH: str = f"{DOMAIN}/set_kill_switch"
 _ERR_NOT_FOUND: str = "not_found"
 _ERR_UNKNOWN_ROOM: str = "unknown_room"
 
+# Per-room diagnostic ``sensor`` keys whose registered entity ids ``get_config``
+# resolves so the panel can pull recorder history / statistics for its charts.
+# This is the numeric/chartable subset of ``sensor.ROOM_SENSORS`` (the ``str``
+# sensors ``fast_source_mode`` / ``explanation`` are intentionally excluded).
+# Kept as a literal tuple here — rather than importing the ``sensor`` platform —
+# to avoid a websocket -> platform import dependency; keys mirror ``sensor.py``.
+_DIAGNOSTIC_SENSOR_KEYS: tuple[str, ...] = (
+    "recommended_valve",
+    "error_c",
+    "trend_c_per_h",
+    "room_dew_point",
+    "i_term",
+    "trend_term",
+)
+
+# Global safe dew-point ``sensor`` key (see ``sensor.GLOBAL_SENSORS``); the
+# global unique id carries no room segment.
+_GLOBAL_DEW_POINT_KEY: str = "global_safe_dew_point"
+
 
 # ---------------------------------------------------------------------------
 # Frozen result / view dataclasses (JSON-serializable via ``to_dict``)
@@ -100,6 +120,10 @@ class RoomConfigView:
             :data:`FAST_SOURCE_KINDS`).
         entities: Assigned source entities keyed by their ``CONF_*`` name;
             values are entity-id strings, lists of strings, or ``None``.
+        diagnostic_entities: Registered diagnostic ``sensor`` entity ids keyed by
+            their sensor ``key`` (subset of :data:`_DIAGNOSTIC_SENSOR_KEYS`), for
+            the panel to chart via recorder history / statistics. Contains only
+            keys the entity registry resolved; empty when none are registered.
 
     Raises:
         ValueError: If ``name`` is empty, ``area_m2`` is negative or not finite,
@@ -114,6 +138,7 @@ class RoomConfigView:
     live_control: bool
     fast_source_kind: str
     entities: dict[str, Any] = field(default_factory=dict)
+    diagnostic_entities: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate the room-config view fields."""
@@ -144,6 +169,7 @@ class RoomConfigView:
             "live_control": self.live_control,
             "fast_source_kind": self.fast_source_kind,
             "entities": dict(self.entities),
+            "diagnostic_entities": dict(self.diagnostic_entities),
         }
 
 
@@ -156,6 +182,9 @@ class ConfigResult:
         mode: Active global :class:`~tortoise_ufh.models.Mode` value string.
         kill_switch: Whether the global kill-switch is engaged (no writes).
         rooms: Per-room configuration views.
+        global_safe_dew_point_entity_id: Registered entity id of the global
+            safe dew-point ``sensor`` (the cooling-supply lower limit the owner
+            feeds the heat pump), or ``None`` when the registry has no match.
 
     Raises:
         ValueError: If ``home_setpoint_c`` is not finite or ``mode`` is not a
@@ -166,6 +195,7 @@ class ConfigResult:
     mode: str
     kill_switch: bool
     rooms: tuple[RoomConfigView, ...]
+    global_safe_dew_point_entity_id: str | None = None
 
     def __post_init__(self) -> None:
         """Validate the global fields of the config reply."""
@@ -183,6 +213,7 @@ class ConfigResult:
             "mode": self.mode,
             "kill_switch": self.kill_switch,
             "rooms": [room.to_dict() for room in self.rooms],
+            "global_safe_dew_point_entity_id": self.global_safe_dew_point_entity_id,
         }
 
 
@@ -333,6 +364,58 @@ def _room_names(coordinator: TortoiseUfhCoordinator) -> set[str]:
     return names
 
 
+def _resolve_diagnostic_entities(
+    registry: er.EntityRegistry, entry_id: str, room_name: str
+) -> dict[str, str]:
+    """Resolve a room's diagnostic ``sensor`` entity ids from the registry.
+
+    Maps each key in :data:`_DIAGNOSTIC_SENSOR_KEYS` to the registered ``sensor``
+    entity id for this config entry, using the frozen per-room unique-id template
+    ``{entry_id}_{safe_room}_{key}`` where
+    ``safe_room = room_name.lower().replace(" ", "_")`` (matching ``sensor.py``'s
+    id scheme exactly). Keys with no registry match are omitted, so the map
+    degrades to ``{}`` when the sensor platform has not registered yet — the
+    panel reads it defensively.
+
+    Args:
+        registry: The Home Assistant entity registry.
+        entry_id: The config entry id that owns the diagnostic sensors.
+        room_name: The configured room name.
+
+    Returns:
+        A ``{sensor_key: entity_id}`` dict containing only resolved keys.
+    """
+    safe_room = room_name.lower().replace(" ", "_")
+    resolved: dict[str, str] = {}
+    for key in _DIAGNOSTIC_SENSOR_KEYS:
+        entity_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{entry_id}_{safe_room}_{key}"
+        )
+        if entity_id is not None:
+            resolved[key] = entity_id
+    return resolved
+
+
+def _resolve_global_dew_point_entity(
+    registry: er.EntityRegistry, entry_id: str
+) -> str | None:
+    """Resolve the global safe dew-point ``sensor`` entity id, or ``None``.
+
+    Uses the frozen global unique-id template
+    ``{entry_id}_global_safe_dew_point`` (no room segment; see ``sensor.py``).
+
+    Args:
+        registry: The Home Assistant entity registry.
+        entry_id: The config entry id that owns the sensor.
+
+    Returns:
+        The registered ``sensor`` entity id, or ``None`` when unregistered.
+    """
+    return registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry_id}_{_GLOBAL_DEW_POINT_KEY}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -388,6 +471,9 @@ def ws_get_config(
         connection.send_error(msg["id"], _ERR_NOT_FOUND, "No Tortoise-UFH entry loaded")
         return
 
+    registry = er.async_get(hass)
+    entry_id = coordinator.config_entry.entry_id
+
     rooms: list[RoomConfigView] = []
     for room_cfg in _room_configs(coordinator):
         name = str(room_cfg.get(CONF_ROOM_NAME, ""))
@@ -419,6 +505,9 @@ def ws_get_config(
                     or DEFAULT_FAST_SOURCE_KIND
                 ),
                 entities=entities,
+                diagnostic_entities=_resolve_diagnostic_entities(
+                    registry, entry_id, name
+                ),
             )
         )
 
@@ -427,6 +516,9 @@ def ws_get_config(
         mode=coordinator.get_mode().value,
         kill_switch=coordinator.get_kill_switch(),
         rooms=tuple(rooms),
+        global_safe_dew_point_entity_id=_resolve_global_dew_point_entity(
+            registry, entry_id
+        ),
     )
     connection.send_result(msg["id"], result.to_dict())
 

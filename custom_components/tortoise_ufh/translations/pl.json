@@ -79,7 +79,17 @@
   "options": {
     "step": {
       "init": {
-        "title": "Sterowanie Tortoise-UFH",
+        "title": "Tortoise-UFH",
+        "description": "Zarządzaj pomieszczeniami lub dostosuj ustawienia sterowania i strojenia.",
+        "menu_options": {
+          "add_room": "Dodaj pomieszczenie",
+          "edit_room": "Edytuj pomieszczenie",
+          "remove_room": "Usuń pomieszczenie",
+          "settings": "Ustawienia sterowania i strojenia"
+        }
+      },
+      "settings": {
+        "title": "Sterowanie i strojenie",
         "description": "Włącz sterowanie na żywo dla poszczególnych pomieszczeń. Po włączeniu Tortoise-UFH aktywnie steruje zaworami i szybkim źródłem danego pomieszczenia; pomieszczenia wyłączone pozostają w trybie cichym (tylko odczyt). Załączenie wyłącznika awaryjnego wstrzymuje wysyłanie wszystkich poleceń, a regulator nadal liczy i raportuje.",
         "data": {
           "kill_switch": "Wyłącznik awaryjny (nie wysyłaj poleceń)",
@@ -95,7 +105,75 @@
           "dew_ramp_k": "Pasmo narastania punktu rosy (K)",
           "outdoor_ff_enabled": "Sprzężenie w przód od temperatury zewnętrznej"
         }
+      },
+      "add_room": {
+        "title": "Dodaj pomieszczenie",
+        "description": "Zdefiniuj nowe pomieszczenie. Po podaniu jego atrybutów przypiszesz encje źródłowe Home Assistant. Każde pomieszczenie ma własny, niezależny regulator w pętli zamkniętej.",
+        "data": {
+          "room_name": "Nazwa pomieszczenia",
+          "room_area": "Powierzchnia podłogi (m²)",
+          "room_offset": "Korekta pomieszczenia względem nastawy domu (K)",
+          "participates": "Udział w sterowaniu",
+          "has_fast_source": "To pomieszczenie ma szybkie źródło pomocnicze",
+          "fast_source_kind": "Szybkie źródło (split / grzałka)",
+          "cooling_enabled": "Udział w chłodzeniu podłogowym"
+        }
+      },
+      "edit_room": {
+        "title": "Edytuj pomieszczenie",
+        "description": "Wybierz pomieszczenie do edycji. Jego nazwy nie można zmienić (zmiana nazwy = usuń i dodaj).",
+        "data": {
+          "selected_room": "Pomieszczenie"
+        }
+      },
+      "edit_room_attrs": {
+        "title": "Edytuj pomieszczenie: {room_name}",
+        "description": "Zaktualizuj atrybuty pomieszczenia {room_name}, a następnie przypisanie encji. Nazwa pomieszczenia jest niezmienna.",
+        "data": {
+          "room_area": "Powierzchnia podłogi (m²)",
+          "room_offset": "Korekta pomieszczenia względem nastawy domu (K)",
+          "participates": "Udział w sterowaniu",
+          "has_fast_source": "To pomieszczenie ma szybkie źródło pomocnicze",
+          "fast_source_kind": "Szybkie źródło (split / grzałka)",
+          "cooling_enabled": "Udział w chłodzeniu podłogowym"
+        }
+      },
+      "remove_room": {
+        "title": "Usuń pomieszczenie",
+        "description": "Wybierz pomieszczenie do usunięcia. Jego encje diagnostyczne zostaną usunięte, a ustawienia pomieszczenia wyczyszczone. Tej operacji nie można cofnąć.",
+        "data": {
+          "selected_room": "Pomieszczenie"
+        }
+      },
+      "room_entities": {
+        "title": "Przypisanie encji: {room_name}",
+        "description": "Wybierz encje Home Assistant dla pomieszczenia {room_name}. Tortoise-UFH sprawdza wyłącznie jednostki (°C, %, W) i pozostaje niezależny od sprzętu. Pomieszczenie może mieć kilka pętli ogrzewania podłogowego, dlatego zawory, zasilanie i powrót przyjmują wiele encji.",
+        "data": {
+          "entity_temp_room": "Czujnik temperatury pomieszczenia",
+          "entity_humidity": "Czujnik wilgotności (wymagany dla pomieszczeń chłodzonych)",
+          "entity_valves": "Siłowniki zaworów podłogówki — encje number lub valve (po jednym na pętlę)",
+          "entity_supply": "Czujniki temperatury zasilania (po jednym na pętlę)",
+          "entity_return": "Czujniki temperatury powrotu (po jednym na pętlę)",
+          "entity_fast_source": "Encja klimatyzacji szybkiego źródła (split / grzałka)"
+        }
       }
+    },
+    "error": {
+      "empty_room_name": "Nazwa pomieszczenia nie może być pusta",
+      "duplicate_room_name": "Pomieszczenie o tej nazwie już istnieje",
+      "invalid_room": "Nieprawidłowa definicja pomieszczenia",
+      "valve_required": "Należy wybrać co najmniej jeden siłownik zaworu",
+      "humidity_required": "Czujnik wilgotności jest wymagany dla pomieszczeń biorących udział w chłodzeniu podłogowym",
+      "invalid_controller": "Nieprawidłowe strojenie regulatora",
+      "entity_not_found": "Nie znaleziono encji w Home Assistant",
+      "invalid_unit": "Encja ma nieprawidłową jednostkę miary",
+      "invalid_device_class": "Encja ma nieprawidłową klasę urządzenia",
+      "entity_unavailable": "Encja jest obecnie niedostępna — może pojawić się później",
+      "valve_no_set_position": "Ta encja valve nie obsługuje ustawiania pozycji (SET_POSITION). Wybierz zawór z obsługą pozycji lub encję number."
+    },
+    "abort": {
+      "no_rooms": "Brak pomieszczeń do zarządzania",
+      "cannot_remove_last_room": "Nie można usunąć ostatniego pomieszczenia — wymagane jest co najmniej jedno pomieszczenie"
     }
   },
   "entity": {

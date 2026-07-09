@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tortoise-UFH panel — preview harness</title>
+    <!--
+      Standalone visual-QA harness for the Tortoise-UFH sidebar panel.
+
+      This file is NOT shipped and NOT registered by the integration. It exists
+      only so the panel can be eyeballed in a plain browser without a running
+      Home Assistant: it mocks the `hass` object the panel consumes (callWS with
+      sample get_config / get_live, a states map, themes.darkMode, language),
+      stubs <ha-icon>, imports the real panel module relatively, mounts the
+      custom element and assigns hass.
+
+      Open directly in a browser (file://) or serve the repo root. Use the
+      controls at the top to flip theme, language and scenario, and to simulate
+      the 5-second poll advancing the "last cycle" age.
+    -->
+    <style>
+      :root {
+        /* A minimal stand-in for HA's light theme tokens the panel reads. */
+        --primary-text-color: #212121;
+        --secondary-text-color: #727272;
+        --disabled-text-color: #bdbdbd;
+        --primary-background-color: #f4f5f7;
+        --card-background-color: #ffffff;
+        --divider-color: rgba(0, 0, 0, 0.12);
+        --primary-color: #03a9f4;
+        --text-primary-color: #ffffff;
+        --accent-color: #ff9800;
+        --error-color: #db4437;
+        --warning-color: #ffa600;
+        --success-color: #43a047;
+        --info-color: #039be5;
+        --secondary-background-color: #e6e8eb;
+        --state-icon-color: #44739e;
+        --ha-card-border-radius: 12px;
+        font-family: Roboto, system-ui, -apple-system, sans-serif;
+      }
+      :root[data-theme="dark"] {
+        /* HA's dark theme token values. */
+        --primary-text-color: #e1e1e1;
+        --secondary-text-color: #9b9b9b;
+        --disabled-text-color: #6f6f6f;
+        --primary-background-color: #111111;
+        --card-background-color: #1c1c1c;
+        --divider-color: rgba(225, 225, 225, 0.12);
+        --primary-color: #2196f3;
+        --text-primary-color: #ffffff;
+        --accent-color: #ff9800;
+        --error-color: #ef5350;
+        --warning-color: #ffa600;
+        --success-color: #66bb6a;
+        --info-color: #4fc3f7;
+        --secondary-background-color: #282828;
+        --state-icon-color: #7a9bbd;
+      }
+      body {
+        margin: 0;
+        background: var(--primary-background-color);
+        color: var(--primary-text-color);
+      }
+      #toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 16px;
+        background: var(--card-background-color);
+        border-bottom: 1px solid var(--divider-color);
+        font-size: 13px;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+      }
+      #toolbar strong { margin-right: 6px; }
+      #toolbar button {
+        font: inherit;
+        padding: 5px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--divider-color);
+        background: var(--primary-background-color);
+        color: var(--primary-text-color);
+        cursor: pointer;
+      }
+      #toolbar button.active {
+        background: var(--primary-color);
+        color: var(--text-primary-color);
+        border-color: var(--primary-color);
+      }
+      #toolbar .sep { width: 1px; align-self: stretch; background: var(--divider-color); }
+      #log {
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        color: var(--secondary-text-color);
+        margin-left: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="toolbar">
+      <strong>Motyw</strong>
+      <button data-theme-btn="light" class="active">Light</button>
+      <button data-theme-btn="dark">Dark</button>
+      <span class="sep"></span>
+      <strong>Język</strong>
+      <button data-lang-btn="pl" class="active">PL</button>
+      <button data-lang-btn="en">EN</button>
+      <span class="sep"></span>
+      <strong>Scenariusz</strong>
+      <button data-scenario-btn="heating" class="active">Grzanie</button>
+      <button data-scenario-btn="cooling">Chłodzenie</button>
+      <button data-scenario-btn="stale">Stale</button>
+      <span class="sep"></span>
+      <!-- Kill-switch is config-only (not in get_live), so engage it through
+           the panel's own hero button — that is the real user flow. -->
+      <span class="hint" style="color: var(--secondary-text-color)"
+        >Kill-switch → przycisk w panelu</span
+      >
+      <span class="sep"></span>
+      <button id="poll-btn">Symuluj poll (+70 s)</button>
+      <span id="log"></span>
+    </div>
+
+    <tortoise-ufh-panel id="panel"></tortoise-ufh-panel>
+
+    <script>
+      // --- Stub <ha-icon> so the panel's feature-detection succeeds ---------
+      if (!customElements.get("ha-icon")) {
+        class HaIconStub extends HTMLElement {
+          static get observedAttributes() {
+            return ["icon"];
+          }
+          connectedCallback() {
+            this._render();
+          }
+          attributeChangedCallback() {
+            this._render();
+          }
+          _render() {
+            // Render a tiny glyph derived from the mdi name so icons are visible.
+            const icon = this.getAttribute("icon") || "";
+            const map = {
+              "mdi:tortoise": "🐢",
+              "mdi:cog-outline": "⚙",
+              "mdi:close": "✕",
+              "mdi:open-in-new": "↗",
+            };
+            this.textContent = map[icon] || "•";
+            this.style.display = "inline-flex";
+            this.style.width = "var(--mdc-icon-size, 24px)";
+            this.style.height = "var(--mdc-icon-size, 24px)";
+            this.style.alignItems = "center";
+            this.style.justifyContent = "center";
+            this.style.fontSize = "calc(var(--mdc-icon-size, 24px) * 0.85)";
+          }
+        }
+        customElements.define("ha-icon", HaIconStub);
+      }
+
+      // --- Mock entity states (read by the wiring section) ------------------
+      const STATES = {
+        "sensor.salon_temp": { state: "21.4", attributes: { unit_of_measurement: "°C" } },
+        "sensor.salon_rh": { state: "46", attributes: { unit_of_measurement: "%" } },
+        "sensor.outdoor_temp": { state: "3.2", attributes: { unit_of_measurement: "°C" } },
+        "number.salon_valve_1": { state: "62", attributes: { unit_of_measurement: "%" } },
+        "number.salon_valve_2": { state: "62", attributes: { unit_of_measurement: "%" } },
+        "sensor.salon_supply_1": { state: "34.1", attributes: { unit_of_measurement: "°C" } },
+        "sensor.salon_return_1": { state: "28.7", attributes: { unit_of_measurement: "°C" } },
+        "climate.salon_split": { state: "heat", attributes: {} },
+        "sensor.kuchnia_temp": { state: "unavailable", attributes: {} },
+        "sensor.kuchnia_rh": { state: "51", attributes: { unit_of_measurement: "%" } },
+        "number.kuchnia_valve": { state: "0", attributes: { unit_of_measurement: "%" } },
+        "sensor.lazienka_temp": { state: "23.9", attributes: { unit_of_measurement: "°C" } },
+        "sensor.lazienka_rh": { state: "68", attributes: { unit_of_measurement: "%" } },
+        "number.lazienka_valve": { state: "18", attributes: { unit_of_measurement: "%" } },
+        "sensor.lazienka_supply": { state: "17.2", attributes: { unit_of_measurement: "°C" } },
+        // Diagnostic (future field) — the integration's own output sensors.
+        "sensor.tortoise_salon_recommended_valve": {
+          state: "62",
+          attributes: { unit_of_measurement: "%" },
+        },
+      };
+
+      // --- Sample get_config (matches ConfigResult.to_dict) -----------------
+      function sampleConfig(scenario) {
+        const mode = scenario === "cooling" ? "cooling" : "heating";
+        return {
+          home_setpoint_c: 21.0,
+          mode,
+          kill_switch: scenario === "killed",
+          global_safe_dew_point_entity_id: "sensor.tortoise_global_safe_dew_point",
+          rooms: [
+            {
+              name: "Salon",
+              area_m2: 32.5,
+              offset_c: 0.5,
+              participates: true,
+              cooling_enabled: true,
+              live_control: true,
+              fast_source_kind: "split",
+              entities: {
+                entity_temp_room: "sensor.salon_temp",
+                entity_humidity: "sensor.salon_rh",
+                entity_temp_outdoor: "sensor.outdoor_temp",
+                entity_valves: ["number.salon_valve_1", "number.salon_valve_2"],
+                entity_supply: ["sensor.salon_supply_1"],
+                entity_return: ["sensor.salon_return_1"],
+                entity_fast_source: "climate.salon_split",
+              },
+              // Integration's own output sensors (get_config.diagnostic_entities);
+              // the charts read recommended_valve + error_c from here.
+              diagnostic_entities: {
+                recommended_valve: "sensor.tortoise_salon_recommended_valve",
+                error_c: "sensor.tortoise_salon_error",
+                trend_c_per_h: "sensor.tortoise_salon_trend",
+                room_dew_point: "sensor.tortoise_salon_dew",
+                i_term: "sensor.tortoise_salon_i",
+                trend_term: "sensor.tortoise_salon_trendterm",
+              },
+            },
+            {
+              name: "Kuchnia",
+              area_m2: 18.0,
+              offset_c: 0.0,
+              participates: true,
+              cooling_enabled: false,
+              live_control: false,
+              fast_source_kind: "none",
+              entities: {
+                entity_temp_room: "sensor.kuchnia_temp",
+                entity_humidity: "sensor.kuchnia_rh",
+                entity_temp_outdoor: "sensor.outdoor_temp",
+                entity_valves: ["number.kuchnia_valve"],
+                entity_supply: [],
+                entity_return: [],
+                entity_fast_source: null,
+              },
+            },
+            {
+              name: "Łazienka",
+              area_m2: 8.5,
+              offset_c: 1.5,
+              participates: true,
+              cooling_enabled: true,
+              live_control: true,
+              fast_source_kind: "none",
+              entities: {
+                entity_temp_room: "sensor.lazienka_temp",
+                entity_humidity: "sensor.lazienka_rh",
+                entity_temp_outdoor: "sensor.outdoor_temp",
+                entity_valves: ["number.lazienka_valve"],
+                entity_supply: ["sensor.lazienka_supply"],
+                entity_return: [],
+                entity_fast_source: null,
+              },
+              diagnostic_entities: {
+                recommended_valve: "sensor.tortoise_lazienka_recommended_valve",
+                error_c: "sensor.tortoise_lazienka_error",
+              },
+            },
+          ],
+        };
+      }
+
+      // --- Sample get_live (matches LiveResult.to_dict) ---------------------
+      function liveRoom(over) {
+        const report = Object.assign(
+          {
+            error_c: 0.0,
+            trend_c_per_h: 0.0,
+            room_dew_point_c: 9.5,
+            p_term: 0.0,
+            i_term: 0.0,
+            trend_term: 0.0,
+            feedforward_term: 0.0,
+            raw_valve_pct: 0.0,
+            valve_floor_applied: false,
+            saturated: false,
+            dew_throttle_factor: 1.0,
+            integrator_frozen: false,
+            flags: [],
+            explanation: "",
+          },
+          over.report || {},
+        );
+        return {
+          valve_position_pct: over.valve_position_pct ?? 0,
+          fast_source: over.fast_source || {
+            on: false,
+            mode: "off",
+            target_temperature_c: null,
+          },
+          report,
+          setpoint_c: over.setpoint_c ?? 21.5,
+          live_control_enabled: over.live_control_enabled ?? true,
+        };
+      }
+
+      function sampleLive(scenario, ageSeconds) {
+        const nowMs = Date.now() - ageSeconds * 1000;
+        const cooling = scenario === "cooling";
+        const stale = scenario === "stale";
+        const rooms = {
+          Salon: liveRoom({
+            valve_position_pct: 62,
+            setpoint_c: 21.5,
+            live_control_enabled: true,
+            fast_source: { on: true, mode: "heating", target_temperature_c: 23.0 },
+            report: {
+              error_c: 0.6,
+              trend_c_per_h: 0.25,
+              room_dew_point_c: 9.4,
+              p_term: 24.0,
+              i_term: 30.5,
+              trend_term: -8.2,
+              feedforward_term: 15.7,
+              raw_valve_pct: 62.0,
+              saturated: false,
+              explanation:
+                "Poniżej zadanej o 0.6 K, trend rosnący — zawór 62%, split wspomaga do 23°C.",
+            },
+          }),
+          Kuchnia: liveRoom({
+            valve_position_pct: 0,
+            setpoint_c: 21.0,
+            live_control_enabled: false,
+            report: {
+              error_c: null,
+              trend_c_per_h: null,
+              room_dew_point_c: null,
+              raw_valve_pct: 0.0,
+              integrator_frozen: true,
+              flags: ["sensor_lost"],
+              explanation:
+                "Utrata czujnika temperatury — zawór zamrożony na 0%, źródło szybkie WYŁ.",
+            },
+          }),
+          Łazienka: liveRoom(
+            cooling
+              ? {
+                  valve_position_pct: 12,
+                  setpoint_c: 22.5,
+                  live_control_enabled: true,
+                  report: {
+                    error_c: -0.4,
+                    trend_c_per_h: -0.1,
+                    room_dew_point_c: 17.4,
+                    p_term: -8.0,
+                    i_term: -12.0,
+                    trend_term: 3.0,
+                    feedforward_term: 0.0,
+                    raw_valve_pct: 40.0,
+                    dew_throttle_factor: 0.3,
+                    saturated: false,
+                    flags: ["s2_condensation"],
+                    explanation:
+                      "Chłodzenie dławione (0.3) — punkt rosy 17.4°C blisko temperatury zasilania.",
+                  },
+                }
+              : {
+                  valve_position_pct: 100,
+                  setpoint_c: 22.5,
+                  live_control_enabled: true,
+                  report: {
+                    error_c: 1.8,
+                    trend_c_per_h: 0.05,
+                    room_dew_point_c: 15.1,
+                    p_term: 72.0,
+                    i_term: 40.0,
+                    trend_term: -2.0,
+                    feedforward_term: 10.0,
+                    raw_valve_pct: 120.0,
+                    saturated: true,
+                    flags: ["saturated"],
+                    explanation:
+                      "Duży uchyb dodatni — zawór nasycony na 100% (żądanie surowe 120%).",
+                  },
+                },
+          ),
+        };
+        return {
+          rooms,
+          global_safe_dew_point_c: cooling ? 19.4 : null,
+          algorithm_status: stale ? "stale" : "running",
+          watchdog_state: stale ? "stale" : "ok",
+          last_update_timestamp: new Date(nowMs).toISOString(),
+          mode: cooling ? "cooling" : "heating",
+        };
+      }
+
+      // --- Mock recorder history / statistics -------------------------------
+      // Synthesizes a plausible waveform per entity id so the charts render.
+      // Timestamps mirror HA: history `lu` in epoch SECONDS, statistics
+      // `start`/`end` in epoch MILLISECONDS.
+      function waveValue(id, tMs) {
+        const hours = tMs / 3600000;
+        const k = id.toLowerCase();
+        if (k.includes("valve") || k.includes("recommended")) {
+          return Math.max(0, Math.min(100, Math.round(50 + 42 * Math.sin(hours / 3))));
+        }
+        if (k.includes("error")) {
+          return +(0.8 * Math.sin(hours / 2.5)).toFixed(2);
+        }
+        if (k.includes("dew")) {
+          return +(12 + 3 * Math.sin(hours / 4)).toFixed(1);
+        }
+        if (k.includes("trend")) {
+          return +(0.3 * Math.cos(hours / 2)).toFixed(2);
+        }
+        if (k.includes("outdoor")) {
+          return +(4 + 5 * Math.sin(hours / 6)).toFixed(1);
+        }
+        let base = 21.5;
+        if (k.includes("lazienka")) base = 22.8;
+        return +(base + 1.1 * Math.sin(hours / 2.5) + 0.3 * Math.sin(hours)).toFixed(2);
+      }
+
+      function mockHistory(entityIds, startMs, endMs) {
+        const out = {};
+        const stepMs = 10 * 60 * 1000;
+        for (const id of entityIds || []) {
+          const arr = [];
+          const gappy = id.includes("kuchnia"); // lost-sensor room → show a gap
+          for (let t = startMs; t <= endMs; t += stepMs) {
+            const frac = (t - startMs) / (endMs - startMs || 1);
+            const s = gappy && frac > 0.7 && frac < 0.85 ? "unavailable" : String(waveValue(id, t));
+            arr.push({ s, lu: t / 1000 }); // lu = epoch SECONDS
+          }
+          out[id] = arr;
+        }
+        return out;
+      }
+
+      function mockStatistics(ids, startMs, endMs) {
+        const out = {};
+        const hourMs = 3600 * 1000;
+        for (const id of ids || []) {
+          const arr = [];
+          let t = Math.ceil(startMs / hourMs) * hourMs;
+          for (; t <= endMs; t += hourMs) {
+            arr.push({ start: t, end: t + hourMs, mean: waveValue(id, t) }); // ms
+          }
+          out[id] = arr;
+        }
+        return out;
+      }
+
+      // --- Mock hass --------------------------------------------------------
+      const state = { theme: "light", lang: "pl", scenario: "heating", ageSeconds: 45 };
+      const logEl = document.getElementById("log");
+
+      function makeHass() {
+        return {
+          language: state.lang,
+          states: STATES,
+          themes: { darkMode: state.theme === "dark" },
+          callWS(msg) {
+            logEl.textContent = "callWS: " + msg.type;
+            if (msg.type === "tortoise_ufh/get_config") {
+              return Promise.resolve(sampleConfig(state.scenario));
+            }
+            if (msg.type === "tortoise_ufh/get_live") {
+              return Promise.resolve(sampleLive(state.scenario, state.ageSeconds));
+            }
+            if (msg.type === "history/history_during_period") {
+              const startMs = Date.parse(msg.start_time);
+              const endMs = msg.end_time ? Date.parse(msg.end_time) : Date.now();
+              return Promise.resolve(mockHistory(msg.entity_ids, startMs, endMs));
+            }
+            if (msg.type === "recorder/statistics_during_period") {
+              const startMs = Date.parse(msg.start_time);
+              const endMs = msg.end_time ? Date.parse(msg.end_time) : Date.now();
+              return Promise.resolve(mockStatistics(msg.statistic_ids, startMs, endMs));
+            }
+            // Writes: echo a tiny result and mutate local mock state so the
+            // optimistic UI reconciles on the panel's follow-up poll.
+            if (msg.type === "tortoise_ufh/set_home_temperature") {
+              return Promise.resolve({ home_setpoint_c: msg.temperature });
+            }
+            if (msg.type === "tortoise_ufh/set_room_offset") {
+              return Promise.resolve({ room: msg.room, offset_c: msg.offset });
+            }
+            if (msg.type === "tortoise_ufh/set_room_enabled") {
+              return Promise.resolve({ room: msg.room, live_control: msg.enabled });
+            }
+            if (msg.type === "tortoise_ufh/set_mode") {
+              state.scenario = msg.mode === "cooling" ? "cooling" : "heating";
+              return Promise.resolve({ mode: msg.mode });
+            }
+            if (msg.type === "tortoise_ufh/set_kill_switch") {
+              state.scenario = msg.engaged ? "killed" : "heating";
+              return Promise.resolve({ kill_switch: msg.engaged });
+            }
+            return Promise.reject(new Error("unknown command: " + msg.type));
+          },
+        };
+      }
+
+      const panel = document.getElementById("panel");
+      function push() {
+        panel.hass = makeHass();
+      }
+      // The panel module is imported as a deferred <script type="module"> that
+      // runs after this classic script, so wait for the definition before the
+      // first assignment (the panel also self-recovers via _upgradeProperty).
+      if (customElements.get("tortoise-ufh-panel")) {
+        push();
+      } else {
+        customElements.whenDefined("tortoise-ufh-panel").then(push);
+      }
+
+      // --- Toolbar wiring ---------------------------------------------------
+      function activate(attr, value) {
+        document.querySelectorAll("[" + attr + "]").forEach((b) => {
+          b.classList.toggle("active", b.getAttribute(attr) === value);
+        });
+      }
+      document.querySelectorAll("[data-theme-btn]").forEach((b) =>
+        b.addEventListener("click", () => {
+          state.theme = b.getAttribute("data-theme-btn");
+          document.documentElement.setAttribute("data-theme", state.theme);
+          activate("data-theme-btn", state.theme);
+          push();
+        }),
+      );
+      document.querySelectorAll("[data-lang-btn]").forEach((b) =>
+        b.addEventListener("click", () => {
+          state.lang = b.getAttribute("data-lang-btn");
+          activate("data-lang-btn", state.lang);
+          push();
+        }),
+      );
+      document.querySelectorAll("[data-scenario-btn]").forEach((b) =>
+        b.addEventListener("click", () => {
+          state.scenario = b.getAttribute("data-scenario-btn");
+          state.ageSeconds = state.scenario === "stale" ? 900 : 45;
+          activate("data-scenario-btn", state.scenario);
+          push();
+        }),
+      );
+      document.getElementById("poll-btn").addEventListener("click", () => {
+        state.ageSeconds += 70;
+        push();
+      });
+
+      // Surface hass-more-info + location-changed events the panel dispatches.
+      window.addEventListener("hass-more-info", (e) => {
+        logEl.textContent = "hass-more-info: " + (e.detail && e.detail.entityId);
+      });
+      window.addEventListener("location-changed", () => {
+        logEl.textContent = "location-changed: " + window.location.pathname;
+      });
+    </script>
+
+    <script type="module">
+      // Import the real panel module relatively (no bundling, no CDN).
+      import "../custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js";
+    </script>
+  </body>
+</html>

@@ -80,6 +80,9 @@ from .const import (
     DOMAIN,
     FAST_SOURCE_KIND_NONE,
     FAST_SOURCE_KINDS,
+    ROOM_OFFSET_MAX_C,
+    ROOM_OFFSET_MIN_C,
+    ROOM_OFFSET_STEP_C,
     VALID_PERCENT_UNITS,
     VALID_TEMP_UNITS,
 )
@@ -104,6 +107,35 @@ CONF_CONTROLLER: str = "controller"
 
 _ENTITY_UNAVAILABLE: str = "entity_unavailable"
 """Non-blocking validation error key (an entity may come online later)."""
+
+CONF_SELECTED_ROOM: str = "selected_room"
+"""Options-flow room-picker field key (edit-room / remove-room steps)."""
+
+_SETPOINT_STORE_VERSION: int = 1
+"""Schema version of the coordinator's per-entry setpoint :class:`Store`.
+
+Mirrors ``coordinator._SETPOINT_STORE_VERSION``; kept in sync so the options
+flow can prune a removed room's persisted offset from the same Store.
+"""
+
+_GLOBAL_UNIQUE_ID_KEYS: frozenset[str] = frozenset(
+    {
+        "home_temperature",
+        "kill_switch",
+        "global_safe_dew_point",
+        "algorithm_status",
+        "last_update",
+        "watchdog_status",
+    }
+)
+"""Per-entry *global* entity unique-id suffixes (``f"{entry_id}_{key}"``, with no
+room segment). Excluded from room-removal registry cleanup so a room whose slug
+is a prefix of a global key (e.g. a room named "Home" vs ``home_temperature``)
+can never delete a global entity. Mirrors the global entity-description keys of
+the number / sensor / switch platforms (``home_temperature`` is
+``HOME_TEMPERATURE_DESCRIPTION.key`` in ``number.py`` — *not* the
+``CONF_HOME_SETPOINT`` config key).
+"""
 
 # ---------------------------------------------------------------------------
 # Advanced controller-knob NumberSelector specs: (field, min, max, step)
@@ -357,6 +389,228 @@ def _validate_valves(validator: EntityValidator, valve_ids: list[str]) -> str | 
     return None
 
 
+def _room_attributes_schema_dict(
+    *,
+    include_name: bool,
+    include_offset: bool = True,
+    defaults: dict[str, Any] | None = None,
+) -> dict[Any, Any]:
+    """Build the room-attributes schema fragment (name / area / offset / flags).
+
+    Shared by the options flow's add-room and edit-room attribute steps so the
+    room knobs are declared exactly once. The room name is included only when
+    adding (a room name is immutable once created — rename is remove + add).
+
+    Args:
+        include_name: Whether to include the required room-name text field.
+        include_offset: Whether to include the per-room setpoint-offset field.
+            Included only when adding (to seed a brand-new room's offset). It is
+            omitted when editing: for an existing room the offset is runtime
+            state owned by the home-temperature / offset number entities and the
+            coordinator's setpoint Store, which authoritatively override any
+            value in ``entry.data`` on reload — so an editable field here would
+            be silently reverted. Offset edits go through the number entity.
+        defaults: An existing room dict used to pre-fill the fields when editing,
+            or ``None`` to use the library defaults (the add case). When the
+            ``has_fast_source`` flag is absent it is derived from
+            ``fast_source_kind`` so a number-only / legacy room still pre-fills.
+
+    Returns:
+        A voluptuous schema dict (marker -> selector).
+    """
+    values = defaults or {}
+    has_fast_default = bool(
+        values.get(
+            CONF_HAS_FAST_SOURCE,
+            str(values.get(CONF_FAST_SOURCE_KIND, FAST_SOURCE_KIND_NONE))
+            != FAST_SOURCE_KIND_NONE,
+        )
+    )
+    schema: dict[Any, Any] = {}
+    if include_name:
+        schema[vol.Required(CONF_ROOM_NAME)] = TextSelector()
+    schema[
+        vol.Required(CONF_ROOM_AREA, default=float(values.get(CONF_ROOM_AREA, 20.0)))
+    ] = NumberSelector(
+        NumberSelectorConfig(min=1, max=1000, step=0.1, mode=NumberSelectorMode.BOX)
+    )
+    if include_offset:
+        schema[
+            vol.Required(
+                CONF_ROOM_OFFSET,
+                default=float(values.get(CONF_ROOM_OFFSET, DEFAULT_ROOM_OFFSET_C)),
+            )
+        ] = NumberSelector(
+            NumberSelectorConfig(
+                min=ROOM_OFFSET_MIN_C,
+                max=ROOM_OFFSET_MAX_C,
+                step=ROOM_OFFSET_STEP_C,
+                mode=NumberSelectorMode.BOX,
+            )
+        )
+    schema[
+        vol.Required(
+            CONF_PARTICIPATES,
+            default=bool(values.get(CONF_PARTICIPATES, DEFAULT_PARTICIPATES)),
+        )
+    ] = BooleanSelector()
+    schema[vol.Required(CONF_HAS_FAST_SOURCE, default=has_fast_default)] = (
+        BooleanSelector()
+    )
+    schema[
+        vol.Required(
+            CONF_FAST_SOURCE_KIND,
+            default=str(values.get(CONF_FAST_SOURCE_KIND, DEFAULT_FAST_SOURCE_KIND)),
+        )
+    ] = SelectSelector(SelectSelectorConfig(options=FAST_SOURCE_KINDS))
+    schema[
+        vol.Required(
+            CONF_COOLING_ENABLED,
+            default=bool(values.get(CONF_COOLING_ENABLED, DEFAULT_COOLING_ENABLED)),
+        )
+    ] = BooleanSelector()
+    return schema
+
+
+def _entities_schema_dict(
+    *,
+    has_fast_source: bool,
+    include_globals: bool,
+    defaults: dict[str, Any] | None = None,
+) -> dict[Any, Any]:
+    """Build the per-room entity-mapping schema fragment.
+
+    Shared by the setup wizard's ``entities`` step and the options flow's
+    add/edit-room entity step, so the entity selectors, their domain / device
+    class filters and their required/optional markers live in one place.
+
+    Args:
+        has_fast_source: Whether to include the fast-source climate picker.
+        include_globals: Whether to append the two global pickers (outdoor
+            temperature + mode input). ``True`` only on the wizard's first room;
+            the options flow never re-collects the (already configured) globals.
+        defaults: An existing room dict used to pre-fill the pickers when
+            editing, or ``None`` to leave every field blank (add / first setup).
+
+    Returns:
+        A voluptuous schema dict (marker -> selector).
+    """
+    values = defaults or {}
+
+    def marker(key: str, *, required: bool) -> Any:
+        cls = vol.Required if required else vol.Optional
+        suggested = values.get(key)
+        if suggested:
+            return cls(key, description={"suggested_value": suggested})
+        return cls(key)
+
+    schema: dict[Any, Any] = {
+        marker(CONF_ENTITY_TEMP_ROOM, required=True): EntitySelector(
+            EntitySelectorConfig(domain=["sensor"], device_class=["temperature"])
+        ),
+        marker(CONF_ENTITY_HUMIDITY, required=False): EntitySelector(
+            EntitySelectorConfig(domain=["sensor"], device_class=["humidity"])
+        ),
+        marker(CONF_ENTITY_VALVES, required=True): EntitySelector(
+            EntitySelectorConfig(domain=["number", "valve"], multiple=True)
+        ),
+        marker(CONF_ENTITY_SUPPLY, required=False): EntitySelector(
+            EntitySelectorConfig(
+                domain=["sensor"], device_class=["temperature"], multiple=True
+            )
+        ),
+        marker(CONF_ENTITY_RETURN, required=False): EntitySelector(
+            EntitySelectorConfig(
+                domain=["sensor"], device_class=["temperature"], multiple=True
+            )
+        ),
+    }
+    if has_fast_source:
+        schema[marker(CONF_ENTITY_FAST_SOURCE, required=False)] = EntitySelector(
+            EntitySelectorConfig(domain=["climate"])
+        )
+    if include_globals:
+        schema[marker(CONF_ENTITY_TEMP_OUTDOOR, required=False)] = EntitySelector(
+            EntitySelectorConfig(domain=["sensor"], device_class=["temperature"])
+        )
+        schema[marker(CONF_ENTITY_MODE, required=False)] = EntitySelector(
+            EntitySelectorConfig(domain=["select", "input_select"])
+        )
+    return schema
+
+
+def _first_entity_error(
+    validator: EntityValidator,
+    *,
+    temp_room: str,
+    humidity: str,
+    valves: list[str],
+    supply: list[str],
+    returns: list[str],
+    fast_source: str,
+    outdoor: str,
+    cooling_enabled: bool,
+) -> str | None:
+    """Validate a room's mapped entities; return the first blocking error key.
+
+    Mirrors the setup wizard's precedence: the per-entity unit / device-class
+    checks are lowest priority, then the "at least one valve" gate, then the
+    "cooled rooms need a humidity sensor" gate (highest), so a missing humidity
+    sensor is always surfaced ahead of a unit mismatch.
+
+    Args:
+        validator: The entity validator bound to the live HA instance.
+        temp_room: Room-temperature sensor id (required).
+        humidity: Humidity sensor id, or ``""`` when none was selected.
+        valves: Valve actuator ids (at least one is required).
+        supply: Supply-water temperature sensor ids.
+        returns: Return-water temperature sensor ids.
+        fast_source: Fast-source climate id, or ``""`` when none.
+        outdoor: Outdoor-temperature sensor id, or ``""`` to skip that check.
+        cooling_enabled: Whether the room participates in floor cooling.
+
+    Returns:
+        The first blocking ``error_key``, or ``None`` when the mapping is valid.
+    """
+    checks: list[str | None] = [
+        _validate_entities(
+            validator,
+            [temp_room],
+            valid_units=VALID_TEMP_UNITS,
+            device_class="temperature",
+        ),
+        _validate_entities(
+            validator,
+            [humidity] if humidity else [],
+            valid_units=VALID_PERCENT_UNITS,
+            device_class="humidity",
+        ),
+        _validate_valves(validator, valves),
+        _validate_entities(
+            validator, supply, valid_units=VALID_TEMP_UNITS, device_class="temperature"
+        ),
+        _validate_entities(
+            validator, returns, valid_units=VALID_TEMP_UNITS, device_class="temperature"
+        ),
+        _validate_entities(validator, [fast_source] if fast_source else []),
+    ]
+    if outdoor:
+        checks.append(
+            _validate_entities(
+                validator,
+                [outdoor],
+                valid_units=VALID_TEMP_UNITS,
+                device_class="temperature",
+            )
+        )
+    error = next((key for key in checks if key is not None), None)
+    if not valves:
+        error = "valve_required"
+    if cooling_enabled and not humidity:
+        error = "humidity_required"
+    return error
+
+
 # ---------------------------------------------------------------------------
 # Config flow
 # ---------------------------------------------------------------------------
@@ -532,52 +786,19 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
             outdoor = str(user_input.get(CONF_ENTITY_TEMP_OUTDOOR, ""))
             mode_entity = str(user_input.get(CONF_ENTITY_MODE, ""))
 
-            checks: list[str | None] = [
-                _validate_entities(
-                    validator,
-                    [temp_room],
-                    valid_units=VALID_TEMP_UNITS,
-                    device_class="temperature",
-                ),
-                _validate_entities(
-                    validator,
-                    [humidity] if humidity else [],
-                    valid_units=VALID_PERCENT_UNITS,
-                    device_class="humidity",
-                ),
-                _validate_valves(validator, valves),
-                _validate_entities(
-                    validator,
-                    supply,
-                    valid_units=VALID_TEMP_UNITS,
-                    device_class="temperature",
-                ),
-                _validate_entities(
-                    validator,
-                    returns,
-                    valid_units=VALID_TEMP_UNITS,
-                    device_class="temperature",
-                ),
-                _validate_entities(validator, [fast_source] if fast_source else []),
-            ]
-            if is_first and outdoor:
-                checks.append(
-                    _validate_entities(
-                        validator,
-                        [outdoor],
-                        valid_units=VALID_TEMP_UNITS,
-                        device_class="temperature",
-                    )
-                )
-            first_error = next((key for key in checks if key is not None), None)
+            first_error = _first_entity_error(
+                validator,
+                temp_room=temp_room,
+                humidity=humidity,
+                valves=valves,
+                supply=supply,
+                returns=returns,
+                fast_source=fast_source,
+                outdoor=outdoor if is_first else "",
+                cooling_enabled=bool(room.get(CONF_COOLING_ENABLED)),
+            )
             if first_error is not None:
                 errors["base"] = first_error
-
-            if not valves:
-                errors["base"] = "valve_required"
-
-            if room.get(CONF_COOLING_ENABLED) and not humidity:
-                errors["base"] = "humidity_required"
 
             if not errors:
                 room[CONF_ENTITY_TEMP_ROOM] = temp_room
@@ -600,42 +821,10 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                     return await self.async_step_entities()
                 return await self.async_step_algorithm()
 
-        schema_dict: dict[Any, Any] = {
-            vol.Required(CONF_ENTITY_TEMP_ROOM): EntitySelector(
-                EntitySelectorConfig(domain=["sensor"], device_class=["temperature"])
-            ),
-            vol.Optional(CONF_ENTITY_HUMIDITY): EntitySelector(
-                EntitySelectorConfig(domain=["sensor"], device_class=["humidity"])
-            ),
-            vol.Required(CONF_ENTITY_VALVES): EntitySelector(
-                EntitySelectorConfig(domain=["number", "valve"], multiple=True)
-            ),
-            vol.Optional(CONF_ENTITY_SUPPLY): EntitySelector(
-                EntitySelectorConfig(
-                    domain=["sensor"],
-                    device_class=["temperature"],
-                    multiple=True,
-                )
-            ),
-            vol.Optional(CONF_ENTITY_RETURN): EntitySelector(
-                EntitySelectorConfig(
-                    domain=["sensor"],
-                    device_class=["temperature"],
-                    multiple=True,
-                )
-            ),
-        }
-        if room.get(CONF_HAS_FAST_SOURCE):
-            schema_dict[vol.Optional(CONF_ENTITY_FAST_SOURCE)] = EntitySelector(
-                EntitySelectorConfig(domain=["climate"])
-            )
-        if is_first:
-            schema_dict[vol.Optional(CONF_ENTITY_TEMP_OUTDOOR)] = EntitySelector(
-                EntitySelectorConfig(domain=["sensor"], device_class=["temperature"])
-            )
-            schema_dict[vol.Optional(CONF_ENTITY_MODE)] = EntitySelector(
-                EntitySelectorConfig(domain=["select", "input_select"])
-            )
+        schema_dict = _entities_schema_dict(
+            has_fast_source=bool(room.get(CONF_HAS_FAST_SOURCE)),
+            include_globals=is_first,
+        )
 
         return self.async_show_form(
             step_id="entities",
@@ -716,19 +905,46 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class TortoiseUfhOptionsFlow(OptionsFlow):
-    """Options flow: per-room live control, kill switch, advanced knobs.
+    """Options flow: a menu over room management and control settings.
 
-    A single ``init`` step renders one live-control :class:`BooleanSelector` per
-    room (the shadow -> live transition), the global kill-switch toggle, and the
-    advanced :class:`ControllerConfig` knobs (defaults sourced from the entry's
-    current controller options / data). Saving reloads the entry via the
-    integration's update listener.
+    The entry point (:meth:`async_step_init`) is a menu with four leaves:
+
+    * ``add_room`` — collect a new room's attributes then its source entities,
+      append it to ``entry.data[CONF_ROOMS]`` and reload.
+    * ``edit_room`` — pick an existing room, then edit its attributes (name
+      immutable) and entity mapping in place.
+    * ``remove_room`` — pick a room, remove it from ``entry.data[CONF_ROOMS]``,
+      delete its orphaned entity-registry entries and prune its per-room state.
+    * ``settings`` — per-room shadow<->live toggles, the global kill switch and
+      the advanced :class:`ControllerConfig` knobs (the original options form).
+
+    Room definitions live in ``entry.data`` (not ``entry.options``); the room
+    leaves therefore persist through ``async_update_entry`` with a fresh
+    ``CONF_ROOMS`` list, which fires the integration's update listener and
+    reloads the entry (rebuilding the coordinator and re-syncing entities). Each
+    leaf uses a single save/return point so exactly one reload is triggered.
     """
+
+    # Room being added / edited, carried across a leaf's multiple steps.
+    _pending_room: dict[str, Any]
+    # Index of the room being edited in CONF_ROOMS, or None while adding.
+    _pending_index: int | None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the single options step."""
+        """Show the top-level options menu."""
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["add_room", "edit_room", "remove_room", "settings"],
+        )
+
+    # -- Leaf: control & tuning settings (the original options form) --------
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Per-room live control, the global kill switch and advanced knobs."""
         entry = self.config_entry
         rooms: list[dict[str, Any]] = list(entry.data.get(CONF_ROOMS, []))
         errors: dict[str, str] = {}
@@ -775,8 +991,412 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         schema_dict.update(_controller_schema_dict(current_defaults))
 
         return self.async_show_form(
-            step_id="init", data_schema=vol.Schema(schema_dict), errors=errors
+            step_id="settings", data_schema=vol.Schema(schema_dict), errors=errors
         )
+
+    # -- Leaf: add a room ---------------------------------------------------
+
+    async def async_step_add_room(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Collect a new room's attributes, then advance to its entity mapping."""
+        entry = self.config_entry
+        rooms: list[dict[str, Any]] = list(entry.data.get(CONF_ROOMS, []))
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            name = str(user_input.get(CONF_ROOM_NAME, "")).strip()
+            has_fast = bool(user_input.get(CONF_HAS_FAST_SOURCE, False))
+            raw_kind = str(
+                user_input.get(CONF_FAST_SOURCE_KIND, DEFAULT_FAST_SOURCE_KIND)
+            )
+            kind = raw_kind if has_fast else FAST_SOURCE_KIND_NONE
+
+            if not name:
+                errors["base"] = "empty_room_name"
+            elif any(str(r[CONF_ROOM_NAME]) == name for r in rooms):
+                errors["base"] = "duplicate_room_name"
+
+            room: RoomDefinition | None = None
+            if not errors:
+                try:
+                    room = RoomDefinition(
+                        name=name,
+                        area_m2=float(user_input.get(CONF_ROOM_AREA, 0.0)),
+                        has_fast_source=has_fast,
+                        fast_source_kind=kind,
+                        cooling_enabled=bool(
+                            user_input.get(
+                                CONF_COOLING_ENABLED, DEFAULT_COOLING_ENABLED
+                            )
+                        ),
+                    )
+                except ValueError as err:
+                    _LOGGER.warning("Invalid room definition: %s", err)
+                    errors["base"] = "invalid_room"
+
+            if not errors and room is not None:
+                self._pending_index = None
+                self._pending_room = {
+                    **room.as_dict(),
+                    CONF_ROOM_OFFSET: float(
+                        user_input.get(CONF_ROOM_OFFSET, DEFAULT_ROOM_OFFSET_C)
+                    ),
+                    CONF_PARTICIPATES: bool(
+                        user_input.get(CONF_PARTICIPATES, DEFAULT_PARTICIPATES)
+                    ),
+                }
+                return await self.async_step_room_entities()
+
+        return self.async_show_form(
+            step_id="add_room",
+            data_schema=vol.Schema(_room_attributes_schema_dict(include_name=True)),
+            errors=errors,
+        )
+
+    # -- Leaf: edit a room --------------------------------------------------
+
+    async def async_step_edit_room(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Pick an existing room to edit."""
+        entry = self.config_entry
+        rooms: list[dict[str, Any]] = list(entry.data.get(CONF_ROOMS, []))
+        if not rooms:
+            return self.async_abort(reason="no_rooms")
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            selected = str(user_input.get(CONF_SELECTED_ROOM, ""))
+            index = next(
+                (i for i, r in enumerate(rooms) if str(r[CONF_ROOM_NAME]) == selected),
+                None,
+            )
+            if index is None:
+                errors["base"] = "invalid_room"
+            else:
+                self._pending_index = index
+                self._pending_room = dict(rooms[index])
+                return await self.async_step_edit_room_attrs()
+
+        names = [str(r[CONF_ROOM_NAME]) for r in rooms]
+        return self.async_show_form(
+            step_id="edit_room",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_SELECTED_ROOM): SelectSelector(
+                        SelectSelectorConfig(options=names)
+                    )
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_edit_room_attrs(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Edit the picked room's attributes (its name is immutable)."""
+        room = self._pending_room
+        room_name = str(room[CONF_ROOM_NAME])
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            has_fast = bool(user_input.get(CONF_HAS_FAST_SOURCE, False))
+            raw_kind = str(
+                user_input.get(CONF_FAST_SOURCE_KIND, DEFAULT_FAST_SOURCE_KIND)
+            )
+            kind = raw_kind if has_fast else FAST_SOURCE_KIND_NONE
+
+            room_def: RoomDefinition | None = None
+            try:
+                room_def = RoomDefinition(
+                    name=room_name,
+                    area_m2=float(user_input.get(CONF_ROOM_AREA, 0.0)),
+                    has_fast_source=has_fast,
+                    fast_source_kind=kind,
+                    cooling_enabled=bool(
+                        user_input.get(CONF_COOLING_ENABLED, DEFAULT_COOLING_ENABLED)
+                    ),
+                )
+            except ValueError as err:
+                _LOGGER.warning("Invalid room definition: %s", err)
+                errors["base"] = "invalid_room"
+
+            if not errors and room_def is not None:
+                # The offset field is add-only (see _room_attributes_schema_dict):
+                # ``**room`` carries the existing room's offset forward unchanged,
+                # since it is runtime state owned by the number entity / Store.
+                self._pending_room = {
+                    **room,
+                    **room_def.as_dict(),
+                    CONF_PARTICIPATES: bool(
+                        user_input.get(CONF_PARTICIPATES, DEFAULT_PARTICIPATES)
+                    ),
+                }
+                return await self.async_step_room_entities()
+
+        return self.async_show_form(
+            step_id="edit_room_attrs",
+            data_schema=vol.Schema(
+                _room_attributes_schema_dict(
+                    include_name=False, include_offset=False, defaults=room
+                )
+            ),
+            errors=errors,
+            description_placeholders={"room_name": room_name},
+        )
+
+    # -- Shared: entity mapping for the pending (added / edited) room -------
+
+    async def async_step_room_entities(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Map source entities for the pending room, then save and reload."""
+        entry = self.config_entry
+        room = self._pending_room
+        room_name = str(room[CONF_ROOM_NAME])
+        has_fast_source = bool(
+            room.get(
+                CONF_HAS_FAST_SOURCE,
+                str(room.get(CONF_FAST_SOURCE_KIND, FAST_SOURCE_KIND_NONE))
+                != FAST_SOURCE_KIND_NONE,
+            )
+        )
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            validator = EntityValidator(self.hass)
+            temp_room = str(user_input.get(CONF_ENTITY_TEMP_ROOM, ""))
+            humidity = str(user_input.get(CONF_ENTITY_HUMIDITY, ""))
+            valves = _as_entity_list(user_input.get(CONF_ENTITY_VALVES))
+            supply = _as_entity_list(user_input.get(CONF_ENTITY_SUPPLY))
+            returns = _as_entity_list(user_input.get(CONF_ENTITY_RETURN))
+            fast_source = str(user_input.get(CONF_ENTITY_FAST_SOURCE, ""))
+
+            error = _first_entity_error(
+                validator,
+                temp_room=temp_room,
+                humidity=humidity,
+                valves=valves,
+                supply=supply,
+                returns=returns,
+                fast_source=fast_source,
+                outdoor="",
+                cooling_enabled=bool(room.get(CONF_COOLING_ENABLED)),
+            )
+            if error is not None:
+                errors["base"] = error
+
+            if not errors:
+                updated = dict(room)
+                updated[CONF_ENTITY_TEMP_ROOM] = temp_room
+                updated[CONF_ENTITY_HUMIDITY] = humidity
+                updated[CONF_ENTITY_VALVES] = valves
+                updated[CONF_ENTITY_SUPPLY] = supply
+                updated[CONF_ENTITY_RETURN] = returns
+                updated[CONF_ENTITY_TEMP_OUTDOOR] = self._existing_outdoor(entry)
+                if has_fast_source:
+                    updated[CONF_ENTITY_FAST_SOURCE] = fast_source
+                else:
+                    updated.pop(CONF_ENTITY_FAST_SOURCE, None)
+
+                rooms: list[dict[str, Any]] = list(entry.data.get(CONF_ROOMS, []))
+                if self._pending_index is None:
+                    rooms.append(updated)
+                else:
+                    rooms[self._pending_index] = updated
+                return self._save_rooms(rooms)
+
+        return self.async_show_form(
+            step_id="room_entities",
+            data_schema=vol.Schema(
+                _entities_schema_dict(
+                    has_fast_source=has_fast_source,
+                    include_globals=False,
+                    defaults=room,
+                )
+            ),
+            errors=errors,
+            description_placeholders={"room_name": room_name},
+        )
+
+    # -- Leaf: remove a room ------------------------------------------------
+
+    async def async_step_remove_room(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Pick a room to remove; clean up its entities and per-room state."""
+        entry = self.config_entry
+        rooms: list[dict[str, Any]] = list(entry.data.get(CONF_ROOMS, []))
+        if not rooms:
+            return self.async_abort(reason="no_rooms")
+        if len(rooms) <= 1:
+            return self.async_abort(reason="cannot_remove_last_room")
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            selected = str(user_input.get(CONF_SELECTED_ROOM, ""))
+            index = next(
+                (i for i, r in enumerate(rooms) if str(r[CONF_ROOM_NAME]) == selected),
+                None,
+            )
+            if index is None:
+                errors["base"] = "invalid_room"
+            else:
+                all_names = [str(r[CONF_ROOM_NAME]) for r in rooms]
+                removed_name = all_names[index]
+                self._async_cleanup_room_entities(removed_name, all_names)
+                await self._async_prune_room_setpoint(removed_name)
+                remaining = [r for i, r in enumerate(rooms) if i != index]
+                live_control = {
+                    name: bool(value)
+                    for name, value in entry.options.get(CONF_LIVE_CONTROL, {}).items()
+                    if name != removed_name
+                }
+                new_options = {**entry.options, CONF_LIVE_CONTROL: live_control}
+                return self._save_rooms(remaining, options=new_options)
+
+        names = [str(r[CONF_ROOM_NAME]) for r in rooms]
+        return self.async_show_form(
+            step_id="remove_room",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_SELECTED_ROOM): SelectSelector(
+                        SelectSelectorConfig(options=names)
+                    )
+                }
+            ),
+            errors=errors,
+        )
+
+    # -- Internal: persistence + cleanup helpers ----------------------------
+
+    def _save_rooms(
+        self, rooms: list[dict[str, Any]], *, options: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Persist a replacement room list (single reload) and finish the flow.
+
+        Writes the new ``CONF_ROOMS`` back to ``entry.data`` — and any changed
+        options in the *same* ``async_update_entry`` call, so exactly one update
+        (one reload) fires — then terminates the options flow re-affirming those
+        options. Because the terminal write sets ``entry.options`` to a value it
+        already holds, it is a no-op that does not trigger a second reload.
+
+        Args:
+            rooms: The full replacement room list for ``entry.data``.
+            options: Replacement ``entry.options`` when a leaf also changed them
+                (e.g. remove-room pruning ``live_control``); ``None`` keeps the
+                current options unchanged.
+
+        Returns:
+            The terminal ``CREATE_ENTRY`` flow result.
+        """
+        entry = self.config_entry
+        new_options = dict(entry.options) if options is None else options
+        self.hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, CONF_ROOMS: rooms},
+            options=new_options,
+        )
+        return self.async_create_entry(title="", data=new_options)
+
+    @staticmethod
+    def _existing_outdoor(entry: ConfigEntry) -> str:
+        """Return the shared outdoor-temperature entity id, or ``""``.
+
+        The outdoor sensor is a single global entity fanned out into every room
+        dict; a newly added / edited room inherits the same id.
+
+        Args:
+            entry: The config entry holding the room list.
+
+        Returns:
+            The first non-empty ``entity_temp_outdoor`` across rooms, else ``""``.
+        """
+        for room_cfg in entry.data.get(CONF_ROOMS, []):
+            outdoor = str(room_cfg.get(CONF_ENTITY_TEMP_OUTDOOR, "") or "")
+            if outdoor:
+                return outdoor
+        return ""
+
+    def _async_cleanup_room_entities(
+        self, removed_name: str, all_room_names: list[str]
+    ) -> None:
+        """Delete the entry's entity-registry entries for a removed room.
+
+        Attributes each of the entry's registry entries to the room whose slug
+        (``name.lower().replace(" ", "_")``) is the longest ``"{slug}_"`` prefix
+        of the unique id's per-room segment, and removes only those belonging to
+        the removed room. This disambiguates slug-prefix collisions ("Salon" vs
+        "Salon 2"); global entities are protected by :data:`_GLOBAL_UNIQUE_ID_KEYS`
+        so a room named e.g. "Home" never deletes the global ``home_temperature``.
+
+        Removing a currently-loaded entity's registry entry tears the live entity
+        down cleanly; the reload that follows re-creates only the surviving rooms.
+
+        Args:
+            removed_name: The name of the room being removed.
+            all_room_names: Every room name (removed + remaining) for longest-slug
+                disambiguation.
+        """
+        from homeassistant.helpers import entity_registry as er
+
+        registry = er.async_get(self.hass)
+        entry = self.config_entry
+        entry_prefix = f"{entry.entry_id}_"
+        removed_slug = removed_name.lower().replace(" ", "_")
+        slugs = [name.lower().replace(" ", "_") for name in all_room_names]
+
+        reg_entries = er.async_entries_for_config_entry(registry, entry.entry_id)
+        for reg_entry in list(reg_entries):
+            unique_id = reg_entry.unique_id or ""
+            if not unique_id.startswith(entry_prefix):
+                continue
+            rest = unique_id[len(entry_prefix) :]
+            if rest in _GLOBAL_UNIQUE_ID_KEYS:
+                continue
+            best_slug: str | None = None
+            for slug in slugs:
+                if rest.startswith(f"{slug}_") and (
+                    best_slug is None or len(slug) > len(best_slug)
+                ):
+                    best_slug = slug
+            if best_slug is not None and best_slug == removed_slug:
+                registry.async_remove(reg_entry.entity_id)
+
+    async def _async_prune_room_setpoint(self, removed_name: str) -> None:
+        """Drop the removed room's offset from the private setpoint Store.
+
+        The per-room offset persists in a coordinator-owned
+        :class:`~homeassistant.helpers.storage.Store` keyed by room name. A
+        rebuilt coordinator already ignores offsets for unknown rooms, so this is
+        a best-effort tidy-up; any failure is logged and swallowed.
+
+        Args:
+            removed_name: The name of the room being removed.
+        """
+        from homeassistant.helpers.storage import Store
+
+        entry = self.config_entry
+        store: Store[dict[str, Any]] = Store(
+            self.hass,
+            _SETPOINT_STORE_VERSION,
+            f"{DOMAIN}.setpoints.{entry.entry_id}",
+        )
+        try:
+            stored = await store.async_load()
+            if not stored:
+                return
+            offsets = stored.get(CONF_ROOM_OFFSET)
+            if isinstance(offsets, dict) and removed_name in offsets:
+                del offsets[removed_name]
+                await store.async_save(stored)
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning(
+                "Failed to prune setpoint store for removed room %s",
+                removed_name,
+                exc_info=True,
+            )
 
     @staticmethod
     def _live_key(index: int) -> str:

@@ -20,6 +20,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.tortoise_ufh.config_flow import (
     CONF_CONTROLLER,
     CONF_HAS_FAST_SOURCE,
+    CONF_SELECTED_ROOM,
 )
 from custom_components.tortoise_ufh.const import (
     CONF_ADD_ANOTHER,
@@ -35,8 +36,10 @@ from custom_components.tortoise_ufh.const import (
     CONF_FAST_SOURCE_KIND,
     CONF_KILL_SWITCH,
     CONF_LIVE_CONTROL,
+    CONF_PARTICIPATES,
     CONF_ROOM_AREA,
     CONF_ROOM_NAME,
+    CONF_ROOM_OFFSET,
     CONF_ROOMS,
     DOMAIN,
     FAST_SOURCE_KIND_NONE,
@@ -49,6 +52,9 @@ pytestmark = pytest.mark.ha
 
 _LAT = 50.5
 _LON = 19.5
+
+_TEMP_ATTRS = {"unit_of_measurement": "°C", "device_class": "temperature"}
+_PCT_ATTRS = {"unit_of_measurement": "%"}
 
 _SALON_ROOM: dict[str, Any] = {
     CONF_ROOM_NAME: "Salon",
@@ -215,15 +221,39 @@ async def test_cooling_room_without_humidity_errors(
     assert result["errors"] == {"base": "humidity_required"}
 
 
-async def test_options_flow_saves_live_control_and_kill_switch(
+async def test_options_menu_lists_all_leaves(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
-    """The options form renders per-room + kill + knobs and persists them."""
+    """The options entry point is a menu with the four room/settings leaves."""
     entry = setup_integration
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["type"] is FlowResultType.FORM
+
+    assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
+    assert set(result["menu_options"]) == {
+        "add_room",
+        "edit_room",
+        "remove_room",
+        "settings",
+    }
+
+
+async def test_options_flow_saves_live_control_and_kill_switch(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """The settings leaf renders per-room + kill + knobs and persists them."""
+    entry = setup_integration
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.MENU
+
+    # Pick the settings leaf from the menu.
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "settings"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "settings"
 
     schema_keys = {str(key) for key in result["data_schema"].schema}
     # One live-control toggle per room (index-keyed), the kill switch, and at
@@ -244,6 +274,245 @@ async def test_options_flow_saves_live_control_and_kill_switch(
     assert entry.options[CONF_LIVE_CONTROL] == {"Salon": True, "Lazienka": False}
     assert entry.options[CONF_KILL_SWITCH] is True
     assert CONF_CONTROLLER in entry.options
+
+
+async def _open_menu_leaf(
+    hass: HomeAssistant, entry: MockConfigEntry, leaf: str
+) -> Any:
+    """Open the options menu and select ``leaf``; return the resulting step."""
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.MENU
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": leaf}
+    )
+
+
+async def test_options_flow_add_room(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Adding a room appends it to CONF_ROOMS (with the global outdoor sensor)."""
+    entry = setup_integration
+    hass.states.async_set("sensor.kuchnia_temp", "21.0", _TEMP_ATTRS)
+    hass.states.async_set("number.kuchnia_valve", "0", _PCT_ATTRS)
+
+    result = await _open_menu_leaf(hass, entry, "add_room")
+    assert result["step_id"] == "add_room"
+
+    # Room attributes -> its entity-mapping step.
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ROOM_NAME: "Kuchnia",
+            CONF_ROOM_AREA: 15.0,
+            CONF_ROOM_OFFSET: 0.5,
+            CONF_PARTICIPATES: True,
+            CONF_HAS_FAST_SOURCE: False,
+            CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_NONE,
+            CONF_COOLING_ENABLED: False,
+        },
+    )
+    assert result["step_id"] == "room_entities"
+    assert result["description_placeholders"]["room_name"] == "Kuchnia"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ENTITY_TEMP_ROOM: "sensor.kuchnia_temp",
+            CONF_ENTITY_VALVES: ["number.kuchnia_valve"],
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    rooms = entry.data[CONF_ROOMS]
+    assert [r[CONF_ROOM_NAME] for r in rooms] == ["Salon", "Lazienka", "Kuchnia"]
+    kuchnia = rooms[-1]
+    assert kuchnia[CONF_ROOM_AREA] == 15.0
+    assert kuchnia[CONF_ROOM_OFFSET] == 0.5
+    assert kuchnia[CONF_PARTICIPATES] is True
+    assert kuchnia[CONF_ENTITY_VALVES] == ["number.kuchnia_valve"]
+    # The global outdoor sensor is fanned out into the new room too.
+    assert kuchnia[CONF_ENTITY_TEMP_OUTDOOR] == "sensor.outdoor_temp"
+    # A floor-only room carries no fast-source entity.
+    assert CONF_ENTITY_FAST_SOURCE not in kuchnia
+
+
+async def test_options_flow_add_room_rejects_duplicate_name(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Adding a room whose name already exists is rejected."""
+    entry = setup_integration
+
+    result = await _open_menu_leaf(hass, entry, "add_room")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ROOM_NAME: "Salon",
+            CONF_ROOM_AREA: 15.0,
+            CONF_ROOM_OFFSET: 0.0,
+            CONF_PARTICIPATES: True,
+            CONF_HAS_FAST_SOURCE: False,
+            CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_NONE,
+            CONF_COOLING_ENABLED: False,
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "add_room"
+    assert result["errors"] == {"base": "duplicate_room_name"}
+
+
+async def test_options_flow_edit_room(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Editing a room updates its attributes / entities in place (name fixed)."""
+    entry = setup_integration
+    # Offset is add-only: the edit form omits it (runtime offset lives in the
+    # coordinator's Store), so an edit must preserve the configured value.
+    original_offset = entry.data[CONF_ROOMS][1][CONF_ROOM_OFFSET]
+
+    result = await _open_menu_leaf(hass, entry, "edit_room")
+    assert result["step_id"] == "edit_room"
+
+    # Pick Lazienka -> its attribute form (name immutable, so not shown).
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SELECTED_ROOM: "Lazienka"}
+    )
+    assert result["step_id"] == "edit_room_attrs"
+    assert result["description_placeholders"]["room_name"] == "Lazienka"
+    attr_keys = {str(key) for key in result["data_schema"].schema}
+    assert CONF_ROOM_NAME not in attr_keys
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ROOM_AREA: 6.0,
+            CONF_PARTICIPATES: True,
+            CONF_HAS_FAST_SOURCE: False,
+            CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_NONE,
+            CONF_COOLING_ENABLED: False,
+        },
+    )
+    assert result["step_id"] == "room_entities"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ENTITY_TEMP_ROOM: "sensor.lazienka_temp",
+            CONF_ENTITY_VALVES: ["number.lazienka_valve"],
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    rooms = entry.data[CONF_ROOMS]
+    # Same rooms, same order, same names — only the edited attributes changed.
+    assert [r[CONF_ROOM_NAME] for r in rooms] == ["Salon", "Lazienka"]
+    lazienka = rooms[1]
+    # Offset is immutable in edit — preserved from the original config.
+    assert lazienka[CONF_ROOM_OFFSET] == original_offset
+    assert lazienka[CONF_ENTITY_TEMP_ROOM] == "sensor.lazienka_temp"
+    assert lazienka[CONF_ENTITY_VALVES] == ["number.lazienka_valve"]
+
+
+async def test_options_flow_remove_room_cleans_registry(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Removing a room drops it from CONF_ROOMS and deletes its entities."""
+    from homeassistant.helpers import entity_registry as er
+
+    entry = setup_integration
+
+    # Seed a live-control map so the prune of the removed room is observable.
+    # Kill switch engaged so the reloaded coordinator emits no valve writes.
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            CONF_LIVE_CONTROL: {"Salon": True, "Lazienka": True},
+            CONF_KILL_SWITCH: True,
+        },
+    )
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    lazienka_prefix = f"{entry.entry_id}_lazienka_"
+    before = [
+        e
+        for e in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if e.unique_id.startswith(lazienka_prefix)
+    ]
+    assert before, "expected Lazienka entities in the registry before removal"
+
+    result = await _open_menu_leaf(hass, entry, "remove_room")
+    assert result["step_id"] == "remove_room"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SELECTED_ROOM: "Lazienka"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+    # Gone from the config entry.
+    rooms = entry.data[CONF_ROOMS]
+    assert [r[CONF_ROOM_NAME] for r in rooms] == ["Salon"]
+
+    # Gone from the entity registry (and not recreated on reload).
+    after = [
+        e
+        for e in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if e.unique_id.startswith(lazienka_prefix)
+    ]
+    assert after == []
+
+    # The surviving room keeps its entities.
+    salon_prefix = f"{entry.entry_id}_salon_"
+    salon_after = [
+        e
+        for e in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if e.unique_id.startswith(salon_prefix)
+    ]
+    assert salon_after
+
+    # The live-control map no longer mentions the removed room; Salon survives.
+    live = entry.options.get(CONF_LIVE_CONTROL, {})
+    assert "Lazienka" not in live
+    assert live.get("Salon") is True
+
+
+async def test_options_flow_remove_last_room_blocked(
+    hass: HomeAssistant, register_sources: None
+) -> None:
+    """Removing the only remaining room aborts (at least one is required)."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LATITUDE: _LAT,
+            CONF_LONGITUDE: _LON,
+            CONF_ENTITY_MODE: "input_select.home_mode",
+            CONF_ROOMS: [
+                {
+                    CONF_ROOM_NAME: "Salon",
+                    CONF_ROOM_AREA: 30.0,
+                    CONF_ENTITY_TEMP_ROOM: "sensor.salon_temp",
+                    CONF_ENTITY_VALVES: ["number.salon_valve"],
+                    CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_NONE,
+                    CONF_COOLING_ENABLED: False,
+                }
+            ],
+        },
+        options={},
+        title="Tortoise-UFH",
+        unique_id=f"{_LAT}_{_LON}",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    result = await _open_menu_leaf(hass, entry, "remove_room")
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "cannot_remove_last_room"
 
 
 async def test_entity_validator_rejects_wrong_unit(hass: HomeAssistant) -> None:

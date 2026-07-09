@@ -79,7 +79,17 @@
   "options": {
     "step": {
       "init": {
-        "title": "Tortoise-UFH Control",
+        "title": "Tortoise-UFH",
+        "description": "Manage rooms or adjust control and tuning settings.",
+        "menu_options": {
+          "add_room": "Add a room",
+          "edit_room": "Edit a room",
+          "remove_room": "Remove a room",
+          "settings": "Control & tuning settings"
+        }
+      },
+      "settings": {
+        "title": "Control & Tuning",
         "description": "Enable live control per room. When enabled, Tortoise-UFH actively drives valves and the fast source for that room; disabled rooms stay in shadow (read-only) mode. Engaging the kill switch stops all command output while the controller keeps computing and reporting.",
         "data": {
           "kill_switch": "Kill switch (emit no commands)",
@@ -95,7 +105,75 @@
           "dew_ramp_k": "Dew-point ramp band (K)",
           "outdoor_ff_enabled": "Outdoor feedforward enabled"
         }
+      },
+      "add_room": {
+        "title": "Add a Room",
+        "description": "Define a new room. After its attributes you will map its Home Assistant source entities. Each room runs its own independent closed-loop controller.",
+        "data": {
+          "room_name": "Room name",
+          "room_area": "Floor area (m²)",
+          "room_offset": "Room offset from home setpoint (K)",
+          "participates": "Participates in control",
+          "has_fast_source": "This room has a fast auxiliary source",
+          "fast_source_kind": "Fast source (split / heater)",
+          "cooling_enabled": "Participates in floor cooling"
+        }
+      },
+      "edit_room": {
+        "title": "Edit a Room",
+        "description": "Pick the room to edit. Its name cannot be changed (rename = remove + add).",
+        "data": {
+          "selected_room": "Room"
+        }
+      },
+      "edit_room_attrs": {
+        "title": "Edit Room: {room_name}",
+        "description": "Update the attributes for {room_name}, then its entity mapping. The room name is immutable.",
+        "data": {
+          "room_area": "Floor area (m²)",
+          "room_offset": "Room offset from home setpoint (K)",
+          "participates": "Participates in control",
+          "has_fast_source": "This room has a fast auxiliary source",
+          "fast_source_kind": "Fast source (split / heater)",
+          "cooling_enabled": "Participates in floor cooling"
+        }
+      },
+      "remove_room": {
+        "title": "Remove a Room",
+        "description": "Pick the room to remove. Its diagnostic entities are deleted and its per-room settings are pruned. This cannot be undone.",
+        "data": {
+          "selected_room": "Room"
+        }
+      },
+      "room_entities": {
+        "title": "Entity Mapping: {room_name}",
+        "description": "Select the Home Assistant entities for {room_name}. Tortoise-UFH validates units only (°C, %, W) and stays hardware-agnostic. A room may have several UFH loops, so valve, supply, and return accept multiple entities.",
+        "data": {
+          "entity_temp_room": "Room temperature sensor",
+          "entity_humidity": "Humidity sensor (required for cooled rooms)",
+          "entity_valves": "UFH valve actuators — number or valve entities (one per loop)",
+          "entity_supply": "Supply water temperature sensors (one per loop)",
+          "entity_return": "Return water temperature sensors (one per loop)",
+          "entity_fast_source": "Fast-source climate entity (split / heater)"
+        }
       }
+    },
+    "error": {
+      "empty_room_name": "Room name cannot be empty",
+      "duplicate_room_name": "A room with this name already exists",
+      "invalid_room": "Invalid room definition",
+      "valve_required": "At least one valve actuator must be selected",
+      "humidity_required": "A humidity sensor is required for rooms participating in floor cooling",
+      "invalid_controller": "Invalid controller tuning",
+      "entity_not_found": "Entity not found in Home Assistant",
+      "invalid_unit": "Entity has an incorrect unit of measurement",
+      "invalid_device_class": "Entity has an incorrect device class",
+      "entity_unavailable": "Entity is currently unavailable — it may come online later",
+      "valve_no_set_position": "This valve entity does not support setting a position (SET_POSITION). Pick a position-capable valve or a number entity."
+    },
+    "abort": {
+      "no_rooms": "There are no rooms to manage",
+      "cannot_remove_last_room": "Cannot remove the last room — at least one room is required"
     }
   },
   "entity": {
