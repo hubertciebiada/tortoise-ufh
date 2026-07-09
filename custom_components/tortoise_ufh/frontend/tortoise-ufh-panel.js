@@ -3,8 +3,8 @@
  *
  * A dependency-free custom element (no CDN / external imports / build step,
  * CSP-safe) that renders the per-room underfloor-heating control state as a
- * health hero + a tabbed workspace (a room table plus placeholder Tuning /
- * Valves / Assist tabs) + a master/detail room inspector, and lets an admin
+ * health hero + a four-tab workspace (Rooms table, Tuning, Valves and
+ * Assist) + a master/detail room inspector, and lets an admin
  * edit the global home temperature, mode, per-room offset and each room's
  * three-state control (off / shadow / live). It talks to the integration
  * exclusively through the `tortoise_ufh/*` websocket commands (get_config /
@@ -151,8 +151,6 @@ const STR = {
     tab_tuning: "Strojenie",
     tab_valves: "Zawory",
     tab_assist: "Wspomaganie",
-    soon_title: "Wkrótce",
-    soon_body: "Ta zakładka pojawi się w kolejnej wersji.",
     manage_rooms: "Zarządzaj pokojami",
     loading: "Ładowanie…",
     no_rooms: "Brak skonfigurowanych pokoi.",
@@ -313,8 +311,6 @@ const STR = {
     tab_tuning: "Tuning",
     tab_valves: "Valves",
     tab_assist: "Assist",
-    soon_title: "Coming soon",
-    soon_body: "This tab will arrive in a later release.",
     manage_rooms: "Manage rooms",
     loading: "Loading…",
     no_rooms: "No rooms configured.",
@@ -1014,6 +1010,12 @@ class TortoiseUfhPanel extends HTMLElement {
     if (cfg) {
       this._config = cfg;
       this._render();
+      // If the Tuning tab was opened before config arrived its per-room scope
+      // chips were empty (only Global). Now that the rooms are known, refresh
+      // just the chip row — leaving the knob steppers (and any edit draft) be.
+      if (this._tuning) {
+        this._renderTuningScopes();
+      }
     }
   }
 
@@ -1589,21 +1591,6 @@ class TortoiseUfhPanel extends HTMLElement {
     el.appendChild(empty);
     el.appendChild(wrapEl);
     return { el, tbody, empty, wrapEl };
-  }
-
-  /** Build a "coming soon" placeholder section for a not-yet-built tab. */
-  _buildPlaceholder(labelKey) {
-    return h(
-      "section",
-      { class: "tab-section", role: "tabpanel", style: "display:none" },
-      [
-        h("div", { class: "placeholder" }, [
-          h("h2", { text: this._t(labelKey) }),
-          h("div", { class: "muted", text: this._t("soon_title") }),
-          h("div", { class: "muted", text: this._t("soon_body") }),
-        ]),
-      ],
-    );
   }
 
   // -- Valves tab ----------------------------------------------------------
@@ -2334,13 +2321,18 @@ class TortoiseUfhPanel extends HTMLElement {
     this._renderTuning();
   }
 
-  /** (Re)build the scope chips + knob cards from the current payload + scope. */
-  _renderTuning() {
+  /**
+   * (Re)build just the scope chip row (Global + one per configured room).
+   *
+   * Split out from `_renderTuning` so it can run on its own when `get_config`
+   * lands after the Tuning tab was already opened — refreshing the room chips
+   * without rebuilding the knob steppers (which would disturb an edit draft).
+   */
+  _renderTuningScopes() {
     const E = this._tuningEls;
     if (!E) {
       return;
     }
-    // Scope chips: Global + one per configured room.
     E.scopeBar.textContent = "";
     const scopes = ["global", ...this._configRoomNames()];
     for (const scope of scopes) {
@@ -2354,6 +2346,16 @@ class TortoiseUfhPanel extends HTMLElement {
       });
       E.scopeBar.appendChild(chip);
     }
+  }
+
+  /** (Re)build the scope chips + knob cards from the current payload + scope. */
+  _renderTuning() {
+    const E = this._tuningEls;
+    if (!E) {
+      return;
+    }
+    // Scope chips: Global + one per configured room.
+    this._renderTuningScopes();
 
     // Knob cards.
     E.body.textContent = "";
@@ -4313,8 +4315,6 @@ button { font-family: inherit; cursor: pointer; }
 .tab.active { color: var(--t-primary); border-bottom-color: var(--t-primary); }
 .tab:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; border-radius: 6px; }
 .tab-section { min-width: 0; }
-.placeholder { padding: 56px 16px; text-align: center; display: flex; flex-direction: column; gap: 6px; }
-.placeholder h2 { font-size: 16px; margin: 0 0 4px; color: var(--t-fg); }
 
 /* Tuning tab */
 .tune { display: flex; flex-direction: column; gap: 14px; }

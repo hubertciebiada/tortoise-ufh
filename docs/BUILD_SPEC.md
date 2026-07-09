@@ -35,11 +35,20 @@ short human+AI-readable text explanation.
 
 ## 1. The one rule that shapes everything
 
-**`tortoise_ufh/` (the core library) MUST NEVER import `homeassistant`.** It is pure Python
-(numpy/scipy + stdlib), ships `py.typed`, and is fully unit- and simulation-testable offline.
-`custom_components/tortoise_ufh/` (the HA adapter) imports FROM the core and never the reverse.
-Core talks to the outside only through plain dataclasses and structural `Protocol`s
+**`custom_components/tortoise_ufh/core/` (the pure core) MUST NEVER import `homeassistant`.**
+It is pure Python (numpy/scipy + stdlib), ships `py.typed`, and is fully unit- and
+simulation-testable offline. *(Amendment: the core was originally specified as a top-level
+`tortoise_ufh/` package; it is now **vendored inside the integration** so a HACS install — which
+ships only `custom_components/tortoise_ufh/` — is self-contained.)* It stays *logically*
+separate: the HA adapter `custom_components/tortoise_ufh/` imports FROM the core via `.core` and
+never the reverse; the core imports its own siblings **relatively** (`from .models import ...`).
+Because importing any core submodule first runs the adapter `__init__.py`, that `__init__` must
+ALSO stay importable WITHOUT homeassistant — every HA import there is lazy (deferred into
+function bodies or `TYPE_CHECKING`), and it does not import the HA-dependent `.const` at module
+top level. Core talks to the outside only through plain dataclasses and structural `Protocol`s
 (`WeatherSource`). Any core file that does `import homeassistant` is a bug and will be rejected.
+Throughout this spec the shorthand `tortoise_ufh.X` refers to the core module
+`custom_components/tortoise_ufh/core/X`.
 
 ---
 
@@ -54,46 +63,28 @@ tortoise-ufh/
   CLAUDE.md                          # project axioms + architecture + conventions
   .gitignore
   .pre-commit-config.yaml
-  .github/workflows/ci.yml           # ruff, mypy(core), unit, simulation
+  .github/workflows/ci.yml           # ruff, mypy(core), unit, simulation, ha (optional layer)
   .github/workflows/validate.yml     # hassfest + HACS validation
   docs/BUILD_SPEC.md                 # this file
   docs/DECISIONS.md                  # the 10 Q&A decisions + floor-cooling addendum
   docs/ALGORITHM_SPEC.md             # math + control spec (analogous to PumpAhead_Algorithm_Spec.md)
 
-  tortoise_ufh/                      # PURE CORE (no HA import)
-    __init__.py                      # flat re-export hub + __version__
-    py.typed
-    const.py                         # physical constants + core defaults
-    models.py                        # enums + I/O dataclasses (black-box contract) + RoomReport
-    config.py                        # RoomConfig, BuildingConfig, ControllerConfig, SimScenario
-    rc_model.py                      # RCParams, ModelOrder, RCModel (3R3C ZOH via expm)
-    pid.py                           # PIDController (PI + anti-windup)
-    controller.py                    # RoomController (black box) + BuildingController (orchestrator)
-    dew_point.py                     # Magnus dew point + cooling throttle
-    weather_comp.py                  # WeatherCompCurve / CoolingCompCurve (feedforward)
-    ufh_loop.py                      # LoopGeometry + loop_power (EN 1264) — used by simulator
-    weather.py                       # WeatherPoint, WeatherSource protocol, SyntheticWeather
-    sensor_noise.py                  # SensorNoise (seeded Gaussian)
-    safety.py                        # safety rules S1..S5 (data) + SafetyEvaluator
-    simulator.py                     # BuildingSimulator + SimulatedRoom bridge + HeatPumpMode
-    simulation_log.py                # SimRecord + SimulationLog
-    metrics.py                       # SimMetrics + assert_* helpers
-    scenarios.py                     # scenario factories + SCENARIO_LIBRARY registry
-    building_profiles.py             # building factories + BUILDING_PROFILES registry
-
-  custom_components/tortoise_ufh/    # HA ADAPTER (imports core)
-    __init__.py                      # setup_entry/unload_entry, runtime_data, panel+static reg
+  custom_components/tortoise_ufh/    # HA ADAPTER (imports the core via .core)
+    __init__.py                      # setup/unload/migrate entry, runtime_data, panel+ws+services reg
+                                     #   (module top level imports stdlib ONLY — see §1)
     manifest.json
-    const.py                         # CONF_* vocabulary + defaults + PLATFORMS
+    const.py                         # CONF_* vocabulary + defaults + PLATFORMS + knob specs
     coordinator.py                   # DataUpdateCoordinator: read states, run core, write commands
-    config_flow.py                   # multi-step wizard + options flow (selectors)
+    config_flow.py                   # multi-step wizard + options-flow menu (selectors)
     entity_validator.py              # hardware-agnostic unit validation
     number.py                        # global home-temp + per-room offset (writable)
     sensor.py                        # per-room report/diagnostics + GLOBAL safe dew-point sensor
     binary_sensor.py                 # per-room flags (sensor_lost, saturated, live/shadow, safety)
     select.py                        # per-room control-state select (off / shadow / live)
-    websocket.py                     # panel API commands (get/set config, live data)
+    websocket.py                     # panel API commands (config/live/setters + room state + tuning)
     panel.py                         # register sidebar panel + static path for the JS module
+    services.py                      # register/unregister the services declared in services.yaml
+    diagnostics.py                   # HA config-entry diagnostics download
     services.yaml                    # set_home_temperature, set_room_offset, set_mode
     strings.json
     translations/en.json
@@ -102,6 +93,28 @@ tortoise-ufh/
     dashboard_tortoise_ufh.yaml      # fallback Lovelace template
     brand/icon.svg
 
+    core/                            # PURE CORE, vendored (no HA import — see §1)
+      __init__.py                    # flat re-export hub + __version__
+      py.typed
+      const.py                       # physical constants + core defaults
+      models.py                      # enums + I/O dataclasses (black-box contract) + RoomReport
+      config.py                      # RoomConfig, BuildingConfig, ControllerConfig, SimScenario
+      rc_model.py                    # RCParams, ModelOrder, RCModel (3R3C ZOH via expm)
+      pid.py                         # PIDController (PI + anti-windup)
+      controller.py                  # RoomController (black box) + BuildingController (orchestrator)
+      dew_point.py                   # Magnus dew point + cooling throttle
+      weather_comp.py                # WeatherCompCurve / CoolingCompCurve (feedforward)
+      ufh_loop.py                    # LoopGeometry + loop_power (EN 1264) — used by simulator
+      weather.py                     # WeatherPoint, WeatherSource protocol, SyntheticWeather
+      sensor_noise.py                # SensorNoise (seeded Gaussian)
+      safety.py                      # safety rules S1..S5 (data) + SafetyEvaluator
+      simulator.py                   # BuildingSimulator + HeatPumpMode
+      simulated_room.py              # SimulatedRoom (RCModel <-> actuator bridge)
+      simulation_log.py              # SimRecord + SimulationLog
+      metrics.py                     # SimMetrics + assert_* helpers
+      scenarios.py                   # scenario factories + SCENARIO_LIBRARY registry
+      building_profiles.py           # building factories + BUILDING_PROFILES registry
+
   tests/
     conftest.py                      # shared fixtures (RC params/models, seeded rng)
     unit/conftest.py                 # unit-only fixtures (seed 42)
@@ -109,6 +122,11 @@ tortoise-ufh/
     simulation/conftest.py           # run_scenario harness (seed 12345)
     simulation/test_scenarios.py     # parametrized scenario tests calling assert_* helpers
     simulation/test_sim_smoke.py     # trivial simulation test so suite collects >=1
+    ha/test_*.py                     # optional HA-layer tests (skipped without
+                                     #   pytest_homeassistant_custom_component)
+
+  dev/panel-preview.html             # offline panel preview harness (no HA needed)
+  docker/                            # dockerised HA dev/test harness (compose + Dockerfile.test)
 ```
 
 ---
@@ -117,7 +135,8 @@ tortoise-ufh/
 
 - Temperatures **°C**; power **W**; valve **0..100 % (float)**; R in **K/W**; C in **J/K**; GHI **W/m²**;
   humidity **0..100 %**; time in **minutes** (simulation) / **seconds** (`RCModel.dt`, real-time cycle).
-- `from __future__ import annotations` at the top of every module. `mypy --strict` clean on `tortoise_ufh/`.
+- `from __future__ import annotations` at the top of every module. `mypy --strict` clean on the
+  core (`mypy custom_components/tortoise_ufh/core`).
 - Modern generics (`list[str]`, `dict[str, float]`, `X | None`), `Literal[...]` for closed string sets,
   `Protocol` + `@runtime_checkable` for structural interfaces, `type Alias = ...` (PEP 695) where useful.
   numpy typed `NDArray[np.float64]` (`from numpy.typing import NDArray`).
@@ -250,7 +269,8 @@ source; the panel renders it as "unlocks in ~N min".
 class PIDController:
     def __init__(self, kp: float, ki: float, kd: float = 0.0, *, dt: float = 300.0,
                  output_min: float = 0.0, output_max: float = 100.0) -> None: ...
-    def compute(self, error: float, *, freeze_integrator: bool = False) -> float: ...
+    def compute(self, error: float, *, dt_seconds: float | None = None,
+                freeze_integrator: bool = False) -> float: ...
     def reset(self) -> None: ...
     @property
     def integral(self) -> float: ...
@@ -260,8 +280,10 @@ class PIDController:
 Discrete PI(+optional D) with **back-calculation anti-windup**: `P=kp*e`; if not frozen `I += ki*e*dt`;
 `D=kd*(e-e_prev)/dt` (0 on first call); `u_raw=P+I+D`; `u=clip(u_raw,min,max)`; then if `ki>0`,
 `I += (u - u_raw)` (back-calc). `freeze_integrator=True` skips the `I += ki*e*dt` accumulation (used
-when `hp_active_for_ufh is False`). `dt` in seconds (default 300 = 5 min cycle). Validate kp,ki,kd>=0,
-dt>0, output_min<output_max.
+when `hp_active_for_ufh is False`). `dt` is per-call: `compute(..., dt_seconds=...)` uses the REAL
+elapsed interval for the integral and derivative (raises on `dt_seconds <= 0`); when `None` it falls
+back to the configured `dt` (default 300 = 5 min cycle). Validate kp,ki,kd>=0, dt>0,
+output_min<output_max.
 
 ### 5.2 `controller.py` — `RoomController` (the black box, one per room)
 ```python
@@ -273,8 +295,9 @@ class RoomController:
 Algorithm (all knobs from `ControllerConfig`, §6.3):
 
 1. **Missing room temp** (`room_temperature_c is None`): SAFE DEGRADE — hold last valve position
-   (freeze; `RoomController` remembers `_last_valve_pct`, init to `config.valve_floor_pct` for heating,
-   0 for cooling), fast source **OFF**, flag `"sensor_lost"`, explanation says so. Do not run PID.
+   (freeze; `RoomController` remembers `_last_valve_pct`; the cold-start hold — before any live
+   step — is mode-aware: `config.valve_floor_pct` for heating, 0 for cooling/transitional/off),
+   fast source **OFF**, flag `"sensor_lost"`, explanation says so. Do not run PID.
 2. **Mode == OFF**: valve 0, fast source OFF, report explains "off".
 3. **Mode == TRANSITIONAL**: valve parked (0), only fast source, bidirectional on sign of error
    (heating if room below setpoint-deadband beyond boost offset, cooling if above). No PID on valve.
@@ -285,7 +308,8 @@ Algorithm (all knobs from `ControllerConfig`, §6.3):
    valve trends toward floor (heating) or 0 (cooling). Keep it simple: pass `error` reduced by deadband
    (`error_db = sign(error)*max(0, |err|-deadband)`).
 7. **Integrator freeze**: `freeze = (inputs.hp_active_for_ufh is False)`. Pass to `pid.compute`.
-8. **PID**: `pid_out = pid.compute(error_db, freeze_integrator=freeze)` -> 0..100.
+8. **PID**: `pid_out = pid.compute(error_db, dt_seconds=dt_seconds, freeze_integrator=freeze)`
+   -> 0..100 (the integral accumulates the step's REAL `dt_seconds`).
 9. **Trend damping** (anti-overshoot, the "człon trendu"): subtract `kt * trend_toward_setpoint`.
    In heating, if room is rising toward setpoint (`trend>0`) reduce valve by `config.kt * trend_c_per_h`
    (clamped >=0 contribution). In cooling mirror. This is the key inertia/overshoot tamer.
@@ -300,6 +324,9 @@ Algorithm (all knobs from `ControllerConfig`, §6.3):
     `inputs.loops`). `factor = cooling_throttle_factor(t_supply_min, T_dew, margin=config.dew_margin_k,
     ramp=config.dew_ramp_k)` in [0,1]; `valve *= factor`; if `factor==0` flag `"s2_condensation"`.
     (When humidity or supply missing -> be conservative: factor toward 0, flag.)
+    A COOLING room with `cooling_enabled=False` never reaches this step: it short-circuits
+    (before step 5) to valve 0, fast source OFF, flag `"cooling_disabled"` — an opted-out room
+    must never receive chilled water, which would bypass both condensation defences.
 13. **Clamp** valve to [0,100]; set `saturated` if hit a bound; `raw_valve_pct` = pre-clamp/floor value.
 14. **Fast source (split) coordination** (only if `fast_source_kind != NONE`):
     - Engage when `|setpoint - T_room| > config.boost_offset_c` in the mode's needed direction.
@@ -312,8 +339,23 @@ Algorithm (all knobs from `ControllerConfig`, §6.3):
 15. Build `RoomReport` with every term filled and a concise Polish/English-neutral `explanation`
     (e.g. `"Grzanie, błąd -0.4 K, trend +0.3 K/h. Zawór 34%. Split ON (boost)."`).
 
-`RoomController` holds internal state: `_pid`, `_prev_T_room`, `_last_valve_pct`, split timers. `reset()`
-clears them.
+After step 15 two post-processing passes run on EVERY path (including safe degrade):
+- **Hard-safety override (S1..S5):** a stateful `SafetyEvaluator` (`safety.py`, hysteresis kept
+  across cycles) is fed the governing loop supply (hottest in heating / coldest in cooling), the
+  room temperature and humidity; if any rule triggers, the highest-priority action overrides the
+  computed valve / fast-source command and the rule names are merged into the report flags.
+- **Additive report stamping:** `dew_excluded_reason` (via `classify_dew_eligibility`, §4) and
+  `fast_dwell_remaining_s` are stamped onto the final report (post-safety, so the dwell value
+  reflects the final fast-source state; a safety force-off clears it).
+
+`dt_seconds` semantics: ONE time base — the trend (step 4), the fast-source dwell timers
+(step 14) AND the PI integral (step 8) all advance by the *actual* `dt_seconds` passed to `step`
+(the HA coordinator feeds the measured elapsed time, clamped to [1, 900] s — see §9). This keeps
+the integral honest on irregular steps: a debounced recompute ~2 s after a setpoint change
+accumulates ~2 s of integral, not a full nominal 300 s cycle.
+
+`RoomController` holds internal state: `_pid`, `_prev_T_room`, `_last_valve_pct`, split timers,
+and the `SafetyEvaluator`. `reset()` clears them.
 
 ### 5.3 `controller.py` — `BuildingController` (orchestrator)
 ```python
@@ -323,7 +365,9 @@ class BuildingController:
     def reset(self) -> None: ...
 ```
 - One `RoomController` per room. Runs each `step`.
-- **Global safe dew point:** over rooms where `mode==COOLING and cooling_enabled and humidity present`,
+- **Global safe dew point:** over rooms where `mode==COOLING and cooling_enabled` with a usable
+  room temperature and humidity (eligibility decided by the shared `classify_dew_eligibility`
+  helper, §4 — one classifier, two consumers),
   compute `T_dew_i = dew_point(T_room_i, rh_i)`, take `max_i`, add `config dew margin (2K)` ->
   `global_safe_dew_point_c`. `None` if no eligible room.
 - Never raises on a single room's failure; a room that errors becomes a safe-degraded `RoomOutputs`
@@ -450,20 +494,36 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
 
 - **`manifest.json`**: `domain:"tortoise_ufh"`, `name:"Tortoise-UFH"`, `config_flow:true`,
   `integration_type:"hub"`, `iot_class:"local_polling"`, `loggers:["tortoise_ufh"]`,
-  `requirements:["numpy>=1.26","scipy>=1.12"]`, `version:"0.1.0"`, `codeowners:["@hubertciebiada"]`,
+  `requirements:["numpy>=1.26","scipy>=1.12"]`, `dependencies:["http"]`,
+  `after_dependencies:["frontend"]`, `version` tracking the current release,
+  `codeowners:["@hubertciebiada"]`,
   `documentation`/`issue_tracker` -> github `hubertciebiada/tortoise-ufh`.
 - **`const.py`**: `DOMAIN`, `PLATFORMS=[NUMBER, SENSOR, BINARY_SENSOR, SELECT]`, `UPDATE_INTERVAL_MINUTES=5`,
   full `CONF_*` vocabulary (home_setpoint, mode entity, per-room: temp/humidity/outdoor/valves(list)/
-  supply(list)/return(list)/fast_source entity+kind/offset/enabled/cooling_enabled),
-  `WATCHDOG_TIMEOUT_MINUTES=15`, unit sets (°C/%/W), `ENTITY_STALE_MAX_SECONDS=300`. **Canonical
+  supply(list)/return(list)/fast_source entity+kind/offset/cooling_enabled),
+  `WATCHDOG_TIMEOUT_MINUTES=15`, `WATCHDOG_RECOVERY_MINUTES=5`, unit sets (°C/%/W),
+  `ENTITY_STALE_MAX_SECONDS=300`. **Canonical
   per-room control state:** `CONF_ROOM_STATE` (options map `{room: state}`), `ROOM_STATE_OFF/SHADOW/LIVE`,
   `ROOM_STATES`, `DEFAULT_ROOM_STATE = "shadow"`. `CONF_LIVE_CONTROL` / `CONF_PARTICIPATES` remain only so
   `async_migrate_entry` can read a legacy v1 entry; the kill-switch key is retired (no constant).
+  **Tuning:** `CONF_ROOM_TUNING` (options map `{room: {field: value}}` of *sparse* per-room
+  `ControllerConfig` overrides; an emptied room override is pruned = "back to global") plus the
+  single source of truth for the exposed knobs: `CONTROLLER_NUMBER_KNOBS` (`(field, min, max,
+  step)` tuples), `CONTROLLER_BOOL_KNOB = "outdoor_ff_enabled"`, `CONTROLLER_KNOB_UNITS` —
+  consumed by the config flow, the `get_tuning`/`set_tuning` range validation, and (via the
+  `get_tuning` payload) the panel, so ranges are never duplicated in JS. `kd` is deliberately not
+  exposed (Aneks §8.3); `cycle_seconds`/`valve_write_threshold_pct` are not user-facing.
 - **`coordinator.py`** (`TortoiseUfhCoordinator(DataUpdateCoordinator)`, 5-min): builds one
-  `BuildingController`; each cycle READS source entity states (`_read_float_state` with stale cache like
+  `BuildingController` from the **merged tuning** — global `ControllerConfig`
+  (`entry.data[CONF_CONTROLLER]` overlaid by `entry.options[CONF_CONTROLLER]`) plus, per room, the
+  sparse `entry.options[CONF_ROOM_TUNING]` override layered on top (`{**global, **override}`; an
+  invalid override degrades that room to the global config with a warning). Each cycle READS
+  source entity states (`_read_float_state` with stale cache like
   blueprint), assembles `dict[str, RoomInputs]`, calls `BuildingController.step`, stores typed payload
   (per-room outputs+report, global dew point, watchdog/status), and — for rooms whose control state is
-  **`live`** — WRITES: valve via `number.set_value` (all the room's valve
+  **`live`** — WRITES: valve dispatched by the entity's domain (`number.set_value` for `number`
+  valves, `valve.set_valve_position` with an integer `position` for `valve`-domain actuators; all
+  the room's valve
   entities, but only when the new value differs from last by >= `valve_write_threshold_pct`), split via
   `climate.set_hvac_mode` + `climate.set_temperature`. All writes `blocking=False`, try/except +
   `_LOGGER.exception` (`# noqa: BLE001`). Watchdog + shadow-mode identical pattern to blueprint.
@@ -472,11 +532,23 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   no-reload so the PID integrator survives). Derived: `participates := state != off` (→ `Mode.OFF` when
   off), `write := state == live`.
   **Any room in `off` or `shadow` => compute + report but emit NO commands; only `live` writes.**
+  **Measured dt:** the core `step` is fed the REAL elapsed time since the previous step
+  (monotonic clock, clamped to `[1, 900]` s; nominal 300 s on the very first step) instead of a
+  hard-coded 300 s, so an off-cycle recompute does not advance trend/dwell by a full cycle.
+  **Debounced recompute:** a home-temperature / offset change immediately rebroadcasts the cached
+  payload with fresh setpoints AND schedules a trailing full refresh through a ~2 s `Debouncer`
+  (a burst of stepper clicks collapses to one recompute + re-write, notably of the split target).
+  **Setpoint persistence:** the home temperature + per-room offsets are runtime state persisted
+  to a private `Store` (`tortoise_ufh.setpoints.<entry_id>`, debounced save, restored on first
+  refresh) — NOT to `entry.data`, which would reload the whole entry on every nudge. Per-room an
+  optional `entity_hp_active` source entity may be configured; its on/off state feeds
+  `hp_active_for_ufh` (integrator freeze during DHW/defrost), absent → `None`.
 - **`number.py`**: `NumberEntity` for global **home temperature** (writable; range 5..30, step 0.5) and
   one per-room **offset** (writable; range -5..+5, step 0.5). `async_set_native_value` -> coordinator
   setter -> `async_set_updated_data`. These are the setpoint source of truth (config exposure decision).
-- **`sensor.py`**: description-driven (`value_fn`) per-room diagnostics (recommended_valve, error, trend,
-  dew_point, explanation as a text sensor, fast_source_mode) all `EntityCategory.DIAGNOSTIC`; **one GLOBAL
+- **`sensor.py`**: description-driven (`value_fn`) per-room diagnostics (keys: `recommended_valve`,
+  `error_c`, `trend_c_per_h`, `i_term`, `trend_term`, `room_dew_point`, plus the text sensors
+  `fast_source_mode` and `explanation`) all `EntityCategory.DIAGNOSTIC`; **one GLOBAL
   sensor `global_safe_dew_point`** (°C) = coordinator's `global_safe_dew_point_c` — the value the owner
   pipes to the HP; plus global `algorithm_status`, `last_update` (TIMESTAMP), `watchdog_status`.
 - **`binary_sensor.py`**: per-room `sensor_lost`, `output_saturated`, `s2_condensation_active`,
@@ -485,18 +557,34 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   `EntityCategory.CONFIG`); `async_select_option` → `coordinator.set_room_state`. This native select
   replaced the retired global kill-switch and per-room `live_control` switch (both purged by migration).
 - **`config_flow.py`**: multi-step wizard with selectors (blueprint §2 pattern). Valve selector uses
-  `EntitySelectorConfig(domain=["number"])` **multiple=True** (a room has 1..n valves); supply/return
+  `EntitySelectorConfig(domain=["number", "valve"])` **multiple=True** (a room has 1..n valves;
+  both `number`- and `valve`-domain actuators are accepted — see the coordinator's per-domain
+  write dispatch); supply/return
   `domain=["sensor"], device_class=["temperature"]` (per loop, multiple); room temp sensor+temperature;
   humidity `device_class=["humidity"]`; fast source `domain=["climate"]`; global mode entity
   `domain=["select","input_select"]`. Rooms can be seeded from HA areas but manual add is fine. Config
   flow `VERSION = 2`; `async_migrate_entry` folds legacy v1 (`participates` + `live_control` +
-  `kill_switch`) into `CONF_ROOM_STATE` (safety precedence: `participates == false` ⇒ `off`). Options
-  flow settings step: per-room control-state select (off/shadow/live) + advanced controller knobs (hidden
-  by default). Use `entity_validator.py` (unit-only, hardware-agnostic).
-- **`websocket.py`**: register WS commands `tortoise_ufh/get_config`, `tortoise_ufh/get_live`
+  `kill_switch`) into `CONF_ROOM_STATE` (safety precedence: `participates == false` ⇒ `off`) and
+  purges the retired switch entities from the registry. The **options flow is a menu** with four
+  leaves: `add_room` / `edit_room` (name immutable) / `remove_room` (with entity-registry and
+  setpoint-Store cleanup) / `settings` — the settings form carries the per-room control-state
+  selects (off/shadow/live) + the advanced global controller knobs, merged over existing options
+  so the panel-managed `CONF_ROOM_TUNING` map is preserved. Use `entity_validator.py` (unit-only,
+  hardware-agnostic).
+- **`websocket.py`**: register WS commands `tortoise_ufh/get_config` (global settings + per-room
+  config views: offset, `control_state`, assigned entities, resolved diagnostic-sensor entity ids
+  for the panel's history charts, and the global dew-point sensor's entity id),
+  `tortoise_ufh/get_live`
   (returns `BuildingOutputs.to_dict()` + setpoints + per-room `control_state` + statuses),
   `tortoise_ufh/set_home_temperature`, `tortoise_ufh/set_room_offset`,
-  `tortoise_ufh/set_room_state` (`{room, state ∈ ROOM_STATES}`), `tortoise_ufh/set_mode`.
+  `tortoise_ufh/set_room_state` (`{room, state ∈ ROOM_STATES}`), `tortoise_ufh/set_mode`,
+  `tortoise_ufh/get_tuning` (knob descriptors with ranges/units from
+  `CONTROLLER_NUMBER_KNOBS`, effective global values, sparse per-room overrides, library
+  defaults) and `tortoise_ufh/set_tuning` (`{scope: "global"|room, values: {field: value}}`;
+  range-checked, cross-validated by constructing a `ControllerConfig`, persisted to
+  `entry.options[CONF_CONTROLLER]` / `[CONF_ROOM_TUNING]`; a `None` value clears a room's field
+  override and an emptied room map is pruned; the write reloads the entry). The retired
+  `set_room_enabled` / `set_kill_switch` commands do not exist.
   Each `@websocket_api.websocket_command` + `@callback`, admin-guarded.
 - **`panel.py`** + `__init__.py`: serve `frontend/tortoise-ufh-panel.js` via
   `hass.http.async_register_static_paths([StaticPathConfig("/tortoise_ufh_panel/panel.js", <path>,
@@ -514,13 +602,26 @@ A single ES module defining `class TortoiseUfhPanel extends HTMLElement` and
 `customElements.define("tortoise-ufh-panel", TortoiseUfhPanel)`. HA sets `.hass` and `.narrow`/`.route`
 properties on the element. **No imports from CDNs** (CSP) — plain DOM + inline `<style>` in a shadow root.
 Must render:
-- Header with global **home temperature** (editable -> `set_home_temperature` WS) and **mode** selector
-  (`set_mode`). A whole-home stop is expressed as putting rooms in `off`/`shadow` (no separate kill toggle).
-- A **table, one row per room** (from `get_config`): name, current temp, setpoint (=global+offset),
-  error, valve %, fast-source state, status; editable **offset** and a **control-state** control
-  (off / shadow / live -> `set_room_state` WS).
-- A **live preview** panel per selected room showing the full **report** JSON (the "okno do black-boxa",
-  readable for human + AI). Poll `get_live` every ~5 s (or subscribe if you add an event).
+- Header with global **home temperature** (editable -> `set_home_temperature` WS), **mode** selector
+  (`set_mode`), the global safe dew point and algorithm/watchdog status. A whole-home stop is
+  expressed as putting rooms in `off`/`shadow` (no separate kill toggle).
+- Four **tabs** (order authoritative for keyboard navigation): **Pokoje** (rooms table),
+  **Strojenie** (tuning), **Zawory** (valves), **Wspomaganie** (fast-source assist).
+- **Pokoje**: a table, one row per room, columns
+  `[control-state] | Pokój | Pomiar | Zadana | Uchył | Zawór % | Zasilanie | Powrót | Tryb | Temp.`
+  — the leading control is a three-button per-room **control-state** toggle (off / shadow / live
+  -> `set_room_state` WS); `Pomiar` reads `report.room_temperature_c` (never reconstructed from
+  `setpoint - error_c`); `Tryb`/`Temp.` show the fast-source command. Editable **offset** (->
+  `set_room_offset`). Narrow layouts drop the least-critical columns.
+- A per-room **detail drawer** showing the full decision **report** (the "okno do black-boxa",
+  readable for human + AI), wiring, diagnostic entities and **history charts** fed by the HA
+  recorder (`history/history_during_period` for short windows,
+  `recorder/statistics_during_period` for 7 d) through the diagnostic-sensor entity ids resolved
+  by `get_config`.
+- **Strojenie**: rendered entirely from the `get_tuning` payload (knob descriptors + units +
+  ranges, global values, sparse per-room overrides, defaults); edits go through `set_tuning`
+  (global scope or per-room override; clearing a field reverts to global).
+- Poll `get_live` every ~5 s (or subscribe if you add an event).
 - Light/dark aware via `hass.themes`; degrade gracefully if a WS command errors (show message, never
   throw). Keep it dependency-free and defensive.
 
@@ -532,12 +633,15 @@ Also ship `dashboard_tortoise_ufh.yaml` as a Lovelace fallback (glance + history
 
 - `pyproject.toml`: like pump-ahead but `name="tortoise-ufh"`, deps `["numpy>=1.26","scipy>=1.12"]`
   (NO cvxpy/osqp — PID only), extras `viz=[matplotlib,pandas]`, `dev=[pytest,pytest-cov,ruff,mypy,
-  pre-commit]`. pytest markers `unit|simulation|slow`, `filterwarnings=["error"]`, `--strict-markers`.
+  pre-commit]`, `ha-test=[pytest-homeassistant-custom-component]` (HA-layer tests only).
+  pytest markers `unit|simulation|slow`, `filterwarnings=["error"]`, `--strict-markers`.
   ruff select `["E","F","I","UP","B","SIM"]`, line 88. mypy strict, ignore `homeassistant.*`,
   `custom_components.*`, `scipy.*`, `pandas.*`, `matplotlib.*`.
 - `hacs.json = {"name":"Tortoise-UFH","homeassistant":"2024.1.0","render_readme":true}`.
-- CI: 4 jobs (ruff check+format, `mypy tortoise_ufh/`, `pytest tests/unit -m unit`,
-  `pytest tests/simulation -m simulation`) + `validate.yml` (hassfest + hacs/action).
+- CI: 5 jobs (ruff check+format, `mypy custom_components/tortoise_ufh/core`,
+  `pytest tests/unit -m unit`, `pytest tests/simulation -m simulation`, and the optional HA layer
+  `pytest tests/ha -m ha` installed via the `ha-test` extra) + `validate.yml`
+  (hassfest + hacs/action).
 - Tests mirror blueprint §5: 3-tier conftest, seeded rng (unit 42 / sim 12345), a session-scoped
   `run_scenario` harness returning `(SimulationLog, SimMetrics)`, parametrized scenario tests calling
   `assert_*` per room, `pytest.raises` for a known-fail control case. **Core tests must run with only
@@ -551,7 +655,7 @@ Also ship `dashboard_tortoise_ufh.yaml` as a Lovelace fallback (glance + history
 Every implementation agent: (1) read this BUILD_SPEC + the blueprint + PRD §8; (2) read any core files
 your module imports (they exist on disk by your phase); (3) write EXACTLY your file(s); (4) keep the
 public signatures above verbatim; (5) full type hints + frozen dataclasses + `__post_init__` validation
-+ Google docstrings; (6) no `homeassistant` import in `tortoise_ufh/`.
++ Google docstrings; (6) no `homeassistant` import in `custom_components/tortoise_ufh/core/`.
 
 Do not edit files you do not own. Do not add new runtime dependencies beyond numpy/scipy (core) and
 Home Assistant (adapter). When in doubt, simpler + matches pump-ahead.

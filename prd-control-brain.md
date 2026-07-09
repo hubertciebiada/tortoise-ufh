@@ -22,7 +22,7 @@ Całość ma być **maksymalnie prosta w konfiguracji**: własna zakładka w men
 - **Dwa wyjścia sterujące na pomieszczenie**: pozycja zaworów podłogówki (pomieszczenie może mieć **kilka pętli** — wszystkie dostają wspólną pozycję) oraz decyzja on/off (z kierunkiem) dla szybkiego źródła.
 - **Globalna nastawa + offsety**: jeden cel „temperatura domu" dla całości, per pomieszczenie tylko **offset** od niego (cel pokoju = global + offset).
 - **Black box z raportem** — czyste wejścia/wyjścia na zewnątrz, algorytm ukryty w środku, bogaty raport „pod maskę" do debugu i strojenia.
-- **Prosty panel konfiguracyjny** we własnej zakładce menu bocznego HA: tabela pomieszczeń, wskazanie encji, włączanie/wyłączanie udziału pokoju, podgląd live.
+- **Prosty panel konfiguracyjny** we własnej zakładce menu bocznego HA: tabela pomieszczeń, wskazanie encji, ~~włączanie/wyłączanie udziału pokoju~~ **[ZAKTUALIZOWANO — patrz Aneks §8.11: udział pokoju to kanoniczny 3-stan `off`/`shadow`/`live`, nie bool]**, podgląd live.
 
 ---
 
@@ -125,7 +125,7 @@ Cel: **maksymalna prostota**. Użytkownik wchodzi, przechodzi po wierszach, wska
 | **Zawory** | wskazanie **jednego lub wielu** aktuatorów (multi-select) — otwarta strefa może mieć kilka pętli |
 | **Typ szybkiego źródła** | wybór: **brak / split / grzejnik**; gdy split lub grzejnik → wskazanie encji tego źródła |
 | **Offset temp** | offset pomieszczenia względem globalnej „temperatury domu" (np. −1,0 K); cel pokoju = global + offset |
-| **Udział** | czy pomieszczenie bierze udział w regulacji (włącz/wyłącz) |
+| **Udział** | czy pomieszczenie bierze udział w regulacji — ~~włącz/wyłącz~~ **[ZAKTUALIZOWANO — §8.11: 3-stan `off` / `shadow` / `live`]** |
 
 ### 4.3 Zasady wskazywania encji
 
@@ -143,6 +143,11 @@ Cel: **maksymalna prostota**. Użytkownik wchodzi, przechodzi po wierszach, wska
 
 Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownymi wartościami per pomieszczenie. Ręczna korekta jest możliwa w sekcji „Zaawansowane" (plant jest wolny i różny w każdym pokoju), ale **nigdy nie jest wymagana** do uruchomienia.
 
+> **[v0.3.0]** Zrealizowane jako zakładka **„Strojenie"** panelu: wartości **globalne** + rzadkie
+> **nadpisania per pokój** (`entry.options[CONF_ROOM_TUNING]`; wyczyszczone nadpisanie = powrót do
+> globalnych), przez komendy WS `tortoise_ufh/get_tuning` / `set_tuning`. Zmiana strojenia
+> przeładowuje wpis (czysta przebudowa regulatora); zmiana samego 3-stanu pokoju — nie (§8.11).
+
 ---
 
 ## 5. Wymagania niefunkcjonalne
@@ -151,7 +156,7 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 - **Obserwowalność.** Każda decyzja regulatora musi być **wytłumaczalna przez raport** (§3.2), bez czytania logów. Raport ma być jednocześnie czytelny dla człowieka i parsowalny maszynowo (dla agenta AI).
 - **Bezpieczna degradacja.** Pomieszczenie nieskonfigurowane lub bez wskazanego czujnika temperatury **nie robi zamkniętej pętli** i nie steruje „w ciemno" — jest bezpiecznie pomijane, dopóki użytkownik nie uzupełni konfiguracji. Utrata czujnika w trakcie pracy przełącza pomieszczenie w **stan bezpieczny** (zawór w pozycji bezpiecznej, szybkie źródło off) i zgłasza to w raporcie.
 - **Ochrona posadzki bez czujnika podłogi.** Zabezpieczenie przed przegrzaniem opiera się na temperaturze wody zasilającej (sondy per pętla — założenie infrastrukturalne, §3.1) i ostrożnych zakresach pozycji — nie na czujniku podłogi (poza zakresem).
-- **Zastąpienie dotychczasowych automatyzacji, nie koegzystencja z nimi.** Moduł przejmuje regulację per pomieszczenie w całości: dotychczasowe automatyzacje piszące po zaworach i szybkich źródłach (koordynator pozycji bazowych, bramka splitów, strażnicy zaworów) zostają przy wdrożeniu **wyłączone/usunięte** — ich funkcje ochronne przejmują zabezpieczenia modułu. Na zewnątrz zostają tylko: **globalny tryb domu** (wejście modułu), **nadrzędny wyłącznik awaryjny** (kill-switch: off = moduł nie wydaje żadnych komend) oraz **właściciel strony wodnej** (pompa ciepła / CWU — poza zakresem, §6). Dla zaworów i szybkich źródeł pomieszczeń z udziałem moduł jest **jedynym właścicielem**.
+- **Zastąpienie dotychczasowych automatyzacji, nie koegzystencja z nimi.** Moduł przejmuje regulację per pomieszczenie w całości: dotychczasowe automatyzacje piszące po zaworach i szybkich źródłach (koordynator pozycji bazowych, bramka splitów, strażnicy zaworów) zostają przy wdrożeniu **wyłączone/usunięte** — ich funkcje ochronne przejmują zabezpieczenia modułu. Na zewnątrz zostają tylko: **globalny tryb domu** (wejście modułu), ~~**nadrzędny wyłącznik awaryjny** (kill-switch: off = moduł nie wydaje żadnych komend)~~ **[USUNIĘTE w v0.3.0 (2026-07-09) — patrz §8.11: „wszystko stop" = wszystkie pokoje w `off`/`shadow`]** oraz **właściciel strony wodnej** (pompa ciepła / CWU — poza zakresem, §6). Dla zaworów i szybkich źródeł pomieszczeń z udziałem moduł jest **jedynym właścicielem**.
 - **Trwałość konfiguracji.** Ustawienia pomieszczeń przeżywają restart HA.
 
 ---
@@ -199,6 +204,8 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 - **Globalna „temperatura domu"** i **per-pokój offset** jako **zapisywalne encje `number`** (sterowalne
   z dashboardów/skryptów). Cel pokoju = global + offset.
 - Per-pokój flagi: **udział** oraz **udział w chłodzeniu** (np. łazienka wykluczona z cool).
+  > **Zmienione w v2 (v0.3.0, 2026-07-09) — patrz §8.11.** Flaga udziału scalona w 3-stan
+  > `RoomControlState`; osobną flagą per pokój pozostaje tylko udział-w-chłodzeniu.
 - Encje wskazywane w panelu dropdownami filtrowanymi po domenie/device_class; **bez wymogu unikalności**.
 
 ### 8.3 Algorytm rdzenia (black-box) — pętla podłogówki
@@ -241,8 +248,8 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 
 ### 8.6 Tryby
 - **Jeden globalny tryb domu**: `grzanie / przejściowy / chłodzenie / off` (encja wejściowa). Per-pokój
-  tylko udział + udział-w-chłodzeniu + offset. Przejściowy: zawory zaparkowane, reguluje wyłącznie split
-  dwukierunkowo. Off: pokój do spoczynku, brak komend.
+  tylko udział (od v0.3.0: 3-stan — §8.11) + udział-w-chłodzeniu + offset. Przejściowy: zawory
+  zaparkowane, reguluje wyłącznie split dwukierunkowo. Off: pokój do spoczynku, brak komend.
 
 ### 8.7 Bezpieczeństwo i degradacja
 - **Utrata czujnika pokoju:** **zawór zamraża ostatnią pozycję**, **split → OFF**, flaga w raporcie.
@@ -250,9 +257,9 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 - Ochrona posadzki bez sondy podłogi: temp. wody zasilającej + ostrożne zakresy pozycji.
 - Moduł jest **jedynym właścicielem** zaworów i splitów pokoi z udziałem. Na zewnątrz: globalny tryb,
   kill-switch (off = brak komend), właściciel strony wodnej (PC/CWU).
-  > **Zmienione w v2 — patrz §8.11.** Kill-switch oraz per-pokojowe boole udziału/live-control
-  > scalono w jeden kanoniczny 3-stan pokoju (`off` / `shadow` / `live`). „Wszystko stop" =
-  > wszystkie pokoje w `off`/`shadow`.
+  > **Zmienione w v2 (v0.3.0, 2026-07-09) — patrz §8.11.** Kill-switch oraz per-pokojowe boole
+  > udziału/live-control scalono w jeden kanoniczny 3-stan pokoju (`off` / `shadow` / `live`).
+  > „Wszystko stop" = wszystkie pokoje w `off`/`shadow`.
 
 ### 8.8 Trzy wyjścia + raport (kontrakt)
 1. **Per-pokój:** pozycja zaworów 0–100% (jedna na strefę).
@@ -264,8 +271,8 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 ### 8.9 Wdrożenie i jakość
 - **Shadow / dry-run** przełącznikiem: liczy i loguje pełny raport, **nie wysyła komend**; potem LIVE
   (per-pokój przejmowanie). Panel daje dobry podgląd (człowiek + agent AI).
-  > **v2:** „shadow/live" per pokój to teraz stany kanonicznego 3-stanu `RoomControlState` (§8.11),
-  > a nie osobny przełącznik obok flagi udziału.
+  > **v2 (v0.3.0):** „shadow/live" per pokój to teraz stany kanonicznego 3-stanu
+  > `RoomControlState` (§8.11), a nie osobny przełącznik obok flagi udziału.
 - **Symulator (cyfrowy bliźniak)** wzorowany na `pump-ahead` (RC 3R3C ZOH przez `expm`,
   `BuildingSimulator`/`SimulatedRoom`, `SyntheticWeather`, `SensorNoise`, `SimMetrics` + asercje) — do
   strojenia PID offline i testów scenariuszowych. `T_slab` istnieje jako ground-truth w symulatorze, ale
@@ -279,7 +286,8 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 
 ### 8.11 Rewizja (v2) — kanoniczny 3-stan pokoju zamiast kill-switcha
 > **To JAWNY rewers zamrożonej decyzji z §8.7/§8.9.** Odnotowane jako świadoma, datowana zmiana
-> kontraktu (nie dryf). Szczegóły i tabela stanów: `docs/DECISIONS.md` §4.
+> kontraktu (nie dryf): **2026-07-09, wydana w v0.3.0** (zmiana łamiąca; migracja config entry
+> v1→v2). Szczegóły i tabela stanów: `docs/DECISIONS.md` §4.
 
 Pierwotny wywiad zamroził **trzy** oddzielne sterowania udziałem: per-pokojową **flagę udziału**
 (§8.2), per-pokojowy **przełącznik shadow/live** (§8.9) oraz **globalny kill-switch** (§8.7). W praktyce
@@ -287,16 +295,17 @@ kodowały jedno pytanie na pokój — *ile autorytetu ma tu Tortoise-UFH?* — z
 zachodzącymi na siebie, a kill-switch był słabszy niż „wszystkie pokoje w shadow".
 
 **Decyzja (v2):** scalić je w **jeden `RoomControlState` na pokój**:
-- `off` — pokój poza sterowaniem (rdzeń dostaje `Mode.OFF`: zawór zamrożony, szybkie źródło bezczynne);
-  liczy i raportuje, **nie pisze**.
+- `off` — pokój poza sterowaniem (rdzeń dostaje `Mode.OFF`: raportowany zawór 0 % — spoczynek,
+  szybkie źródło off); liczy i raportuje, **nie pisze** — fizyczny aktuator pozostaje nietknięty.
 - `shadow` — liczy i raportuje, **nie pisze** (dry-run). **Domyślny** dla nowego pokoju.
 - `live` — liczy, raportuje **i pisze** do sprzętu.
 
 Wyprowadzenia: `udział := stan != off`, `pisz := stan == live`. Źródło prawdy:
 `entry.options[CONF_ROOM_STATE] = {pokój: stan}`. „Wszystko stop" = wszystkie pokoje `off`/`shadow`.
 Powierzchnie: encja `select` (`control_state`), panel, komenda WS `tortoise_ufh/set_room_state`, krok
-`settings` w options-flow (awaryjne UI). Zmiana samego stanu **nie przeładowuje** wpisu (integrator PID
-zachowany). **Migracja v1→v2** (jednorazowa): precedencja bezpieczeństwa — `udział == false` ⇒ `off`
+`settings` w options-flow (awaryjne UI). Zmiana samego stanu kanoniczną ścieżką (select/panel/WS)
+**nie przeładowuje** wpisu (integrator PID zachowany); zapis mapy stanów wprost z options-flow,
+niezgodny ze stanem w pamięci, nadal wymusza przeładowanie. **Migracja v1→v2** (jednorazowa): precedencja bezpieczeństwa — `udział == false` ⇒ `off`
 (wygrywa nad `live_control == true`); inaczej `live_control` decyduje `live`/`shadow`; klucze
 `participates`/`live_control`/`kill_switch` oraz encje `switch.*_kill_switch` / `switch.*_live_control`
 zostają usunięte (zastąpione przez `select.*_control_state`). Bez zmian: trzy wyjścia (§8.8), degradacja

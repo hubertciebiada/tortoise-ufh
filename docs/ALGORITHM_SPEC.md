@@ -2,7 +2,9 @@
 
 > **Project:** `tortoise_ufh` — per-room closed-loop controller for a high-thermal-mass
 > underfloor-heating (UFH) house, with fast-source (split) assist, heating **and** floor cooling.
-> **Status:** Implementation spec — mirrors the real code in `tortoise_ufh/` (frozen contract).
+> **Status:** Implementation spec — mirrors the real code of the pure core, vendored at
+> `custom_components/tortoise_ufh/core/` (frozen contract). Module references of the form
+> `tortoise_ufh.X` below are shorthand for `custom_components/tortoise_ufh/core/X`.
 > **Family:** PID-family (**PI + trend damping**), *not* MPC. No Kalman, no online RC
 > identification, no CWU control.
 > **Structural sibling of** `pump-ahead`; this document is the tortoise analogue of
@@ -13,9 +15,11 @@
 > power W; R in K/W; C in J/K; GHI W/m²; humidity `0..100 %`; time in **minutes** (simulation) /
 > **seconds** (`RCModel.dt`, `dt_seconds`, real-time cycle).
 >
-> **The one architectural rule:** `tortoise_ufh/` (the core) **NEVER imports `homeassistant`**. It
-> is pure numpy/scipy + stdlib, ships `py.typed`, and is fully offline-testable. The HA adapter
-> `custom_components/tortoise_ufh/` imports *from* core and never the reverse. Core talks to the
+> **The one architectural rule:** the core (`custom_components/tortoise_ufh/core/`, vendored
+> inside the integration so a HACS install is self-contained) **NEVER imports `homeassistant`**.
+> It is pure numpy/scipy + stdlib, ships `py.typed`, and is fully offline-testable. The HA adapter
+> `custom_components/tortoise_ufh/` imports *from* the core via `.core` and never the reverse;
+> the core imports its siblings relatively. Core talks to the
 > outside only through frozen dataclasses and structural `Protocol`s.
 
 ---
@@ -221,7 +225,11 @@ dt_hours = dt_seconds / 3600
 trend    = (T_room − T_room_prev) / dt_hours     # [K/h], 0 on the first call
 ```
 
-`RoomController` stores `T_room_prev` between calls.
+`RoomController` stores `T_room_prev` between calls. `dt_seconds` is the *actual* elapsed time
+passed to `step`: the HA coordinator feeds the measured interval since the previous control step
+(monotonic clock, clamped to `[1, 900]` s; the nominal 300 s only on the very first step), so a
+debounced off-cycle recompute — e.g. right after a setpoint change — does not distort the trend
+or advance the fast-source dwell timers by a full cycle.
 
 ### 5.3 Deadband (sign-preserving magnitude reduction)
 
@@ -234,7 +242,9 @@ floor (heating) or 0 (cooling).
 
 ### 5.4 Discrete PI with back-calculation anti-windup
 
-`PIDController.compute(error_db, freeze_integrator=freeze)` (backward Euler at `dt = cycle_seconds`):
+`PIDController.compute(error_db, dt_seconds=dt_seconds, freeze_integrator=freeze)` (backward
+Euler at the per-call `dt`; falls back to the configured `dt = cycle_seconds` when the caller
+does not pass one):
 
 ```
 P     = kp · e
@@ -245,7 +255,14 @@ u     = clip(u_raw, output_min, output_max)     # [0, 100]
 if ki > 0:  I += (u − u_raw)                     # back-calculation anti-windup
 ```
 
-Validation (`__init__`): `kp, ki, kd ≥ 0`, `dt > 0`, `output_min < output_max`.
+Validation (`__init__`): `kp, ki, kd ≥ 0`, `dt > 0`, `output_min < output_max`; `compute`
+raises on a non-positive `dt_seconds`.
+
+All time-dependent pieces share ONE time base: the PI integral, the trend (§5.2) and the
+fast-source dwell timers (§8.2) all use the measured `dt_seconds` passed to
+`RoomController.step` (the coordinator measures it monotonically and clamps to [1, 900] s).
+This keeps the integral honest when steps are irregular — an immediate debounced recompute
+~2 s after a setpoint change accumulates ~2 s of integral, not a full nominal 300 s cycle.
 
 ### 5.5 Integrator freeze (water-side awareness)
 
@@ -273,7 +290,8 @@ plant.
 
 If `outdoor_ff_enabled` and an outdoor temperature is present, a small bounded baseline is added
 (`RoomController._feedforward`): heating → colder outside raises the baseline; cooling → hotter
-outside raises it. `deviation = max(0, |T_out − 15 °C|)`, `ff = min(20 %, 1.0 %/K · deviation)`.
+outside raises it. Directional: `deviation = max(0, 15 °C − T_out)` in heating,
+`max(0, T_out − 15 °C)` in cooling; `ff = min(20 %, 1.0 %/K · deviation)`.
 The PI does the real work; this only shortens the transient. We never command supply temperature —
 that is the heat pump's job.
 
@@ -329,9 +347,27 @@ code exactly):
 14. **Fast-source coordination** (§8).
 15. **Build `RoomReport`** — every term filled + a concise human/AI explanation string.
 
+Three refinements around the numbered list:
+
+- **Cooling opt-out (between steps 4 and 5):** a `COOLING` room with `cooling_enabled=False`
+  never runs the cooling PI — it returns early with the valve parked at 0, the fast source OFF
+  and the flag `"cooling_disabled"` (an opted-out room must never receive chilled water, which
+  would bypass both condensation defences of §7).
+- **Hard-safety override (after step 15, every path incl. safe degrade):** the stateful
+  `tortoise_ufh.safety.SafetyEvaluator` (rules S1–S5, per-rule hysteresis carried across cycles)
+  is fed the governing loop supply (hottest loop in heating / coldest in cooling), room
+  temperature and humidity; if any rule triggers, the highest-priority action overrides the
+  computed valve / fast-source command and the rule names are merged into the report flags. The
+  S5 watchdog age is fed as 0 — update staleness is owned by the HA adapter's watchdog (§9).
+- **Additive report stamping (last):** `dew_excluded_reason` (from `classify_dew_eligibility`,
+  §7.1) and `fast_dwell_remaining_s` (§8.2) are stamped onto the final post-safety report, so the
+  dwell value reflects the final fast-source state (a safety force-off clears it).
+
 `RoomOutputs = {valve_position_pct, fast_source: FastSourceCommand, report: RoomReport}`. All I/O
 types are frozen dataclasses in `tortoise_ufh.models` with JSON `to_dict()` helpers (enums → their
-`.value`) consumed by the HA websocket and panel.
+`.value`) consumed by the HA websocket and panel. The report additionally echoes the measured
+`room_temperature_c` (`None` on sensor loss) so consumers never reconstruct the measurement from
+`setpoint − error_c`.
 
 ---
 
@@ -354,6 +390,13 @@ Exposed as a global sensor entity (`BuildingOutputs.global_safe_dew_point_c`). *
 control water** — the owner pipes this value to the heat pump as the cooling-supply lower limit.
 Because it is a *maximum over rooms + fixed margin*, it never lowers on any single room's behalf.
 Margin constant: `controller.GLOBAL_SAFE_DEW_MARGIN_K = 2.0`.
+
+Eligibility is decided by the pure helper `controller.classify_dew_eligibility(RoomInputs)` — the
+single source of truth with two consumers: `BuildingController._eligible_dew_point` (a `None`
+return means "eligible, feeds the maximum") and `RoomController.step`, which records the result in
+`RoomReport.dew_excluded_reason` (`None`, or one of `"not_cooling_mode"` / `"cooling_disabled"` /
+`"no_temperature"` / `"no_humidity"`) so the panel can explain *why* the global safe dew point is
+`None`.
 
 ### 7.2 Layer 2 — local S2 valve throttle (per room, secondary)
 
@@ -413,7 +456,10 @@ else:             turn ON  when  demand > boost_offset_c    (engage only past th
 `_decide_fast_source` advances an internal dwell timer by `dt_seconds` and permits a state change
 only when the relevant minimum dwell (`fast_min_on_minutes` / `fast_min_off_minutes`) has elapsed;
 otherwise the flag `"fast_source_min_runtime"` is raised and the previous state is held. Timers are
-seeded large (`_INITIAL_FAST_TIMER_S`) so the very first transition is never blocked.
+seeded large (`_INITIAL_FAST_TIMER_S`) so the very first transition is never blocked. The seconds
+left on the *current* state's lock (min ON while running, min OFF while idle) are surfaced as
+`RoomReport.fast_dwell_remaining_s` (`None` once elapsed, when there is no fast source, or after a
+safety force-off); the panel renders it as "unlocks in ~N min".
 
 ### 8.3 Anti priority-inversion (the core invariant)
 
@@ -430,10 +476,12 @@ timer for safety conditions (lost sensor, OFF mode).
 
 | Condition | Behaviour | Flag |
 |-----------|-----------|------|
-| Room temp lost (`None`) | **hold last valve position** (init = `valve_floor_pct`), split **OFF**, no PI | `sensor_lost` |
+| Room temp lost (`None`) | **hold last valve position** (cold-start init is mode-aware: `valve_floor_pct` in heating, 0 in cooling/transitional/off), split **OFF**, no PI | `sensor_lost` |
 | `Mode.OFF` | valve 0, split OFF | — |
+| `COOLING` with `cooling_enabled=False` | valve 0 (never floor-cool an opted-out room), split OFF, no PI | `cooling_disabled` |
 | Missing humidity / supply in cooling | S2 `factor → 0` (conservative close) | `s2_condensation` |
 | Split change blocked by dwell timer | hold previous split state | `fast_source_min_runtime` |
+| HEATER-kind fast source asked to cool | fast source forced OFF (a heater never cools) | `fast_source_cannot_cool` |
 | Room has no controller (orchestrator) | valve 0, split OFF | `unknown_room` |
 | Room controller raised | hold last valve, split OFF | `controller_error` |
 
@@ -510,3 +558,4 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 | Date | Change |
 |------|--------|
 | 2026-07-08 | Created from BUILD_SPEC + PRD Aneks §8 + `CONTROL_ALGORITHMS_REVIEW.md`; mirrors real `controller.py` / `pid.py` / `dew_point.py` signatures. |
+| 2026-07-09 | Aligned with v0.3.x code: vendored-core paths; measured `dt_seconds` (coordinator clamp [1, 900] s) now drives ALL time-dependent terms — the PI integral included (`compute(..., dt_seconds=...)`, fixing double integration on debounced recomputes) — alongside trend and dwell; cooling opt-out early return; safety override + additive report stamping (`dew_excluded_reason` via `classify_dew_eligibility`, `fast_dwell_remaining_s`, `room_temperature_c`); directional feedforward formula; degradation-table rows (mode-aware sensor-lost hold, `cooling_disabled`, `fast_source_cannot_cool`). |

@@ -560,8 +560,10 @@ class RoomController:
         # -- Step 7: integrator freeze during DHW / defrost -----------------
         freeze = inputs.hp_active_for_ufh is False
 
-        # -- Step 8: PI compute ---------------------------------------------
-        pid_out = self._pid.compute(error_db, freeze_integrator=freeze)
+        # -- Step 8: PI compute (integral on the REAL elapsed dt) ------------
+        pid_out = self._pid.compute(
+            error_db, dt_seconds=dt_seconds, freeze_integrator=freeze
+        )
         p_term = cfg.kp * error_db
         i_term = self._pid.integral
 

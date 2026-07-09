@@ -3,9 +3,9 @@
 This is the HA *adapter* constants module (the ``custom_components`` side). It is
 the single authoritative ``CONF_*`` key vocabulary shared by the config flow,
 coordinator, and entity platforms — mirror of the pump-ahead pattern. Unlike the
-pure core (``tortoise_ufh/const.py``, which never imports Home Assistant), this
-module may import ``homeassistant`` for the :class:`~homeassistant.const.Platform`
-enum only.
+pure core (``custom_components/tortoise_ufh/core/const.py``, which never imports
+Home Assistant), this module may import ``homeassistant`` for the
+:class:`~homeassistant.const.Platform` enum only.
 
 It holds only module-level scalars, string keys, option lists, and unit-hint
 sets — no control logic and no value/config/result dataclasses (those live in the
@@ -169,13 +169,9 @@ DEFAULT_FAST_SOURCE_KIND: str = FAST_SOURCE_KIND_NONE
 DEFAULT_MODE: str = MODE_HEATING
 DEFAULT_PARTICIPATES: bool = True
 DEFAULT_COOLING_ENABLED: bool = True
-DEFAULT_LIVE_CONTROL: bool = False
-"""New rooms start in shadow (dry-run) mode until explicitly promoted to live."""
 
 DEFAULT_ROOM_STATE: str = ROOM_STATE_SHADOW
-"""New / unknown rooms start safely in shadow (dry-run) mode.
-
-Preserves the historical ``DEFAULT_LIVE_CONTROL = False`` default: a room the
+"""New / unknown rooms start safely in shadow (dry-run) mode: a room the
 coordinator has never seen a persisted state for is observed, not driven.
 """
 

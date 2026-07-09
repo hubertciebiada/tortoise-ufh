@@ -36,12 +36,18 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   metrics. No HA import, ever. Vendored inside the integration for a self-contained HACS
   install; imports its siblings relatively (`from .X import ...`).
 - **Adapter** — `custom_components/tortoise_ufh/`. Thin HA shim: `TortoiseUfhCoordinator`
-  (`DataUpdateCoordinator`, 5-min) reads source entity states, builds `dict[str, RoomInputs]`,
-  calls `BuildingController.step`, and writes commands. Entities (number/sensor/binary_sensor/
-  switch), config_flow, websocket, panel registration. Imports the core via `.core`; is
+  (`DataUpdateCoordinator`, 5-min nominal; feeds the core the REAL measured dt, clamped, and
+  debounces a setpoint change into one off-cycle recompute) reads source entity states, builds
+  `dict[str, RoomInputs]`, calls `BuildingController.step`, and writes commands. Entities
+  (number/sensor/binary_sensor/select), config_flow + options flow (add/edit/remove room,
+  settings), websocket (incl. `get_tuning`/`set_tuning`), services, panel registration.
+  Tuning: global knobs + sparse per-room overrides (`options[CONF_ROOM_TUNING]`); the knob
+  specs (`CONTROLLER_NUMBER_KNOBS`) live in `const.py`. Imports the core via `.core`; is
   imported by nothing.
 - **Panel** — `custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js`. Self-contained
-  vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Renders the black-box report.
+  vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Four tabs — Rooms (table
+  with the per-room three-state control), Tuning, Valves, Assist — rendering the black-box
+  report.
 - **Simulator** — `custom_components/tortoise_ufh/core/simulator.py` (`BuildingSimulator` +
   `SimulatedRoom`). Digital twin for offline tests. Crucially, `get_all_measurements()`
   produces the SAME `RoomInputs` the
@@ -73,12 +79,17 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
   `boost_offset_c` and releases inside the comfort band. Respects min-ON / min-OFF timers.
 - **Per-room control state (`RoomControlState = off | shadow | live`).** One canonical
   three-state per room (adapter `select` entity + panel + `set_room_state` WS), stored in
-  `entry.options[CONF_ROOM_STATE]`. `off` ⇒ core sees `Mode.OFF` (valve held, fast source idle);
+  `entry.options[CONF_ROOM_STATE]`; new rooms default to `shadow`. `off` ⇒ core sees `Mode.OFF`
+  (reports valve 0 %, fast source off — nothing is written, so the actuator stays untouched);
   `shadow` ⇒ compute + report but emit NO commands; `live` ⇒ compute, report AND write. A
-  whole-home stop = every room `off`/`shadow`. This REVERSED the frozen global kill-switch +
-  per-room live-control-boolean decision (config-entry migration v1→v2; see docs/DECISIONS.md).
+  state-only change via the select/panel/WS path does NOT reload the entry (PID integrator
+  preserved). A whole-home stop =
+  every room `off`/`shadow`. This REVERSED the frozen global kill-switch + per-room
+  live-control-boolean decision (2026-07-09, v0.3.0 breaking, config-entry migration v1→v2;
+  see docs/DECISIONS.md §4).
 - **Sensor loss ⇒ freeze valve + split off** (see valve rule above). Integrator freezes when
-  `hp_active_for_ufh is False` (DHW/defrost).
+  `hp_active_for_ufh is False` (DHW/defrost) — since 2026-07-08 a DORMANT optional feature
+  (the owner has a buffer tank; `CONF_ENTITY_HP_ACTIVE` unset ⇒ `None` by default; PRD §8.3).
 
 ---
 
@@ -95,7 +106,8 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
 ## Coding conventions (non-negotiable)
 
 - `from __future__ import annotations` at the top of every module. Full type hints everywhere.
-  `mypy --strict` clean on `tortoise_ufh/`. Modern generics (`list[str]`, `X | None`),
+  `mypy --strict` clean on the core (`custom_components/tortoise_ufh/core`). Modern generics
+  (`list[str]`, `X | None`),
   `Literal[...]` for closed string sets, `Protocol`/`@runtime_checkable`, `NDArray[np.float64]`.
 - **Every value/config/result is a `@dataclass(frozen=True)`** with `__post_init__` validation
   raising `ValueError` (assign message to a local `msg` first: `msg = f"..."; raise ValueError(msg)`).
@@ -109,7 +121,7 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
 - Catch SPECIFIC exceptions in core; broad `except Exception:` only at HA/IO boundaries with
   `# noqa: BLE001` + `_LOGGER.exception(...)`. Fail-fast validation in constructors.
 - ruff `line-length=88`, select `["E","F","I","UP","B","SIM"]`. Tests treat warnings as errors
-  (`filterwarnings=["error"]`), markers `unit|simulation|slow`, `--strict-markers`.
+  (`filterwarnings=["error"]`), markers `unit|simulation|slow|ha`, `--strict-markers`.
 - `RoomReport`/`RoomOutputs`/`BuildingOutputs` must be JSON-serializable (`to_dict()`, enums →
   `.value`) — the websocket and panel consume the dicts.
 
@@ -124,8 +136,9 @@ python -m mypy custom_components/tortoise_ufh/core   # strict typecheck of the c
 ruff check                        # lint (E,F,I,UP,B,SIM); add `ruff format --check` for style
 ```
 
-Core tests must run with only numpy/scipy/pytest installed. HA-layer tests are optional and
-skipped when `pytest_homeassistant_custom_component` is unavailable.
+Core tests must run with only numpy/scipy/pytest installed. HA-layer tests (marker `ha`; run
+in Docker) are optional and skipped when `pytest_homeassistant_custom_component` is
+unavailable.
 
 ---
 

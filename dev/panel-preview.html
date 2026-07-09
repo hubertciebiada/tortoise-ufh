@@ -172,6 +172,8 @@
         "number.salon_valve_2": { state: "62", attributes: { unit_of_measurement: "%" } },
         "sensor.salon_supply_1": { state: "34.1", attributes: { unit_of_measurement: "°C" } },
         "sensor.salon_return_1": { state: "28.7", attributes: { unit_of_measurement: "°C" } },
+        "sensor.salon_supply_2": { state: "33.8", attributes: { unit_of_measurement: "°C" } },
+        "sensor.salon_return_2": { state: "28.4", attributes: { unit_of_measurement: "°C" } },
         "climate.salon_split": { state: "heat", attributes: {} },
         "sensor.kuchnia_temp": { state: "unavailable", attributes: {} },
         "sensor.kuchnia_rh": { state: "51", attributes: { unit_of_measurement: "%" } },
@@ -207,8 +209,8 @@
                 entity_humidity: "sensor.salon_rh",
                 entity_temp_outdoor: "sensor.outdoor_temp",
                 entity_valves: ["number.salon_valve_1", "number.salon_valve_2"],
-                entity_supply: ["sensor.salon_supply_1"],
-                entity_return: ["sensor.salon_return_1"],
+                entity_supply: ["sensor.salon_supply_1", "sensor.salon_supply_2"],
+                entity_return: ["sensor.salon_return_1", "sensor.salon_return_2"],
                 entity_fast_source: "climate.salon_split",
               },
               // Integration's own output sensors (get_config.diagnostic_entities);
@@ -280,6 +282,11 @@
             saturated: false,
             dew_throttle_factor: 1.0,
             integrator_frozen: false,
+            // Additive F5 report fields — always present in the real WS payload
+            // (RoomReport.to_dict): why the room is excluded from the global
+            // safe dew point, and the fast-source min ON/OFF dwell remaining.
+            dew_excluded_reason: null,
+            fast_dwell_remaining_s: null,
             flags: [],
             explanation: "",
           },
@@ -318,6 +325,11 @@
               feedforward_term: 15.7,
               raw_valve_pct: 62.0,
               saturated: false,
+              // Split is ON and still inside its min-ON dwell lock (4 min left).
+              fast_dwell_remaining_s: 240,
+              // Heating → every room is "not_cooling_mode" for the (cooling)
+              // safe dew point; eligible (null) once the mode is cooling.
+              dew_excluded_reason: cooling ? null : "not_cooling_mode",
               explanation:
                 "Poniżej zadanej o 0.6 K, trend rosnący — zawór 62%, split wspomaga do 23°C.",
             },
@@ -332,6 +344,9 @@
               room_dew_point_c: null,
               raw_valve_pct: 0.0,
               integrator_frozen: true,
+              // cooling_enabled=false → "cooling_disabled" outranks the lost
+              // temperature reading while cooling; "not_cooling_mode" otherwise.
+              dew_excluded_reason: cooling ? "cooling_disabled" : "not_cooling_mode",
               flags: ["sensor_lost"],
               explanation:
                 "Utrata czujnika temperatury — zawór zamrożony na 0%, źródło szybkie WYŁ.",
@@ -373,6 +388,8 @@
                     feedforward_term: 10.0,
                     raw_valve_pct: 120.0,
                     saturated: true,
+                    // Heating mode → excluded from the cooling safe dew point.
+                    dew_excluded_reason: "not_cooling_mode",
                     flags: ["saturated"],
                     explanation:
                       "Duży uchyb dodatni — zawór nasycony na 100% (żądanie surowe 120%).",

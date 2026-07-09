@@ -38,9 +38,9 @@ feedforward) — deliberately *not* MPC. There is no Kalman filter, no online mo
 identification, and no domestic-hot-water control. The core reacts robustly to what it can
 measure and degrades safely when a sensor drops out.
 
-The pure-Python control core (`tortoise_ufh/`) never imports Home Assistant, so the whole
-algorithm is unit- and simulation-testable offline. The Home Assistant adapter
-(`custom_components/tortoise_ufh/`) is a thin layer on top.
+The pure-Python control core (`custom_components/tortoise_ufh/core/`) never imports Home
+Assistant, so the whole algorithm is unit- and simulation-testable offline. The rest of
+`custom_components/tortoise_ufh/` is a thin Home Assistant adapter around it.
 
 ---
 
@@ -60,7 +60,8 @@ command:
    `max over cooled rooms( dew_point(T_room, humidity) ) + 2 K`. It is exposed as one sensor
    entity. **You feed this value to your heat pump as the cooling-supply lower limit**, so
    the pump never sends water colder than any room can tolerate without condensation. It
-   reports `unknown` when no room is cooling or no humidity is available.
+   reports `unknown` when no room is cooling or no humidity is available — the sidebar
+   panel additionally explains per room *why* no value is produced.
 
 Alongside the commands, each room emits a rich **report** ("a window into the black box"):
 error, measured trend (°C/h), the individual PID / trend / feedforward terms, the raw valve
@@ -84,13 +85,14 @@ explanation of what it did and why.
   integral term is frozen so it does not wind up against a dead actuator.
 - **Optional weather feedforward** — a modest baseline valve term from outdoor temperature;
   the PI loop does the rest.
-- **Per-room control state (off / shadow / live)** — one three-state switch per room:
+- **Per-room control state (off / shadow / live)** — one three-state select per room:
   *off* excludes it from control, *shadow* computes and reports without touching any
   actuator, *live* drives its hardware. A whole-house "hands off" is simply every room in
   off or shadow (see below).
-- **Sidebar panel** — a dependency-free Home Assistant panel to set the home temperature,
-  per-room offsets, mode, cooling participation and each room's control state, and to
-  inspect each room's live report.
+- **Sidebar panel** — a dependency-free Home Assistant panel with Rooms / Tuning /
+  Valves / Assist tabs: a live per-room table (control state, measured temperature,
+  setpoint, error, valve %, supply/return water, mode), controller tuning (global gains
+  plus sparse per-room overrides), and each room's full report.
 - **Hardware-agnostic** — you map Home Assistant entities to roles at setup; units are
   validated (°C, %, W), brands are not.
 - **Built-in building simulator** — a digital twin (3R3C RC model per room, ZOH via matrix
@@ -125,10 +127,12 @@ Requires Home Assistant 2024.1.0 or newer and Python 3.12+. The core runtime dep
 ## Configuration
 
 The setup wizard (Entity / Number / Select / Boolean selectors, hardware-agnostic unit
-validation) maps your entities to roles: per room a temperature sensor, one or more valve
-`number` entities, optional supply/return water sensors, optional humidity (required for
-cooled rooms), and an optional split `climate` entity; globally an outdoor-temperature
-sensor and a mode selector.
+validation) first asks for the building location (used for weather compensation and
+solar-gain feedforward), then maps your entities to roles: per room a temperature
+sensor, one or more valve actuators (`number` or `valve` entities), optional
+supply/return water sensors, optional humidity (required for cooled rooms), and an
+optional split `climate` entity; globally an outdoor-temperature sensor and a mode
+selector.
 
 Day-to-day control lives in the **Tortoise-UFH sidebar panel** (added automatically, admin
 only). From the panel you can:
@@ -136,9 +140,11 @@ only). From the panel you can:
 - Set the **global home temperature** and pick the **mode** (heating / transitional /
   cooling / off).
 - Adjust a **per-room offset** — each room's setpoint is `home temperature + room offset`.
-- Toggle a room's **participation** in cooling and set its **control state**
-  (off / shadow / live).
-- Open any room's **live report** to read the full decision breakdown as JSON.
+- Set each room's **control state** (off / shadow / live). A room's participation in
+  cooling is configured in the integration options, not the panel.
+- Tune the **PI + trend controller** from the Tuning tab — global gains with sparse
+  per-room overrides.
+- Open any room's **live report** to read the full decision breakdown.
 
 The global home temperature and per-room offsets are also exposed as writable `number`
 entities, and the same actions are available as the `set_home_temperature`,
@@ -151,7 +157,7 @@ is required. A `dashboard_tortoise_ufh.yaml` Lovelace template ships as a fallba
 
 Tortoise-UFH is built for cautious rollout. It **always** computes commands and publishes
 the full report — but whether those commands reach your actuators is gated by each room's
-**control state**, exposed as a per-room `select` entity (`select.tortoise_ufh_<room>_control_state`),
+**control state**, exposed as a per-room `select` entity (`select.<room>_control_state`),
 in the panel, and over the `tortoise_ufh/set_room_state` WebSocket command. A new room
 starts in the safe **shadow** default.
 
@@ -183,28 +189,29 @@ rooms drive hardware.**
 
 ## For developers
 
-The repository is split into a pure control core and a thin Home Assistant adapter:
+The integration is split into a pure control core — vendored inside the integration so a
+HACS install is self-contained — and a thin Home Assistant adapter around it:
 
 ```
 tortoise-ufh/
-├── tortoise_ufh/                    # pure core — never imports homeassistant
-│   ├── models.py                    # I/O dataclasses + RoomReport (the black-box contract)
-│   ├── config.py                    # RoomConfig / BuildingConfig / ControllerConfig
-│   ├── pid.py                       # PIDController (PI + anti-windup)
-│   ├── controller.py                # RoomController + BuildingController
-│   ├── dew_point.py                 # Magnus dew point + cooling throttle
-│   ├── rc_model.py                  # 3R3C RC model (ZOH via scipy.linalg.expm)
-│   ├── simulator.py                 # BuildingSimulator digital twin
-│   └── ...                          # weather, metrics, scenarios, profiles, safety
-└── custom_components/tortoise_ufh/  # HA adapter — imports FROM the core
+└── custom_components/tortoise_ufh/  # HA adapter — imports FROM the core via .core
     ├── coordinator.py               # 5-min DataUpdateCoordinator: read → run core → write
     ├── config_flow.py  panel.py  websocket.py  sensor.py  number.py  select.py ...
-    └── frontend/tortoise-ufh-panel.js
+    ├── frontend/tortoise-ufh-panel.js
+    └── core/                        # pure core — never imports homeassistant
+        ├── models.py                # I/O dataclasses + RoomReport (the black-box contract)
+        ├── config.py                # RoomConfig / BuildingConfig / ControllerConfig
+        ├── pid.py                   # PIDController (PI + anti-windup)
+        ├── controller.py            # RoomController + BuildingController
+        ├── dew_point.py             # Magnus dew point + cooling throttle
+        ├── rc_model.py              # 3R3C RC model (ZOH via scipy.linalg.expm)
+        ├── simulator.py             # BuildingSimulator digital twin
+        └── ...                      # weather, metrics, scenarios, profiles, safety
 ```
 
-The one hard rule: **`tortoise_ufh/` must never import `homeassistant`.** The core depends
-only on `numpy` and `scipy` (plus the stdlib), ships `py.typed`, and is fully testable
-without Home Assistant.
+The one hard rule: **`custom_components/tortoise_ufh/core/` must never import
+`homeassistant`.** The core depends only on `numpy` and `scipy` (plus the stdlib), ships
+`py.typed`, and is fully testable without Home Assistant.
 
 ### Setup
 
@@ -236,7 +243,7 @@ python -m pytest
 ```bash
 ruff check .
 ruff format --check .
-mypy tortoise_ufh/
+mypy custom_components/tortoise_ufh/core
 ```
 
 The core is kept `mypy --strict` clean; ruff runs with `line-length = 88` and the

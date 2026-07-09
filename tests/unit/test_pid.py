@@ -187,3 +187,40 @@ class TestConstructorValidation:
         )
         assert pid.integral == pytest.approx(0.0)
         assert pid.last_output == pytest.approx(0.0)
+
+
+@pytest.mark.unit
+class TestPerCallDt:
+    """Per-call ``dt_seconds`` drives the integral (irregular-step honesty)."""
+
+    def test_integral_scales_with_dt_seconds(self) -> None:
+        """A 2 s step accumulates ki*e*2, not a full nominal cycle."""
+        pid = PIDController(kp=0.0, ki=0.02, kd=0.0, dt=300.0)
+
+        pid.compute(1.0, dt_seconds=2.0)
+        assert pid.integral == pytest.approx(0.02 * 1.0 * 2.0)
+
+        pid.compute(1.0, dt_seconds=900.0)
+        assert pid.integral == pytest.approx(0.02 * 1.0 * (2.0 + 900.0))
+
+    def test_none_falls_back_to_configured_dt(self) -> None:
+        """Omitting ``dt_seconds`` keeps the legacy fixed-cycle behaviour."""
+        pid = PIDController(kp=0.0, ki=0.02, kd=0.0, dt=300.0)
+
+        pid.compute(1.0)
+        assert pid.integral == pytest.approx(0.02 * 1.0 * 300.0)
+
+    def test_derivative_uses_per_call_dt(self) -> None:
+        """The derivative divides by the per-call dt, not the configured one."""
+        pid = PIDController(kp=0.0, ki=0.0, kd=10.0, dt=300.0)
+
+        pid.compute(0.0, dt_seconds=2.0)  # first call: D == 0
+        out = pid.compute(1.0, dt_seconds=2.0)  # D = kd * (1 - 0) / 2
+        assert out == pytest.approx(10.0 * 1.0 / 2.0)
+
+    @pytest.mark.parametrize("bad_dt", [0.0, -5.0])
+    def test_non_positive_dt_seconds_raises(self, bad_dt: float) -> None:
+        """A non-positive per-call dt fails fast with ``ValueError``."""
+        pid = PIDController(kp=1.0, ki=0.02, kd=0.0, dt=300.0)
+        with pytest.raises(ValueError, match="dt_seconds must be > 0"):
+            pid.compute(1.0, dt_seconds=bad_dt)

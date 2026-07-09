@@ -5,7 +5,8 @@ controller used by the per-room UFH ``RoomController`` to map a temperature
 error onto a valve position.  It is pure Python (stdlib only) and never
 imports Home Assistant.
 
-Discretisation (backward Euler at the configured ``dt``)::
+Discretisation (backward Euler at the per-call ``dt``; defaults to the
+configured ``dt`` when :meth:`PIDController.compute` is not given one)::
 
     P = kp * e
     I += ki * e * dt          # skipped when freeze_integrator is True
@@ -13,6 +14,11 @@ Discretisation (backward Euler at the configured ``dt``)::
     u_raw = P + I + D
     u = clip(u_raw, output_min, output_max)
     I += (u - u_raw)          # back-calculation anti-windup, only when ki > 0
+
+The per-call ``dt_seconds`` keeps the integral honest when the caller steps
+at irregular intervals (e.g. an immediate recompute a few seconds after a
+setpoint change): the integral then accumulates the REAL elapsed time
+instead of a full nominal cycle per call.
 
 The controller is stateful: it maintains the integral accumulator and the
 previous error between calls.  Use :meth:`reset` to clear that state.
@@ -108,7 +114,13 @@ class PIDController:
         """Output [%] from the most recent :meth:`compute` call (read-only)."""
         return self._last_output
 
-    def compute(self, error: float, *, freeze_integrator: bool = False) -> float:
+    def compute(
+        self,
+        error: float,
+        *,
+        dt_seconds: float | None = None,
+        freeze_integrator: bool = False,
+    ) -> float:
         """Compute the clamped PID output for the given error.
 
         Applies proportional, integral and derivative terms, clamps the
@@ -118,6 +130,12 @@ class PIDController:
         Args:
             error: Control error (setpoint - measured) [degC]. A positive
                 error always means "more actuation needed".
+            dt_seconds: Actual elapsed time since the previous call [s].
+                Must be > 0 when given. When ``None`` (default) the configured
+                ``dt`` is used. Passing the measured interval keeps the
+                integral honest when steps are irregular (e.g. an immediate
+                recompute a few seconds after a setpoint change would
+                otherwise accumulate a full nominal cycle).
             freeze_integrator: When ``True``, the integral accumulation step
                 (``I += ki * error * dt``) is skipped. Used when the heat pump
                 is not available for UFH (e.g. DHW or defrost) so the integral
@@ -127,14 +145,25 @@ class PIDController:
 
         Returns:
             Clamped control output [%] in ``[output_min, output_max]``.
+
+        Raises:
+            ValueError: If ``dt_seconds`` is given and not positive.
         """
+        if dt_seconds is None:
+            dt = self._dt
+        elif dt_seconds > 0:
+            dt = dt_seconds
+        else:
+            msg = f"dt_seconds must be > 0, got {dt_seconds}"
+            raise ValueError(msg)
+
         p_term = self._kp * error
 
         if not freeze_integrator:
-            self._integral += self._ki * error * self._dt
+            self._integral += self._ki * error * dt
 
         if self._prev_error is not None:
-            d_term = self._kd * (error - self._prev_error) / self._dt
+            d_term = self._kd * (error - self._prev_error) / dt
         else:
             d_term = 0.0
 
