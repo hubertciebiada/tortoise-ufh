@@ -161,7 +161,10 @@ const STR = {
     th_setpoint: "Zadana",
     th_error: "Uchył",
     th_valve: "Zawór",
-    th_assist: "Wspomaganie",
+    th_supply: "Zasilanie",
+    th_return: "Powrót",
+    th_assist_mode: "Tryb",
+    th_assist_temp: "Temp.",
     th_state: "Sterowanie",
     card_setpoint: "Zadana",
     card_offset: "korekta {v}",
@@ -320,7 +323,10 @@ const STR = {
     th_setpoint: "Setpoint",
     th_error: "Error",
     th_valve: "Valve",
-    th_assist: "Assist",
+    th_supply: "Supply",
+    th_return: "Return",
+    th_assist_mode: "Mode",
+    th_assist_temp: "Temp.",
     th_state: "Control",
     card_setpoint: "Setpoint",
     card_offset: "offset {v}",
@@ -1303,6 +1309,27 @@ class TortoiseUfhPanel extends HTMLElement {
     return { text: short + ": " + verb + target, cls: "on" };
   }
 
+  /**
+   * Localised fast-source MODE only (Off / Cool / Heat), for the Rooms table's
+   * split-out "Tryb" column. Same on/off/mode reading as `_assistLabel`, minus
+   * the source-kind prefix and target temperature.
+   *
+   * Returns `{ text, cls }` where `cls` is `on` / `off` / `none`.
+   */
+  _assistModeLabel(r) {
+    if (r.fastKind === "none") {
+      return { text: this._t("assist_none"), cls: "none" };
+    }
+    if (!r.fastOn || r.fastMode === "off") {
+      return { text: this._t("assist_state_off"), cls: "off" };
+    }
+    const verb =
+      r.fastMode === "cooling"
+        ? this._t("assist_state_cooling")
+        : this._t("assist_state_heating");
+    return { text: verb, cls: "on" };
+  }
+
   /** Merge config + live into a sorted list of normalized room view-models. */
   _computeView() {
     const cfg = this._config || {};
@@ -1544,7 +1571,10 @@ class TortoiseUfhPanel extends HTMLElement {
       h("th", { class: "col-setpoint", scope: "col", text: this._t("th_setpoint") }),
       h("th", { class: "col-error", scope: "col", text: this._t("th_error") }),
       h("th", { class: "col-valve", scope: "col", text: this._t("th_valve") }),
-      h("th", { class: "col-assist", scope: "col", text: this._t("th_assist") }),
+      h("th", { class: "col-supply", scope: "col", text: this._t("th_supply") }),
+      h("th", { class: "col-return", scope: "col", text: this._t("th_return") }),
+      h("th", { class: "col-assist-mode", scope: "col", text: this._t("th_assist_mode") }),
+      h("th", { class: "col-assist-temp", scope: "col", text: this._t("th_assist_temp") }),
     ];
     const thead = h("thead", null, [h("tr", null, headCells)]);
     const tbody = h("tbody");
@@ -2945,19 +2975,23 @@ class TortoiseUfhPanel extends HTMLElement {
     p.err = h("span", { class: "err-val" });
     const errCell = h("td", { class: "col-error" }, [p.err]);
 
-    // Column 6: valve percent + mini-bar.
+    // Column 6: valve percent (no mini-bar here — that stays on the Valves tab).
     p.valveVal = h("span", { class: "valve-val" });
-    p.valveFill = h("span", { class: "valve-fill" });
-    const valveCell = h("td", { class: "col-valve" }, [
-      h("div", { class: "valve-mini" }, [
-        p.valveVal,
-        h("div", { class: "valve-track" }, [p.valveFill]),
-      ]),
-    ]);
+    const valveCell = h("td", { class: "col-valve" }, [p.valveVal]);
 
-    // Column 7: fast-source (assist) badge.
-    p.fast = h("span", { class: "fast-badge" });
-    const assistCell = h("td", { class: "col-assist" }, [p.fast]);
+    // Columns 7-8: loop supply / return temperature, read live from hass.states
+    // (same entities + helper the Valves tab uses; first loop when a room has
+    // several).
+    p.supplyVal = h("span", { class: "meas-val" });
+    const supplyCell = h("td", { class: "col-supply" }, [p.supplyVal]);
+    p.returnVal = h("span", { class: "meas-val" });
+    const returnCell = h("td", { class: "col-return" }, [p.returnVal]);
+
+    // Columns 9-10: fast-source (assist) mode + target temperature.
+    p.assistMode = h("span", { class: "fast-badge" });
+    const assistModeCell = h("td", { class: "col-assist-mode" }, [p.assistMode]);
+    p.assistTemp = h("span", { class: "meas-val" });
+    const assistTempCell = h("td", { class: "col-assist-temp" }, [p.assistTemp]);
 
     const tr = h(
       "tr",
@@ -2979,7 +3013,18 @@ class TortoiseUfhPanel extends HTMLElement {
           },
         },
       },
-      [stateCell, nameCell, measCell, spCell, errCell, valveCell, assistCell],
+      [
+        stateCell,
+        nameCell,
+        measCell,
+        spCell,
+        errCell,
+        valveCell,
+        supplyCell,
+        returnCell,
+        assistModeCell,
+        assistTempCell,
+      ],
     );
     tr._parts = p;
     return tr;
@@ -3019,15 +3064,29 @@ class TortoiseUfhPanel extends HTMLElement {
       r.setpoint !== null && r.current !== null ? r.setpoint - r.current : null;
     p.err.textContent = signed(err, 1, " K");
 
-    // Valve percent + bar.
-    const valve = r.valve === null ? 0 : clamp(r.valve, 0, 100);
-    p.valveFill.style.width = valve + "%";
+    // Valve percent (value only — the mini-bar stays on the Valves tab).
     p.valveVal.textContent = fmt(r.valve, 0, "%");
 
-    // Assist badge.
-    const assist = this._assistLabel(r);
-    p.fast.className = "fast-badge " + assist.cls;
-    p.fast.textContent = assist.text;
+    // Loop supply / return, read live from hass.states (first loop when a
+    // room has several — the full per-loop breakdown lives on the Valves tab).
+    const primaryLoop = this._roomLoops(r)[0] || null;
+    p.supplyVal.textContent = fmt(
+      primaryLoop ? this._stateNum(primaryLoop.supplyId) : null,
+      1,
+      "°",
+    );
+    p.returnVal.textContent = fmt(
+      primaryLoop ? this._stateNum(primaryLoop.returnId) : null,
+      1,
+      "°",
+    );
+
+    // Assist mode + target temperature (split from the old combined badge).
+    const assistMode = this._assistModeLabel(r);
+    p.assistMode.className = "fast-badge " + assistMode.cls;
+    p.assistMode.textContent = assistMode.text;
+    const assistActive = r.fastKind !== "none" && r.fastOn && r.fastMode !== "off";
+    p.assistTemp.textContent = assistActive ? fmt(r.fastTarget, 1, "°") : "—";
   }
 
   _chip(code) {
@@ -4421,9 +4480,13 @@ button { font-family: inherit; cursor: pointer; }
 .chip-dew .chip-main { display: inline-flex; align-items: baseline; gap: 6px; }
 .chip-dew .chip-sub { font-size: 11px; color: var(--t-muted); line-height: 1.3; max-width: 260px; }
 
-/* Narrow sidebar: drop the Error and Assist columns (data stays in the detail). */
+/* Narrow sidebar: drop the least-critical columns (data stays in the detail);
+   Measured/Setpoint/Valve/Assist-mode stay visible. */
 @media (max-width: ${NARROW_MAX_PX}px) {
-  .rooms-table .col-error, .rooms-table .col-assist { display: none; }
+  .rooms-table .col-error,
+  .rooms-table .col-supply,
+  .rooms-table .col-return,
+  .rooms-table .col-assist-temp { display: none; }
 }
 
 /* Detail */
