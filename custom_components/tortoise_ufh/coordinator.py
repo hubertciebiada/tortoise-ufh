@@ -14,7 +14,8 @@ Every 5 minutes this coordinator:
    and the websocket/panel to consume.
 4. For rooms whose per-room live control is ON *and* while the global
    kill-switch is OFF, WRITES the commands to the actuators
-   (``number.set_value`` per valve entity, ``climate.set_hvac_mode`` +
+   (``number.set_value`` or ``valve.set_valve_position`` per valve entity,
+   dispatched by the entity's domain; ``climate.set_hvac_mode`` +
    ``climate.set_temperature`` for the split). Kill-switch ON or a shadow (not
    live) room means: compute and report, but emit no commands.
 
@@ -35,7 +36,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.core import callback
+from homeassistant.core import callback, split_entity_id
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
@@ -119,6 +120,16 @@ _HVAC_MODE_BY_FAST_SOURCE: dict[FastSourceMode, str] = {
     FastSourceMode.COOLING: "cool",
     FastSourceMode.OFF: "off",
 }
+
+_VALVE_DOMAIN: str = "valve"
+"""Home Assistant domain of position-capable ``valve`` actuator entities.
+
+A ``valve`` reports its position in the ``current_position`` attribute (0..100)
+and is driven via ``valve.set_valve_position`` (integer ``position``); a
+``number`` valve reports the position as its numeric state and is driven via
+``number.set_value`` (float ``value``). Everything else in the read/write path
+is domain-agnostic.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -723,7 +734,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         for i in range(n_loops):
             loops.append(
                 LoopInput(
-                    valve_position_pct=self._read_float_state(
+                    valve_position_pct=self._read_valve_position(
                         valves[i] if i < len(valves) else None
                     ),
                     supply_temperature_c=self._read_float_state(
@@ -853,9 +864,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
     ) -> None:
         """Write the recommended valve position to every room valve entity.
 
-        A value is written to an entity only when it differs from the last value
-        written to that entity by at least the room's
-        ``valve_write_threshold_pct``. All calls are non-blocking.
+        Each actuator is driven per its domain: a ``valve``-domain entity via
+        ``valve.set_valve_position`` (integer ``position`` 0..100) and any other
+        (``number`` …) via ``number.set_value`` (float ``value``). A value is
+        written to an entity only when it differs from the last value written to
+        that entity by at least the room's ``valve_write_threshold_pct``. All
+        calls are non-blocking.
 
         Args:
             room_cfg: The room's configuration dict.
@@ -872,12 +886,21 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             if last is not None and abs(value - last) < threshold:
                 continue
             try:
-                await self.hass.services.async_call(
-                    "number",
-                    "set_value",
-                    {"entity_id": valve_entity, "value": value},
-                    blocking=False,
-                )
+                if self._is_valve_domain(valve_entity):
+                    # valve.set_valve_position expects an int 0..100 position.
+                    await self.hass.services.async_call(
+                        "valve",
+                        "set_valve_position",
+                        {"entity_id": valve_entity, "position": round(value)},
+                        blocking=False,
+                    )
+                else:
+                    await self.hass.services.async_call(
+                        "number",
+                        "set_value",
+                        {"entity_id": valve_entity, "value": value},
+                        blocking=False,
+                    )
             except Exception:  # noqa: BLE001
                 _LOGGER.exception(
                     "Failed to set valve %s for room %s", valve_entity, name
@@ -928,6 +951,57 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             )
 
     # -- Internal: entity reads ---------------------------------------------
+
+    @staticmethod
+    def _is_valve_domain(entity_id: str) -> bool:
+        """Return whether ``entity_id`` is a Home Assistant ``valve`` entity.
+
+        ``valve`` actuators report position in the ``current_position``
+        attribute and are driven via ``valve.set_valve_position``; every other
+        domain (``number`` …) reports position as its numeric state and is
+        driven via ``number.set_value``.
+
+        Args:
+            entity_id: A non-empty Home Assistant entity id.
+
+        Returns:
+            ``True`` for a ``valve``-domain entity, ``False`` otherwise.
+        """
+        return split_entity_id(entity_id)[0] == _VALVE_DOMAIN
+
+    def _read_valve_position(self, entity_id: str | None) -> float | None:
+        """Read a valve actuator's position [0..100 %], dispatching by domain.
+
+        A ``valve``-domain actuator reports its position in the
+        ``current_position`` attribute (its *state* is ``open`` / ``closed`` /
+        ``opening`` / ``closing`` and is not numeric), so it is read from that
+        attribute. Every other domain (``number`` …) reports the position as its
+        numeric state and is read through :meth:`_read_float_state` with its
+        short stale cache — so the ``number`` path is byte-for-byte the previous
+        behaviour.
+
+        Args:
+            entity_id: The valve actuator entity id, or ``None`` / empty when the
+                loop has no valve at this position.
+
+        Returns:
+            The reported position [0..100 %], or ``None`` when it cannot be read.
+        """
+        if not entity_id:
+            return None
+        if not self._is_valve_domain(entity_id):
+            return self._read_float_state(entity_id)
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return None
+        position = state.attributes.get("current_position")
+        if position is None:
+            return None
+        try:
+            value = float(position)
+        except (ValueError, TypeError):
+            return None
+        return value if math.isfinite(value) else None
 
     def _read_float_state(self, entity_id: str | None) -> float | None:
         """Read a numeric entity state with a short stale cache.

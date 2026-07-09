@@ -82,7 +82,8 @@ CONF_ENTITY_TEMP_OUTDOOR: str = "entity_temp_outdoor"
 """Optional outdoor-temperature source entity (sensor, device_class temperature)."""
 
 CONF_ENTITY_VALVES: str = "entity_valves"
-"""List of valve actuator entities (number domain). A room/zone may have 1..n loops."""
+"""List of valve actuator entities (``number`` or ``valve`` domain). A room/zone
+may have 1..n loops."""
 
 CONF_ENTITY_SUPPLY: str = "entity_supply"
 """List of supply-water temperature sensors, one per loop (sensor, temperature)."""

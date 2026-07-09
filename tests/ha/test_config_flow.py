@@ -263,3 +263,69 @@ async def test_entity_validator_rejects_wrong_unit(hass: HomeAssistant) -> None:
 
     assert result.valid is False
     assert result.error_key == "invalid_unit"
+
+
+async def _drive_to_first_room_entities(hass: HomeAssistant) -> Any:
+    """Drive the wizard to the single floor-only room's entities form."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_LATITUDE: _LAT, CONF_LONGITUDE: _LON}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_ROOM_NAME: "Salon",
+            CONF_ROOM_AREA: 30.0,
+            CONF_HAS_FAST_SOURCE: False,
+            CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_NONE,
+            CONF_COOLING_ENABLED: False,
+            CONF_ADD_ANOTHER: False,
+        },
+    )
+    assert result["step_id"] == "entities"
+    return result
+
+
+async def test_valve_domain_actuator_accepted(
+    hass: HomeAssistant, register_sources: None
+) -> None:
+    """A position-capable ``valve`` actuator passes the entities step."""
+    # supported_features 7 = OPEN|CLOSE|SET_POSITION.
+    hass.states.async_set(
+        "valve.salon_loop", "open", {"current_position": 50, "supported_features": 7}
+    )
+    result = await _drive_to_first_room_entities(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_ENTITY_TEMP_ROOM: "sensor.salon_temp",
+            CONF_ENTITY_VALVES: ["valve.salon_loop"],
+        },
+    )
+
+    # The only room, so a clean entities submit advances to the algorithm step.
+    assert result["step_id"] == "algorithm"
+
+
+async def test_valve_without_set_position_rejected(
+    hass: HomeAssistant, register_sources: None
+) -> None:
+    """A ``valve`` lacking SET_POSITION is rejected with valve_no_set_position."""
+    # supported_features 3 = OPEN|CLOSE only (no SET_POSITION bit 4).
+    hass.states.async_set("valve.salon_no_pos", "closed", {"supported_features": 3})
+    result = await _drive_to_first_room_entities(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_ENTITY_TEMP_ROOM: "sensor.salon_temp",
+            CONF_ENTITY_VALVES: ["valve.salon_no_pos"],
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "entities"
+    assert result["errors"] == {"base": "valve_no_set_position"}

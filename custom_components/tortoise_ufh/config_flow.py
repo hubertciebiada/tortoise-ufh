@@ -328,6 +328,35 @@ def _validate_entities(
     return None
 
 
+def _validate_valves(validator: EntityValidator, valve_ids: list[str]) -> str | None:
+    """Validate the room's valve actuators, dispatching by domain.
+
+    Runs the shared existence / availability check on every actuator (``number``
+    or ``valve``; units are not required for either), then asserts that each
+    ``valve``-domain entity can be driven to a position
+    (``ValveEntityFeature.SET_POSITION``). ``number`` actuators, positioned via
+    ``number.set_value``, need no such capability gate. Availability failures
+    stay non-blocking.
+
+    Args:
+        validator: The entity validator bound to the live HA instance.
+        valve_ids: The room's valve actuator entity ids.
+
+    Returns:
+        The first blocking ``error_key``, or ``None`` when all valves pass.
+    """
+    generic = _validate_entities(validator, valve_ids)
+    if generic is not None:
+        return generic
+    for entity_id in valve_ids:
+        result = validator.validate_valve_set_position(entity_id)
+        if not result.valid and result.error_key != _ENTITY_UNAVAILABLE:
+            if result.error_details:
+                _LOGGER.warning("%s", result.error_details)
+            return result.error_key
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Config flow
 # ---------------------------------------------------------------------------
@@ -516,7 +545,7 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                     valid_units=VALID_PERCENT_UNITS,
                     device_class="humidity",
                 ),
-                _validate_entities(validator, valves),
+                _validate_valves(validator, valves),
                 _validate_entities(
                     validator,
                     supply,
@@ -579,7 +608,7 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                 EntitySelectorConfig(domain=["sensor"], device_class=["humidity"])
             ),
             vol.Required(CONF_ENTITY_VALVES): EntitySelector(
-                EntitySelectorConfig(domain=["number"], multiple=True)
+                EntitySelectorConfig(domain=["number", "valve"], multiple=True)
             ),
             vol.Optional(CONF_ENTITY_SUPPLY): EntitySelector(
                 EntitySelectorConfig(

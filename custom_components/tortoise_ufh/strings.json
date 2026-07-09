@@ -28,7 +28,7 @@
           "entity_temp_room": "Room temperature sensor",
           "entity_humidity": "Humidity sensor (required for cooled rooms)",
           "entity_temp_outdoor": "Outdoor temperature sensor (optional)",
-          "entity_valves": "UFH valve actuators (one per loop)",
+          "entity_valves": "UFH valve actuators — number or valve entities (one per loop)",
           "entity_supply": "Supply water temperature sensors (one per loop)",
           "entity_return": "Return water temperature sensors (one per loop)",
           "entity_fast_source": "Fast-source climate entity (split / heater)",
@@ -69,7 +69,8 @@
       "entity_not_found": "Entity not found in Home Assistant",
       "invalid_unit": "Entity has an incorrect unit of measurement",
       "invalid_device_class": "Entity has an incorrect device class",
-      "entity_unavailable": "Entity is currently unavailable — it may come online later"
+      "entity_unavailable": "Entity is currently unavailable — it may come online later",
+      "valve_no_set_position": "This valve entity does not support setting a position (SET_POSITION). Pick a position-capable valve or a number entity."
     },
     "abort": {
       "already_configured": "Tortoise-UFH is already configured for this location"

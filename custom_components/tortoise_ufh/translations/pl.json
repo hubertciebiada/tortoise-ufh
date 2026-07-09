@@ -28,7 +28,7 @@
           "entity_temp_room": "Czujnik temperatury pomieszczenia",
           "entity_humidity": "Czujnik wilgotności (wymagany dla pomieszczeń chłodzonych)",
           "entity_temp_outdoor": "Czujnik temperatury zewnętrznej (opcjonalnie)",
-          "entity_valves": "Siłowniki zaworów podłogówki (po jednym na pętlę)",
+          "entity_valves": "Siłowniki zaworów podłogówki — encje number lub valve (po jednym na pętlę)",
           "entity_supply": "Czujniki temperatury zasilania (po jednym na pętlę)",
           "entity_return": "Czujniki temperatury powrotu (po jednym na pętlę)",
           "entity_fast_source": "Encja klimatyzacji szybkiego źródła (split / grzałka)",
@@ -69,7 +69,8 @@
       "entity_not_found": "Nie znaleziono encji w Home Assistant",
       "invalid_unit": "Encja ma nieprawidłową jednostkę miary",
       "invalid_device_class": "Encja ma nieprawidłową klasę urządzenia",
-      "entity_unavailable": "Encja jest obecnie niedostępna — może pojawić się później"
+      "entity_unavailable": "Encja jest obecnie niedostępna — może pojawić się później",
+      "valve_no_set_position": "Ta encja valve nie obsługuje ustawiania pozycji (SET_POSITION). Wybierz zawór z obsługą pozycji lub encję number."
     },
     "abort": {
       "already_configured": "Tortoise-UFH jest już skonfigurowany dla tej lokalizacji"

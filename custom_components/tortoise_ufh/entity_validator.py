@@ -9,7 +9,9 @@ Hardware-agnostic contract: validate *units only* (temperatures in degrees
 Celsius ``degC``, relative humidity / valve position in percent ``%``, power in
 watts ``W``) and never a brand or model. Missing ``unit_of_measurement`` or
 ``device_class`` attributes are tolerated and PASS -- some actuators and
-sensors legitimately do not declare them.
+sensors legitimately do not declare them. The one capability (not brand) gate is
+for ``valve``-domain actuators: they must advertise
+``ValveEntityFeature.SET_POSITION`` to be driven to a percentage.
 
 Units:
     Temperature entities in degrees Celsius (degC), humidity and valve
@@ -21,9 +23,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from homeassistant.core import HomeAssistant
+from homeassistant.components.valve import ValveEntityFeature
+from homeassistant.core import HomeAssistant, split_entity_id
 
 _LOGGER = logging.getLogger(__name__)
+
+_VALVE_DOMAIN: str = "valve"
+"""Home Assistant domain of position-capable ``valve`` actuator entities."""
 
 
 @dataclass(frozen=True)
@@ -208,6 +214,53 @@ class EntityValidator:
                 error_details=(
                     f"Entity {entity_id} is currently {state.state} "
                     "-- it may come online later"
+                ),
+            )
+
+        return ValidationResult(valid=True)
+
+    def validate_valve_set_position(self, entity_id: str) -> ValidationResult:
+        """Assert a ``valve``-domain actuator can be driven to a position.
+
+        Only ``valve``-domain entities are gated: their position is written via
+        the ``valve.set_valve_position`` service, which requires the
+        :attr:`~homeassistant.components.valve.ValveEntityFeature.SET_POSITION`
+        capability bit (value ``4``). Any other domain (``number`` …), positioned
+        via ``number.set_value``, PASSES unconditionally, as does an empty id.
+        A ``valve`` whose ``supported_features`` omits ``SET_POSITION`` cannot be
+        commanded to a percentage and is rejected here rather than failing
+        silently at runtime.
+
+        Args:
+            entity_id: Entity id to inspect (empty string PASSES; a non-``valve``
+                domain PASSES).
+
+        Returns:
+            A passing result, or a failure with key ``entity_not_found`` or
+            ``valve_no_set_position``.
+        """
+        if not entity_id:
+            return ValidationResult(valid=True)
+        if split_entity_id(entity_id)[0] != _VALVE_DOMAIN:
+            return ValidationResult(valid=True)
+
+        state = self._hass.states.get(entity_id)
+        if state is None:
+            return ValidationResult(
+                valid=False,
+                error_key="entity_not_found",
+                error_details=f"Entity {entity_id} not found in Home Assistant",
+            )
+
+        features = getattr(state, "attributes", {}).get("supported_features", 0) or 0
+        if not int(features) & ValveEntityFeature.SET_POSITION:
+            return ValidationResult(
+                valid=False,
+                error_key="valve_no_set_position",
+                error_details=(
+                    f"Valve {entity_id} does not support setting a position "
+                    "(ValveEntityFeature.SET_POSITION); pick a position-capable "
+                    "valve or a number entity"
                 ),
             )
 

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from pytest_homeassistant_custom_component.common import async_mock_service
 
+from custom_components.tortoise_ufh.const import CONF_ENTITY_VALVES
 from custom_components.tortoise_ufh.core.controller import GLOBAL_SAFE_DEW_MARGIN_K
 from custom_components.tortoise_ufh.core.dew_point import dew_point
 from custom_components.tortoise_ufh.core.models import RoomOutputs
@@ -33,6 +34,7 @@ _MODE_ATTRS = {"options": ["heating", "transitional", "cooling", "off"]}
 # The (domain, service) pairs the coordinator uses to command actuators.
 _ACTUATOR_SERVICES = (
     ("number", "set_value"),
+    ("valve", "set_valve_position"),
     ("climate", "set_hvac_mode"),
     ("climate", "set_temperature"),
 )
@@ -171,3 +173,117 @@ async def test_cooling_global_safe_dew_point_is_max_room_dew_plus_margin(
     assert data.global_safe_dew_point_c is not None
     assert math.isfinite(data.global_safe_dew_point_c)
     assert data.global_safe_dew_point_c == pytest.approx(expected, abs=0.01)
+
+
+# -- valve-domain actuator support ------------------------------------------
+
+
+async def test_read_valve_domain_reads_current_position_attribute(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """A ``valve`` reads its position from ``current_position``, not the state.
+
+    The ``number`` path is unchanged (reads the numeric state), and a valve with
+    no ``current_position`` degrades to ``None`` instead of crashing.
+    """
+    coordinator = _get_coordinator(setup_integration)
+    hass.states.async_set(
+        "valve.salon_loop",
+        "open",  # non-numeric state; float("open") would fail.
+        {"current_position": 42, "supported_features": 7},
+    )
+
+    assert coordinator._read_valve_position("valve.salon_loop") == pytest.approx(42.0)
+    # number.* still reads its numeric state (register_sources seeds it at 0).
+    assert coordinator._read_valve_position("number.salon_valve") == pytest.approx(0.0)
+    # A valve missing current_position → None (no exception, no room degrade).
+    hass.states.async_set("valve.no_pos", "closed", {"supported_features": 7})
+    assert coordinator._read_valve_position("valve.no_pos") is None
+    # None / empty entity id → None.
+    assert coordinator._read_valve_position(None) is None
+
+
+async def test_write_valve_domain_uses_set_valve_position(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """A ``valve``-domain actuator is driven via ``valve.set_valve_position``."""
+    coordinator = _get_coordinator(setup_integration)
+    outputs = coordinator.data.rooms["Salon"].outputs
+    mocks = _mock_actuator_services(hass)
+
+    room_cfg = {CONF_ENTITY_VALVES: ["valve.salon_loop"]}
+    await coordinator._write_valves(room_cfg, "Salon", outputs)
+    await hass.async_block_till_done()
+
+    valve_writes = mocks[("valve", "set_valve_position")]
+    assert len(valve_writes) == 1
+    call = valve_writes[0]
+    assert call.data["entity_id"] == "valve.salon_loop"
+    # position is an int (round of the float percentage).
+    assert call.data["position"] == round(outputs.valve_position_pct)
+    assert isinstance(call.data["position"], int)
+    # A valve-domain entity is never written through number.set_value.
+    assert mocks[("number", "set_value")] == []
+
+
+async def test_write_number_domain_still_uses_number_set_value(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """A ``number``-domain actuator is still driven via ``number.set_value``."""
+    coordinator = _get_coordinator(setup_integration)
+    outputs = coordinator.data.rooms["Salon"].outputs
+    mocks = _mock_actuator_services(hass)
+
+    room_cfg = {CONF_ENTITY_VALVES: ["number.salon_valve"]}
+    await coordinator._write_valves(room_cfg, "Salon", outputs)
+    await hass.async_block_till_done()
+
+    number_writes = mocks[("number", "set_value")]
+    assert len(number_writes) == 1
+    assert number_writes[0].data["entity_id"] == "number.salon_valve"
+    assert number_writes[0].data["value"] == pytest.approx(outputs.valve_position_pct)
+    # A number-domain entity never touches valve.set_valve_position.
+    assert mocks[("valve", "set_valve_position")] == []
+
+
+async def test_write_mixed_valve_list_dispatches_by_domain(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """A mixed number+valve loop list dispatches each entity by its domain."""
+    coordinator = _get_coordinator(setup_integration)
+    outputs = coordinator.data.rooms["Salon"].outputs
+    mocks = _mock_actuator_services(hass)
+
+    room_cfg = {CONF_ENTITY_VALVES: ["number.salon_valve", "valve.salon_loop"]}
+    await coordinator._write_valves(room_cfg, "Salon", outputs)
+    await hass.async_block_till_done()
+
+    number_writes = mocks[("number", "set_value")]
+    valve_writes = mocks[("valve", "set_valve_position")]
+    assert [c.data["entity_id"] for c in number_writes] == ["number.salon_valve"]
+    assert [c.data["entity_id"] for c in valve_writes] == ["valve.salon_loop"]
+    # Both carry the same single computed room position, formatted per domain.
+    assert number_writes[0].data["value"] == pytest.approx(outputs.valve_position_pct)
+    assert valve_writes[0].data["position"] == round(outputs.valve_position_pct)
+
+
+async def test_write_debounce_suppresses_repeat_position(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """The ``valve_write_threshold_pct`` de-bounce still gates repeat writes.
+
+    Writing the identical computed position twice must emit exactly one command
+    for a ``number`` entity and one for a ``valve`` entity (default threshold
+    2 %, so a zero delta is suppressed) — the de-bounce is domain-agnostic.
+    """
+    coordinator = _get_coordinator(setup_integration)
+    outputs = coordinator.data.rooms["Salon"].outputs
+    mocks = _mock_actuator_services(hass)
+
+    room_cfg = {CONF_ENTITY_VALVES: ["number.salon_valve", "valve.salon_loop"]}
+    await coordinator._write_valves(room_cfg, "Salon", outputs)
+    await coordinator._write_valves(room_cfg, "Salon", outputs)
+    await hass.async_block_till_done()
+
+    assert len(mocks[("number", "set_value")]) == 1
+    assert len(mocks[("valve", "set_valve_position")]) == 1
