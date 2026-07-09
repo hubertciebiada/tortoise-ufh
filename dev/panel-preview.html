@@ -73,7 +73,9 @@
         font-size: 13px;
         position: sticky;
         top: 0;
-        z-index: 10;
+        /* Below the panel's overlay drawer + scrim (z-index 6/7), so the
+           narrow-viewport room inspector can be exercised in the preview. */
+        z-index: 5;
       }
       #toolbar strong { margin-right: 6px; }
       #toolbar button {

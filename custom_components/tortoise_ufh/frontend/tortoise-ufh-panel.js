@@ -4,7 +4,8 @@
  * A dependency-free custom element (no CDN / external imports / build step,
  * CSP-safe) that renders the per-room underfloor-heating control state as a
  * health hero + a four-tab workspace (Rooms table, Tuning, Valves and
- * Assist) + a master/detail room inspector, and lets an admin
+ * Assist) + a master/detail room inspector (a sticky side column on wide
+ * screens, a right-side overlay drawer on narrow ones), and lets an admin
  * edit the global home temperature, mode, per-room offset and each room's
  * three-state control (off / shadow / live). It talks to the integration
  * exclusively through the `tortoise_ufh/*` websocket commands (get_config /
@@ -80,6 +81,9 @@ const ACTIVE_TAB_STORAGE_KEY = "tortoise-ufh.activeTab";
 
 /** Width below which the table drops its Error and Assist columns. */
 const NARROW_MAX_PX = 560;
+
+/** Width at or below which the room detail becomes a right-side overlay drawer. */
+const OVERLAY_MAX_PX = 1099;
 
 /** Websocket command type strings (frozen backend contract). */
 const WS = {
@@ -205,7 +209,6 @@ const STR = {
     wire_unset: "— nie przypisano —",
     wire_unavailable: "niedostępny",
     dec_error: "Błąd regulacji",
-    dec_trend: "Trend temperatury",
     dec_dew: "Punkt rosy w pomieszczeniu",
     dec_terms: "Wkład członów w zawór",
     term_p: "P — proporcjonalny",
@@ -222,7 +225,6 @@ const STR = {
     dec_floor: "Minimalne otwarcie (podłoga)",
     dec_fast: "Szybkie źródło",
     dec_explanation: "Wyjaśnienie",
-    dec_flags: "Flagi",
     yes: "tak",
     no: "nie",
     raw_show: "Pokaż surowe dane",
@@ -365,7 +367,6 @@ const STR = {
     wire_unset: "— not set —",
     wire_unavailable: "unavailable",
     dec_error: "Control error",
-    dec_trend: "Temperature trend",
     dec_dew: "Room dew point",
     dec_terms: "Term contributions to valve",
     term_p: "P — proportional",
@@ -382,7 +383,6 @@ const STR = {
     dec_floor: "Valve floor (minimum)",
     dec_fast: "Fast source",
     dec_explanation: "Explanation",
-    dec_flags: "Flags",
     yes: "yes",
     no: "no",
     raw_show: "Show raw data",
@@ -796,6 +796,7 @@ class TortoiseUfhPanel extends HTMLElement {
     this._rows = new Map(); // room name -> table <tr> element
     this._detail = null; // detail part refs
     this._detailRoom = null; // room name the detail is currently built for
+    this._wiringOpen = true; // wiring <details> state, persists across rooms
 
     this._view = []; // normalized room view-models
     this._viewByName = new Map();
@@ -1497,9 +1498,36 @@ class TortoiseUfhPanel extends HTMLElement {
     this._tabs.sections = sections;
 
     const main = h("div", { class: "col-main" }, TAB_ORDER.map((k) => sections[k]));
-    const detail = h("section", { class: "detail", style: "display:none" });
-    const layout = h("div", { class: "layout" }, [main, detail]);
-    const wrap = h("div", { class: "wrap" }, [banner, hero, tabbar, layout]);
+    // The room inspector: a sticky side column on wide screens, a right-side
+    // overlay drawer (with a click-to-close scrim) at or below OVERLAY_MAX_PX.
+    const detail = h("section", {
+      class: "detail",
+      role: "dialog",
+      tabindex: "-1",
+      style: "display:none",
+    });
+    const scrim = h("div", {
+      class: "detail-scrim",
+      "aria-hidden": "true",
+      on: { click: () => this._deselect() },
+    });
+    const layout = h("div", { class: "layout" }, [main, scrim, detail]);
+    const wrap = h(
+      "div",
+      {
+        class: "wrap",
+        on: {
+          // Escape anywhere inside the panel closes the room inspector.
+          keydown: (e) => {
+            if (e.key === "Escape" && this._selectedRoom) {
+              e.stopPropagation();
+              this._deselect();
+            }
+          },
+        },
+      },
+      [banner, hero, tabbar, layout],
+    );
 
     this._els = {
       wrap,
@@ -3100,17 +3128,39 @@ class TortoiseUfhPanel extends HTMLElement {
 
   // -- Rendering: room detail ---------------------------------------------
 
+  /** True when the detail renders as a fixed overlay drawer (narrow viewport). */
+  _isOverlay() {
+    return !!(
+      window.matchMedia &&
+      window.matchMedia(`(max-width: ${OVERLAY_MAX_PX}px)`).matches
+    );
+  }
+
   _select(name) {
     this._selectedRoom = name;
     this._render();
-    if (this._els.detail && this._els.detail.scrollIntoView) {
+    // Side-by-side layout: keep the sticky column in view. The overlay drawer
+    // is fixed, so scrolling would only jump the page behind it.
+    if (!this._isOverlay() && this._els.detail && this._els.detail.scrollIntoView) {
       this._els.detail.scrollIntoView({ block: "nearest" });
     }
   }
 
   _deselect() {
+    const prev = this._selectedRoom;
+    const detail = this._els && this._els.detail;
+    const active = this.shadowRoot ? this.shadowRoot.activeElement : null;
+    const hadFocus = !!(detail && active && detail.contains(active));
     this._selectedRoom = null;
     this._render();
+    // Hand focus back to the room's table row when the close came from inside
+    // the inspector (keyboard flow); an outside click keeps its own focus.
+    if (hadFocus && prev) {
+      const row = this._rows.get(prev);
+      if (row && row.isConnected) {
+        row.focus();
+      }
+    }
   }
 
   _syncDetail() {
@@ -3125,7 +3175,8 @@ class TortoiseUfhPanel extends HTMLElement {
     detail.style.display = "";
     this._els.layout.classList.add("has-detail");
 
-    if (this._detailRoom !== this._selectedRoom) {
+    const fresh = this._detailRoom !== this._selectedRoom;
+    if (fresh) {
       this._buildDetail(this._selectedRoom);
       this._detailRoom = this._selectedRoom;
     }
@@ -3134,6 +3185,11 @@ class TortoiseUfhPanel extends HTMLElement {
     this._refreshWiringStates();
     this._refreshHistory();
     this._updateLegendValues();
+    // Overlay drawer: move focus into the (role=dialog) inspector on open so
+    // Escape and screen readers land in the right place — never on a poll.
+    if (fresh && this._isOverlay()) {
+      detail.focus({ preventScroll: true });
+    }
   }
 
   _buildDetail(name) {
@@ -3143,58 +3199,82 @@ class TortoiseUfhPanel extends HTMLElement {
     this._detail = D;
     const detail = this._els.detail;
     detail.textContent = "";
+    detail.setAttribute("aria-label", name);
 
-    // Header with close.
+    // Sticky header: severity dot + room name + close.
+    D.headDot = h("span", { class: "dot" });
     D.title = h("span", { class: "detail-title", text: name });
     const close = h(
       "button",
       {
-        class: "ghost-btn",
+        class: "ghost-btn detail-close",
         type: "button",
         title: this._t("detail_close"),
+        "aria-label": this._t("detail_close"),
         on: { click: () => this._deselect() },
       },
       [this._icon("mdi:close", "✕")],
     );
     const header = h("div", { class: "detail-head" }, [
+      D.headDot,
       D.title,
       h("span", { class: "spacer" }),
       close,
     ]);
 
-    // Setpoint / offset stepper (the room table's setpoint column is read-only;
-    // the offset control lives here).
+    // Active flags surface first — they explain everything below them.
+    D.flagsEl = h("div", { class: "chips" });
+    D.flagsBlock = h("div", { class: "detail-flags", style: "display:none" }, [
+      D.flagsEl,
+    ]);
+
+    // Key numbers as a 2×2 tile grid: measured (+trend), setpoint (the offset
+    // stepper lives here), valve (+bar) and the fast-source command.
+    D.statTempVal = h("span", { class: "stat-val" });
+    D.statTempTrend = h("span", { class: "stat-sub" });
     D.spMinus = h("button", {
-      class: "step-btn sm",
+      class: "step-btn",
       type: "button",
       text: "−",
       on: { click: () => this._nudgeOffset(name, -OFFSET_STEP) },
     });
     D.spVal = h("span", { class: "step-val" });
     D.spPlus = h("button", {
-      class: "step-btn sm",
+      class: "step-btn",
       type: "button",
       text: "+",
       on: { click: () => this._nudgeOffset(name, OFFSET_STEP) },
     });
-    D.spOffset = h("span", { class: "cell-sub" });
-    const spControl = h("div", { class: "detail-sp" }, [
-      h("span", { class: "ctl-cap", text: this._t("card_setpoint") }),
-      h("div", { class: "detail-sp-row" }, [
+    D.spOffset = h("span", { class: "stat-sub" });
+    D.statValveVal = h("span", { class: "stat-val" });
+    D.statValveFill = h("span", { class: "valve-fill" });
+    D.statAssist = h("span", { class: "fast-badge stat-badge" });
+    const tiles = h("div", { class: "stat-tiles" }, [
+      h("div", { class: "stat-tile" }, [
+        h("span", { class: "stat-cap", text: this._t("th_measured") }),
+        D.statTempVal,
+        D.statTempTrend,
+      ]),
+      h("div", { class: "stat-tile" }, [
+        h("span", { class: "stat-cap", text: this._t("card_setpoint") }),
         h("div", { class: "stepper" }, [D.spMinus, D.spVal, D.spPlus]),
         D.spOffset,
       ]),
+      h("div", { class: "stat-tile" }, [
+        h("span", { class: "stat-cap", text: this._t("th_valve") }),
+        D.statValveVal,
+        h("div", { class: "valve-track stat-track" }, [D.statValveFill]),
+      ]),
+      h("div", { class: "stat-tile" }, [
+        h("span", { class: "stat-cap", text: this._t("dec_fast") }),
+        D.statAssist,
+      ]),
     ]);
 
-    // Section 1: wiring.
-    D.wiringBody = h("div", { class: "wire-list" });
-    const wiring = this._section(this._t("sec_wiring"), D.wiringBody);
-    this._buildWiring(D, name);
-
-    // Section 2: controller decision.
+    // Section: controller decision.
     const dec = this._buildDecision(D);
 
-    // Section 3: history charts, mounted in `.history-mount[data-room]`.
+    // Section: history charts, mounted in `.history-mount[data-room]`.
     const historyMount = h("div", {
       class: "history-mount",
       dataset: { room: name },
@@ -3202,11 +3282,36 @@ class TortoiseUfhPanel extends HTMLElement {
     this._buildHistory(D, name, historyMount);
     const history = this._section(this._t("sec_history"), historyMount);
 
+    // Section: wiring — reference material, foldable, at the bottom; the
+    // disclosure state persists across room switches (instance-level).
+    D.wiringBody = h("div", { class: "wire-list" });
+    const wiring = h(
+      "details",
+      {
+        class: "sub sub-fold",
+        open: this._wiringOpen ? true : null,
+        on: {
+          toggle: (e) => {
+            this._wiringOpen = e.target.open;
+          },
+        },
+      },
+      [
+        h("summary", { class: "sub-title", text: this._t("sec_wiring") }),
+        D.wiringBody,
+      ],
+    );
+    this._buildWiring(D, name);
+
+    const body = h("div", { class: "detail-body" }, [
+      D.flagsBlock,
+      tiles,
+      dec,
+      history,
+      wiring,
+    ]);
     detail.appendChild(header);
-    detail.appendChild(spControl);
-    detail.appendChild(wiring);
-    detail.appendChild(dec);
-    detail.appendChild(history);
+    detail.appendChild(body);
   }
 
   _section(title, body) {
@@ -3317,10 +3422,15 @@ class TortoiseUfhPanel extends HTMLElement {
   _buildDecision(D) {
     const body = h("div", { class: "dec" });
 
-    D.errorEl = this._decRow(body, this._t("dec_error"));
-    D.trendEl = this._decRow(body, this._t("dec_trend"));
-    D.dewEl = this._decRow(body, this._t("dec_dew"));
-    D.dewReasonEl = this._decRow(body, this._t("dec_dew_reason"));
+    // Controller inputs (a 2-column key-value grid; the dew-exclusion cell is
+    // hidden entirely while there is no reason to show).
+    const gridIn = h("div", { class: "kv-grid" });
+    D.errorEl = this._kv(gridIn, this._t("dec_error")).valEl;
+    D.dewEl = this._kv(gridIn, this._t("dec_dew")).valEl;
+    const dewReason = this._kv(gridIn, this._t("dec_dew_reason"));
+    D.dewReasonEl = dewReason.valEl;
+    D.dewReasonRow = dewReason.rowEl;
+    body.appendChild(gridIn);
 
     // Signed contribution bars for the four valve terms.
     D.terms = {};
@@ -3348,13 +3458,17 @@ class TortoiseUfhPanel extends HTMLElement {
       ]),
     );
 
-    D.rawValveEl = this._decRow(body, this._t("dec_raw_valve"));
-    D.finalValveEl = this._decRow(body, this._t("dec_final_valve"));
-    D.throttleEl = this._decRow(body, this._t("dec_throttle"));
-    D.integratorEl = this._decRow(body, this._t("dec_integrator"));
-    D.saturatedEl = this._decRow(body, this._t("dec_saturated"));
-    D.floorEl = this._decRow(body, this._t("dec_floor"));
-    D.fastEl = this._decRow(body, this._t("dec_fast"));
+    // Outputs and limiter state (the throttle cell hides while not cooling).
+    const gridOut = h("div", { class: "kv-grid" });
+    D.rawValveEl = this._kv(gridOut, this._t("dec_raw_valve")).valEl;
+    D.finalValveEl = this._kv(gridOut, this._t("dec_final_valve")).valEl;
+    const throttle = this._kv(gridOut, this._t("dec_throttle"));
+    D.throttleEl = throttle.valEl;
+    D.throttleRow = throttle.rowEl;
+    D.integratorEl = this._kv(gridOut, this._t("dec_integrator")).valEl;
+    D.saturatedEl = this._kv(gridOut, this._t("dec_saturated")).valEl;
+    D.floorEl = this._kv(gridOut, this._t("dec_floor")).valEl;
+    body.appendChild(gridOut);
 
     D.explanationEl = h("div", { class: "explanation" });
     body.appendChild(
@@ -3363,13 +3477,6 @@ class TortoiseUfhPanel extends HTMLElement {
         D.explanationEl,
       ]),
     );
-
-    D.flagsEl = h("div", { class: "chips" });
-    D.flagsBlock = h("div", { class: "dec-block", style: "display:none" }, [
-      h("div", { class: "dec-block-cap", text: this._t("dec_flags") }),
-      D.flagsEl,
-    ]);
-    body.appendChild(D.flagsBlock);
 
     // Raw report JSON in a collapsed <details> (open state survives polls).
     D.rawPre = h("pre", { class: "raw-pre" });
@@ -3382,12 +3489,15 @@ class TortoiseUfhPanel extends HTMLElement {
     return this._section(this._t("sec_decision"), body);
   }
 
-  _decRow(parent, label) {
-    const valEl = h("span", { class: "dval" });
-    parent.appendChild(
-      h("div", { class: "drow" }, [h("span", { class: "dlabel", text: label }), valEl]),
-    );
-    return valEl;
+  /** One key-value cell (small muted caption over a strong value) in a grid. */
+  _kv(parent, label) {
+    const valEl = h("span", { class: "kv-val" });
+    const rowEl = h("div", { class: "kv" }, [
+      h("span", { class: "kv-cap", text: label }),
+      valEl,
+    ]);
+    parent.appendChild(rowEl);
+    return { rowEl, valEl };
   }
 
   _updateDetail(r) {
@@ -3400,8 +3510,12 @@ class TortoiseUfhPanel extends HTMLElement {
       return;
     }
     D.title.textContent = r.name;
+    D.headDot.className = "dot sev-" + r.severity;
 
-    // Setpoint / offset stepper.
+    // Stat tiles: measured (+trend), setpoint stepper (+offset), valve, assist.
+    D.statTempVal.textContent = fmt(r.current, 1, "°");
+    D.statTempTrend.textContent =
+      trendArrow(r.trend) + " " + fmt(r.trend, 2, " K/h");
     D.spVal.textContent = fmt(r.setpoint, 1, " °C");
     if (r.offset) {
       D.spOffset.textContent = fmtStr(this._t("card_offset"), {
@@ -3414,11 +3528,17 @@ class TortoiseUfhPanel extends HTMLElement {
     }
     D.spMinus.disabled = r.offset <= OFFSET_MIN;
     D.spPlus.disabled = r.offset >= OFFSET_MAX;
+    D.statValveVal.textContent = fmt(r.valve, 0, "%");
+    D.statValveFill.style.width =
+      (r.valve === null ? 0 : clamp(r.valve, 0, 100)) + "%";
+    const assist = this._assistLabel(r);
+    D.statAssist.className = "fast-badge stat-badge " + assist.cls;
+    D.statAssist.textContent = assist.text;
 
     D.errorEl.textContent = fmt(r.errorC, 2, " K");
-    D.trendEl.textContent = trendArrow(r.trend) + " " + fmt(r.trend, 2, " K/h");
     D.dewEl.textContent = fmt(r.dew, 1, " °C");
     D.dewReasonEl.textContent = r.dewReason ? this._dewReasonText(r.dewReason) : "—";
+    D.dewReasonRow.style.display = r.dewReason ? "" : "none";
 
     const terms = {
       pTerm: r.pTerm,
@@ -3450,12 +3570,15 @@ class TortoiseUfhPanel extends HTMLElement {
     D.finalValveEl.textContent = fmt(r.valve, 0, "%");
     D.throttleEl.textContent =
       r.throttle === null ? "—" : fmt(r.throttle * 100, 0, "%");
+    D.throttleRow.style.display = r.throttle === null ? "none" : "";
     D.integratorEl.textContent = r.integratorFrozen
       ? this._t("integ_frozen")
       : this._t("integ_active");
+    D.integratorEl.classList.toggle("warn", r.integratorFrozen);
     D.saturatedEl.textContent = r.saturated ? this._t("yes") : this._t("no");
+    D.saturatedEl.classList.toggle("warn", r.saturated);
     D.floorEl.textContent = r.valveFloor ? this._t("yes") : this._t("no");
-    D.fastEl.textContent = this._assistLabel(r).text;
+    D.floorEl.classList.toggle("warn", r.valveFloor);
 
     D.explanationEl.textContent = r.explanation || "—";
 
@@ -4216,7 +4339,7 @@ const STYLE = `
   box-sizing: border-box;
 }
 :host *, :host *::before, :host *::after { box-sizing: border-box; }
-.wrap { max-width: 1400px; margin: 0 auto; padding: 16px; }
+.wrap { max-width: 1560px; margin: 0 auto; padding: 16px; }
 .hicon { --mdc-icon-size: 18px; color: var(--t-icon); }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -4247,7 +4370,6 @@ button { font-family: inherit; cursor: pointer; }
   font-size: 18px; line-height: 1; display: inline-flex;
   align-items: center; justify-content: center;
 }
-.step-btn.sm { width: 26px; height: 26px; font-size: 16px; }
 .step-btn:hover:not(:disabled) { border-color: var(--t-primary); color: var(--t-primary); }
 .step-btn:disabled { opacity: .4; cursor: default; }
 
@@ -4367,16 +4489,39 @@ button { font-family: inherit; cursor: pointer; }
 .tune-save:disabled { opacity: .5; cursor: default; }
 .tune-note { font-size: 12px; color: var(--t-muted); }
 
-/* Layout */
+/* Layout: side-by-side inspector on wide screens, overlay drawer on narrow. */
 .layout { display: grid; gap: 16px; grid-template-columns: 1fr; align-items: start; }
 .col-main { min-width: 0; }
 .empty { padding: 40px 16px; text-align: center; color: var(--t-muted); }
-@media (min-width: 1100px) {
-  .layout.has-detail { grid-template-columns: minmax(0, 1fr) minmax(380px, 460px); }
+.detail-scrim { display: none; }
+@media (min-width: ${OVERLAY_MAX_PX + 1}px) {
+  .layout.has-detail { grid-template-columns: minmax(0, 1fr) clamp(460px, 40%, 560px); }
   .layout.has-detail .detail {
     position: sticky; top: 16px;
     max-height: calc(100vh - 32px); overflow: auto;
   }
+}
+@media (max-width: ${OVERLAY_MAX_PX}px) {
+  .layout.has-detail .detail-scrim {
+    display: block; position: fixed; inset: 0; z-index: 6;
+    background: var(--mdc-dialog-scrim-color, rgba(0, 0, 0, 0.32));
+  }
+  .layout.has-detail .detail {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 7;
+    width: min(480px, 100%);
+    border: 0; border-left: 1px solid var(--t-line); border-radius: 0;
+    overflow-y: auto;
+    box-shadow: 0 0 32px rgba(0, 0, 0, 0.35);
+    animation: detail-slide-in .2s ease;
+  }
+  .layout.has-detail .detail .detail-head { border-radius: 0; }
+}
+@keyframes detail-slide-in {
+  from { transform: translateX(32px); opacity: .4; }
+  to { transform: none; opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .layout.has-detail .detail { animation: none; }
 }
 
 /* Room table */
@@ -4489,23 +4634,51 @@ button { font-family: inherit; cursor: pointer; }
   .rooms-table .col-assist-temp { display: none; }
 }
 
-/* Detail */
+/* Detail (room inspector) */
 .detail {
   background: var(--t-card); border: 1px solid var(--t-line);
-  border-radius: var(--t-radius); padding: 14px 16px;
-  display: flex; flex-direction: column; gap: 16px;
+  border-radius: var(--t-radius); padding: 0;
+  display: flex; flex-direction: column;
 }
-.detail-head { display: flex; align-items: center; gap: 8px; }
-.detail-title { font-size: 17px; font-weight: 700; }
-.detail-sp { display: flex; flex-direction: column; gap: 4px; }
-.detail-sp-row { display: flex; align-items: center; gap: 10px; }
-.sub { display: flex; flex-direction: column; gap: 8px; }
-.sub-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--t-muted); border-bottom: 1px solid var(--t-line); padding-bottom: 4px; }
+.detail:focus { outline: none; }
+.detail-head {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 18px; background: var(--t-card);
+  border-bottom: 1px solid var(--t-line);
+  border-radius: var(--t-radius) var(--t-radius) 0 0;
+}
+.detail-title { font-size: 18px; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+.detail-close { padding: 6px; }
+.detail-body { display: flex; flex-direction: column; gap: 20px; padding: 16px 18px 20px; min-width: 0; }
+.detail-flags { display: flex; }
+.sub { display: flex; flex-direction: column; gap: 10px; }
+.sub-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--t-muted); border-bottom: 1px solid var(--t-line); padding-bottom: 6px; }
+details.sub-fold > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 7px; }
+details.sub-fold > summary::-webkit-details-marker { display: none; }
+details.sub-fold > summary::before { content: "▸"; font-size: 10px; line-height: 1; transition: transform .15s ease; }
+details.sub-fold[open] > summary::before { transform: rotate(90deg); }
+details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); outline-offset: 2px; border-radius: 4px; }
+
+/* Detail stat tiles (the four key numbers) */
+.stat-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.stat-tile {
+  display: flex; flex-direction: column; gap: 6px; min-width: 0;
+  padding: 10px 12px; border-radius: 12px;
+  background: var(--t-bg); border: 1px solid var(--t-line);
+}
+.stat-cap { font-size: 11px; color: var(--t-muted); text-transform: uppercase; letter-spacing: .04em; }
+.stat-val { font-size: 23px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.stat-sub { font-size: 12px; color: var(--t-muted); }
+.stat-tile .stepper { align-self: flex-start; background: var(--t-card); }
+.stat-tile .step-val { font-size: 17px; min-width: 68px; }
+.stat-track { max-width: 150px; margin-top: 2px; }
+.stat-badge { align-self: flex-start; white-space: normal; line-height: 1.35; }
 
 /* Wiring */
 .wire-list { display: flex; flex-direction: column; gap: 2px; }
 .wire-group-cap { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--t-muted); margin: 8px 0 2px; }
-.wire-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; }
+.wire-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; }
 .wire-row.link { cursor: pointer; }
 .wire-row.link:hover { background: var(--t-chip); }
 .wire-row.link:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; }
@@ -4518,12 +4691,14 @@ button { font-family: inherit; cursor: pointer; }
 .wire-row.link .hicon, .wire-row.link .hicon-fallback { opacity: .6; }
 
 /* Decision */
-.dec { display: flex; flex-direction: column; gap: 6px; }
-.drow { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px dashed var(--t-line); }
-.dlabel { font-size: 13px; color: var(--t-muted); }
-.dval { font-size: 13px; font-weight: 600; text-align: right; white-space: nowrap; }
-.dec-block { margin: 8px 0; }
-.dec-block-cap { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--t-muted); margin-bottom: 6px; }
+.dec { display: flex; flex-direction: column; gap: 14px; }
+.kv-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+.kv { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.kv-cap { font-size: 11px; color: var(--t-muted); line-height: 1.3; }
+.kv-val { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kv-val.warn { color: var(--t-warn); }
+.dec-block { display: flex; flex-direction: column; gap: 6px; }
+.dec-block-cap { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--t-muted); }
 .terms { display: flex; flex-direction: column; gap: 6px; }
 .term-row { display: grid; grid-template-columns: 120px 1fr 60px; align-items: center; gap: 8px; }
 .term-cap { font-size: 12px; color: var(--t-muted); }
@@ -4537,7 +4712,6 @@ button { font-family: inherit; cursor: pointer; }
 .raw summary { cursor: pointer; font-size: 12px; color: var(--t-primary); }
 .raw-pre { margin: 8px 0 0; padding: 10px; background: var(--t-chip); border-radius: 8px; font-family: ui-monospace, "Roboto Mono", monospace; font-size: 11px; line-height: 1.5; overflow-x: auto; white-space: pre; }
 .history-mount { display: flex; flex-direction: column; gap: 8px; }
-.history-soon { font-size: 13px; }
 
 /* Detail history chart */
 .chart-head { display: flex; align-items: center; gap: 8px; }
