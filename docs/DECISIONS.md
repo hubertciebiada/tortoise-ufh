@@ -63,3 +63,49 @@ Related guards (§8.7): a **watchdog** flips a room to fault/alarm when data is 
 supply-water temperature plus conservative position ranges; the module is the **sole owner**
 of participating rooms' valves and splits, with an external **kill-switch** (`off` = no
 commands) and the heat pump / DHW as the water-side owner.
+> **Superseded in v2 — see §4.** The global kill-switch and the per-room
+> participation/live-control booleans were merged into a single canonical per-room
+> three-state control (`off` / `shadow` / `live`).
+
+---
+
+## 4. Revision — per-room control state supersedes the kill-switch (v2)
+
+> **Status: this REVERSES a frozen §8 decision.** Recorded here (and in
+> `prd-control-brain.md` §8) as a deliberate, dated contract change, not a drift.
+
+The original interview locked three separate participation controls: a per-room
+**participation** flag (Q2, `entry.data`), a per-room **live/shadow** toggle (the "shadow /
+dry-run switch", Q9), and a **global kill-switch** (§3, `off` ⇒ emit no commands). In
+practice these three booleans encoded a single question per room — *how much authority does
+Tortoise-UFH have here?* — with redundant, overlapping states (e.g. "participating but
+shadow" vs "kill-switch on"), and the global kill-switch was strictly weaker than "put every
+room in shadow".
+
+**Decision (v2):** collapse all three into one canonical **`RoomControlState` per room**:
+
+| State    | Participates (core sees) | Computes & reports | Writes to hardware |
+|----------|--------------------------|--------------------|--------------------|
+| `off`    | no — core fed `Mode.OFF` (valve held, fast source idle) | yes | no |
+| `shadow` | yes                      | yes                | **no** (dry-run)   |
+| `live`   | yes                      | yes                | **yes**            |
+
+- **Single source of truth:** `entry.options[CONF_ROOM_STATE] = {room: state}`. Derived:
+  `participates := state != off`, `write := state == live`. New rooms default to `shadow`
+  (preserves the old "start in dry-run" safety).
+- **Whole-home stop** = every room `off`/`shadow` — the intent the kill-switch served,
+  without a separate persisted global flag.
+- **Surfaces:** a per-room `select` entity (`control_state`), the sidebar panel, the
+  `tortoise_ufh/set_room_state` WebSocket command, and the options-flow settings step
+  (emergency / automation-free fallback). The retired `switch.tortoise_ufh_kill_switch` and
+  `switch.*_live_control` entities are removed.
+- **No integrator reset on state change:** a control-state-only options change is applied in
+  memory and does **not** reload the config entry (only tuning changes do), so the PID
+  integrator is preserved.
+- **Migration (config-entry v1 → v2, one-time, binding):** per room, **safety precedence** —
+  `participates == false` ⇒ `off` (wins even over `live_control == true`); otherwise
+  `live_control` decides `live` vs `shadow`. The legacy `participates`, `live_control` and
+  `kill_switch` keys and the retired switch registry entries are purged.
+
+Unchanged by this revision: the three external outputs (Q8), the safe-degrade contract (§3),
+the dew-point layers (§2), and the control law (Q4).

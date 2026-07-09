@@ -2,9 +2,9 @@
 
 Drives the full setup wizard (location -> rooms -> per-room entities ->
 algorithm -> confirm) to a created entry, exercises the options flow
-(per-room live control + kill switch + advanced knobs), and pins the locked
-guard rails: duplicate-location abort, the cooling-room ``humidity_required``
-error, and :class:`EntityValidator` unit rejection.
+(per-room control state + advanced knobs), and pins the locked guard rails:
+duplicate-location abort, the cooling-room ``humidity_required`` error, and
+:class:`EntityValidator` unit rejection.
 """
 
 from __future__ import annotations
@@ -34,16 +34,17 @@ from custom_components.tortoise_ufh.const import (
     CONF_ENTITY_TEMP_ROOM,
     CONF_ENTITY_VALVES,
     CONF_FAST_SOURCE_KIND,
-    CONF_KILL_SWITCH,
-    CONF_LIVE_CONTROL,
-    CONF_PARTICIPATES,
     CONF_ROOM_AREA,
     CONF_ROOM_NAME,
     CONF_ROOM_OFFSET,
+    CONF_ROOM_STATE,
+    CONF_ROOM_TUNING,
     CONF_ROOMS,
     DOMAIN,
     FAST_SOURCE_KIND_NONE,
     FAST_SOURCE_KIND_SPLIT,
+    ROOM_STATE_OFF,
+    ROOM_STATE_SHADOW,
     VALID_TEMP_UNITS,
 )
 from custom_components.tortoise_ufh.entity_validator import EntityValidator
@@ -239,10 +240,10 @@ async def test_options_menu_lists_all_leaves(
     }
 
 
-async def test_options_flow_saves_live_control_and_kill_switch(
+async def test_options_flow_saves_room_state_and_knobs(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
-    """The settings leaf renders per-room + kill + knobs and persists them."""
+    """The settings leaf renders a per-room state select + knobs and persists."""
     entry = setup_integration
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -256,24 +257,60 @@ async def test_options_flow_saves_live_control_and_kill_switch(
     assert result["step_id"] == "settings"
 
     schema_keys = {str(key) for key in result["data_schema"].schema}
-    # One live-control toggle per room (index-keyed), the kill switch, and at
-    # least one advanced controller knob.
-    assert "enable_live_control_0" in schema_keys
-    assert "enable_live_control_1" in schema_keys
-    assert CONF_KILL_SWITCH in schema_keys
+    # One index-keyed control-state select per room, plus the advanced knobs.
+    # The retired kill switch is gone from this form.
+    assert "room_state_0" in schema_keys
+    assert "room_state_1" in schema_keys
+    assert "kill_switch" not in schema_keys
     assert "kp" in schema_keys
 
+    # Off / shadow are write-free, so this settings save (which reloads the
+    # entry) never drives an actuator during the ensuing refresh.
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {"enable_live_control_0": True, CONF_KILL_SWITCH: True},
+        {"room_state_0": ROOM_STATE_OFF, "room_state_1": ROOM_STATE_SHADOW},
     )
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    # Salon (index 0) promoted to live, Lazienka stays in shadow.
-    assert entry.options[CONF_LIVE_CONTROL] == {"Salon": True, "Lazienka": False}
-    assert entry.options[CONF_KILL_SWITCH] is True
+    # Salon (index 0) switched off, Lazienka (index 1) left in shadow.
+    assert entry.options[CONF_ROOM_STATE] == {
+        "Salon": ROOM_STATE_OFF,
+        "Lazienka": ROOM_STATE_SHADOW,
+    }
     assert CONF_CONTROLLER in entry.options
+
+
+async def test_settings_save_preserves_room_tuning(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Saving the settings leaf preserves the sparse per-room tuning map.
+
+    The settings form manages only the control-state map and the global knobs;
+    it must not wipe ``CONF_ROOM_TUNING`` (per-room overrides set from the panel).
+    An options flow's ``async_create_entry`` replaces ``entry.options`` wholesale,
+    so the step merges the existing options.
+    """
+    entry = setup_integration
+    hass.config_entries.async_update_entry(
+        entry,
+        options={**entry.options, CONF_ROOM_TUNING: {"Salon": {"kp": 12.0}}},
+    )
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "settings"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"room_state_0": ROOM_STATE_OFF, "room_state_1": ROOM_STATE_SHADOW},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    # The per-room tuning override survives the settings save (not wiped).
+    assert entry.options.get(CONF_ROOM_TUNING) == {"Salon": {"kp": 12.0}}
 
 
 async def _open_menu_leaf(
@@ -305,7 +342,6 @@ async def test_options_flow_add_room(
             CONF_ROOM_NAME: "Kuchnia",
             CONF_ROOM_AREA: 15.0,
             CONF_ROOM_OFFSET: 0.5,
-            CONF_PARTICIPATES: True,
             CONF_HAS_FAST_SOURCE: False,
             CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_NONE,
             CONF_COOLING_ENABLED: False,
@@ -329,7 +365,6 @@ async def test_options_flow_add_room(
     kuchnia = rooms[-1]
     assert kuchnia[CONF_ROOM_AREA] == 15.0
     assert kuchnia[CONF_ROOM_OFFSET] == 0.5
-    assert kuchnia[CONF_PARTICIPATES] is True
     assert kuchnia[CONF_ENTITY_VALVES] == ["number.kuchnia_valve"]
     # The global outdoor sensor is fanned out into the new room too.
     assert kuchnia[CONF_ENTITY_TEMP_OUTDOOR] == "sensor.outdoor_temp"
@@ -350,7 +385,6 @@ async def test_options_flow_add_room_rejects_duplicate_name(
             CONF_ROOM_NAME: "Salon",
             CONF_ROOM_AREA: 15.0,
             CONF_ROOM_OFFSET: 0.0,
-            CONF_PARTICIPATES: True,
             CONF_HAS_FAST_SOURCE: False,
             CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_NONE,
             CONF_COOLING_ENABLED: False,
@@ -387,7 +421,6 @@ async def test_options_flow_edit_room(
         result["flow_id"],
         {
             CONF_ROOM_AREA: 6.0,
-            CONF_PARTICIPATES: True,
             CONF_HAS_FAST_SOURCE: False,
             CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_NONE,
             CONF_COOLING_ENABLED: False,
@@ -423,13 +456,18 @@ async def test_options_flow_remove_room_cleans_registry(
 
     entry = setup_integration
 
-    # Seed a live-control map so the prune of the removed room is observable.
-    # Kill switch engaged so the reloaded coordinator emits no valve writes.
+    # Seed a control-state map so the prune of the removed room is observable.
+    # Both rooms stay in shadow (write-free), so the reloaded coordinator emits
+    # no valve writes; the seed matches the in-memory state, so it does not even
+    # force a reload here.
     hass.config_entries.async_update_entry(
         entry,
         options={
-            CONF_LIVE_CONTROL: {"Salon": True, "Lazienka": True},
-            CONF_KILL_SWITCH: True,
+            **entry.options,
+            CONF_ROOM_STATE: {
+                "Salon": ROOM_STATE_SHADOW,
+                "Lazienka": ROOM_STATE_SHADOW,
+            },
         },
     )
     await hass.async_block_till_done()
@@ -474,10 +512,10 @@ async def test_options_flow_remove_room_cleans_registry(
     ]
     assert salon_after
 
-    # The live-control map no longer mentions the removed room; Salon survives.
-    live = entry.options.get(CONF_LIVE_CONTROL, {})
-    assert "Lazienka" not in live
-    assert live.get("Salon") is True
+    # The control-state map no longer mentions the removed room; Salon survives.
+    room_state = entry.options.get(CONF_ROOM_STATE, {})
+    assert "Lazienka" not in room_state
+    assert room_state.get("Salon") == ROOM_STATE_SHADOW
 
 
 async def test_options_flow_remove_last_room_blocked(

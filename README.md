@@ -84,11 +84,13 @@ explanation of what it did and why.
   integral term is frozen so it does not wind up against a dead actuator.
 - **Optional weather feedforward** — a modest baseline valve term from outdoor temperature;
   the PI loop does the rest.
-- **Shadow mode and a global kill-switch** — compute and report without touching any
-  actuator, per room or for the whole house (see below).
+- **Per-room control state (off / shadow / live)** — one three-state switch per room:
+  *off* excludes it from control, *shadow* computes and reports without touching any
+  actuator, *live* drives its hardware. A whole-house "hands off" is simply every room in
+  off or shadow (see below).
 - **Sidebar panel** — a dependency-free Home Assistant panel to set the home temperature,
-  per-room offsets, mode, participation and live/shadow toggles, and to inspect each room's
-  live report.
+  per-room offsets, mode, cooling participation and each room's control state, and to
+  inspect each room's live report.
 - **Hardware-agnostic** — you map Home Assistant entities to roles at setup; units are
   validated (°C, %, W), brands are not.
 - **Built-in building simulator** — a digital twin (3R3C RC model per room, ZOH via matrix
@@ -134,8 +136,8 @@ only). From the panel you can:
 - Set the **global home temperature** and pick the **mode** (heating / transitional /
   cooling / off).
 - Adjust a **per-room offset** — each room's setpoint is `home temperature + room offset`.
-- Toggle a room's **participation** in cooling and its **live/shadow** state.
-- Flip the global **kill-switch**.
+- Toggle a room's **participation** in cooling and set its **control state**
+  (off / shadow / live).
 - Open any room's **live report** to read the full decision breakdown as JSON.
 
 The global home temperature and per-room offsets are also exposed as writable `number`
@@ -145,25 +147,37 @@ is required. A `dashboard_tortoise_ufh.yaml` Lovelace template ships as a fallba
 
 ---
 
-## Shadow vs live (the kill-switch)
+## Control state: off / shadow / live (per room)
 
 Tortoise-UFH is built for cautious rollout. It **always** computes commands and publishes
-the full report — but whether those commands reach your actuators is gated:
+the full report — but whether those commands reach your actuators is gated by each room's
+**control state**, exposed as a per-room `select` entity (`select.tortoise_ufh_<room>_control_state`),
+in the panel, and over the `tortoise_ufh/set_room_state` WebSocket command. A new room
+starts in the safe **shadow** default.
 
-- **Shadow mode (per room).** A room's `live_control` toggle is off: the coordinator
-  computes the valve and fast-source commands and shows them in the panel and diagnostic
-  sensors, but writes nothing. Watch its recommendations against your existing controller
-  for as long as you like, then enable live control one room at a time.
-- **Live mode (per room).** With `live_control` on, the coordinator writes the room's valve
-  entities (only when the new value differs from the last by at least the write threshold,
-  to avoid actuator chatter) and the split's mode and target temperature.
-- **Global kill-switch.** A single global switch that, when **on**, suppresses *all*
-  command output regardless of per-room settings. Computation and reporting continue, so
-  you keep full visibility while emitting nothing. Use it as an instant, house-wide "hands
-  off the hardware".
+- **`off`.** The room is excluded from control entirely — the core is fed `Mode.OFF`, so
+  its valve is held at its last position and its fast source is idled. Nothing is written.
+- **`shadow`.** The coordinator computes the valve and fast-source commands and shows them
+  in the panel and diagnostic sensors, but writes nothing. Watch its recommendations
+  against your existing controller for as long as you like, then promote rooms to live one
+  at a time.
+- **`live`.** The coordinator writes the room's valve entities (only when the new value
+  differs from the last by at least the write threshold, to avoid actuator chatter) and the
+  split's mode and target temperature.
 
-In short: **kill-switch on, or a room in shadow → compute and report, but emit no
-commands.**
+A whole-house "hands off the hardware" is simply **every room in off or shadow** — the
+three-state control replaced the earlier global kill-switch. Changing a room's control
+state takes effect immediately and does **not** reset the PID integrator (only tuning
+changes reload the controller).
+
+In short: **a room in off or shadow → compute and report, but emit no commands; only live
+rooms drive hardware.**
+
+> Upgrading from an older install? The config entry migrates automatically (v1 → v2): the
+> old `participates` flag, per-room `live_control` toggles and the global kill switch are
+> folded into the new per-room control state (`participates == false` becomes `off`). The
+> `switch.tortoise_ufh_kill_switch` and `switch.*_live_control` entities are removed and
+> replaced by `select.*_control_state`.
 
 ---
 
@@ -184,7 +198,7 @@ tortoise-ufh/
 │   └── ...                          # weather, metrics, scenarios, profiles, safety
 └── custom_components/tortoise_ufh/  # HA adapter — imports FROM the core
     ├── coordinator.py               # 5-min DataUpdateCoordinator: read → run core → write
-    ├── config_flow.py  panel.py  websocket.py  sensor.py  number.py  switch.py ...
+    ├── config_flow.py  panel.py  websocket.py  sensor.py  number.py  select.py ...
     └── frontend/tortoise-ufh-panel.js
 ```
 

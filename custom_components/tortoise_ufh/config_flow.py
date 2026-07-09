@@ -1,6 +1,6 @@
 """Config flow for the Tortoise-UFH integration.
 
-Implements the multi-step setup wizard (``VERSION = 1``) and the options flow.
+Implements the multi-step setup wizard (``VERSION = 2``) and the options flow.
 
 Wizard steps:
     1. ``user``       — home location (latitude / longitude, decimal degrees).
@@ -63,26 +63,25 @@ from .const import (
     CONF_ENTITY_VALVES,
     CONF_FAST_SOURCE_KIND,
     CONF_HOME_SETPOINT,
-    CONF_KILL_SWITCH,
-    CONF_LIVE_CONTROL,
-    CONF_PARTICIPATES,
     CONF_ROOM_AREA,
     CONF_ROOM_NAME,
     CONF_ROOM_OFFSET,
+    CONF_ROOM_STATE,
     CONF_ROOMS,
+    CONTROLLER_BOOL_KNOB,
+    CONTROLLER_NUMBER_KNOBS,
     DEFAULT_COOLING_ENABLED,
     DEFAULT_FAST_SOURCE_KIND,
     DEFAULT_HOME_SETPOINT_C,
-    DEFAULT_KILL_SWITCH,
-    DEFAULT_LIVE_CONTROL,
-    DEFAULT_PARTICIPATES,
     DEFAULT_ROOM_OFFSET_C,
+    DEFAULT_ROOM_STATE,
     DOMAIN,
     FAST_SOURCE_KIND_NONE,
     FAST_SOURCE_KINDS,
     ROOM_OFFSET_MAX_C,
     ROOM_OFFSET_MIN_C,
     ROOM_OFFSET_STEP_C,
+    ROOM_STATES,
     VALID_PERCENT_UNITS,
     VALID_TEMP_UNITS,
 )
@@ -121,7 +120,6 @@ flow can prune a removed room's persisted offset from the same Store.
 _GLOBAL_UNIQUE_ID_KEYS: frozenset[str] = frozenset(
     {
         "home_temperature",
-        "kill_switch",
         "global_safe_dew_point",
         "algorithm_status",
         "last_update",
@@ -132,40 +130,10 @@ _GLOBAL_UNIQUE_ID_KEYS: frozenset[str] = frozenset(
 room segment). Excluded from room-removal registry cleanup so a room whose slug
 is a prefix of a global key (e.g. a room named "Home" vs ``home_temperature``)
 can never delete a global entity. Mirrors the global entity-description keys of
-the number / sensor / switch platforms (``home_temperature`` is
+the number / sensor platforms (``home_temperature`` is
 ``HOME_TEMPERATURE_DESCRIPTION.key`` in ``number.py`` — *not* the
 ``CONF_HOME_SETPOINT`` config key).
 """
-
-# ---------------------------------------------------------------------------
-# Advanced controller-knob NumberSelector specs: (field, min, max, step)
-# ---------------------------------------------------------------------------
-
-_CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
-    ("kp", 0.0, 50.0, 0.1),
-    ("ki", 0.0, 1.0, 0.001),
-    ("kt", 0.0, 50.0, 0.1),
-    ("deadband_c", 0.0, 5.0, 0.1),
-    ("valve_floor_pct", 0.0, 100.0, 1.0),
-    ("boost_offset_c", 0.0, 10.0, 0.1),
-    ("fast_min_on_minutes", 0.0, 60.0, 1.0),
-    ("fast_min_off_minutes", 0.0, 60.0, 1.0),
-    ("dew_margin_k", 0.0, 10.0, 0.1),
-    ("dew_ramp_k", 0.1, 10.0, 0.1),
-)
-"""Numeric :class:`ControllerConfig` fields exposed as advanced knobs.
-
-Units: ``kp`` in %/K, ``ki`` in %/(K*s), ``kt`` in %/(K/h), ``*_c`` / ``*_k``
-in kelvin, ``valve_floor_pct`` in percent, ``*_minutes`` in minutes.
-
-Note: the derivative gain ``kd`` is deliberately not exposed — Aneks §8.3
-forbids a derivative-on-error term, so ``ControllerConfig.kd`` stays at its
-``0.0`` default.
-"""
-
-_CONTROLLER_BOOL_KNOB: str = "outdoor_ff_enabled"
-"""Boolean :class:`ControllerConfig` field: outdoor-temperature feedforward."""
-
 
 # ---------------------------------------------------------------------------
 # Frozen, validated value objects collected by the wizard
@@ -274,14 +242,14 @@ def _controller_schema_dict(defaults: ControllerConfig) -> dict[Any, Any]:
         exposed :class:`ControllerConfig` field.
     """
     schema: dict[Any, Any] = {}
-    for field_name, low, high, step in _CONTROLLER_NUMBER_KNOBS:
+    for field_name, low, high, step in CONTROLLER_NUMBER_KNOBS:
         default_val = float(getattr(defaults, field_name))
         schema[vol.Optional(field_name, default=default_val)] = NumberSelector(
             NumberSelectorConfig(
                 min=low, max=high, step=step, mode=NumberSelectorMode.BOX
             )
         )
-    schema[vol.Optional(_CONTROLLER_BOOL_KNOB, default=defaults.outdoor_ff_enabled)] = (
+    schema[vol.Optional(CONTROLLER_BOOL_KNOB, default=defaults.outdoor_ff_enabled)] = (
         BooleanSelector()
     )
     return schema
@@ -302,11 +270,11 @@ def _parse_controller(user_input: dict[str, Any]) -> ControllerConfig:
     """
     kwargs: dict[str, Any] = {
         field_name: float(user_input[field_name])
-        for field_name, _low, _high, _step in _CONTROLLER_NUMBER_KNOBS
+        for field_name, _low, _high, _step in CONTROLLER_NUMBER_KNOBS
         if field_name in user_input
     }
-    if _CONTROLLER_BOOL_KNOB in user_input:
-        kwargs[_CONTROLLER_BOOL_KNOB] = bool(user_input[_CONTROLLER_BOOL_KNOB])
+    if CONTROLLER_BOOL_KNOB in user_input:
+        kwargs[CONTROLLER_BOOL_KNOB] = bool(user_input[CONTROLLER_BOOL_KNOB])
     return ControllerConfig(**kwargs)
 
 
@@ -448,12 +416,6 @@ def _room_attributes_schema_dict(
                 mode=NumberSelectorMode.BOX,
             )
         )
-    schema[
-        vol.Required(
-            CONF_PARTICIPATES,
-            default=bool(values.get(CONF_PARTICIPATES, DEFAULT_PARTICIPATES)),
-        )
-    ] = BooleanSelector()
     schema[vol.Required(CONF_HAS_FAST_SOURCE, default=has_fast_default)] = (
         BooleanSelector()
     )
@@ -619,7 +581,7 @@ def _first_entity_error(
 class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
     """Multi-step setup wizard for Tortoise-UFH."""
 
-    VERSION = 1
+    VERSION = 2
 
     @staticmethod
     def async_get_options_flow(
@@ -807,7 +769,6 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                 room[CONF_ENTITY_SUPPLY] = supply
                 room[CONF_ENTITY_RETURN] = returns
                 room[CONF_ROOM_OFFSET] = DEFAULT_ROOM_OFFSET_C
-                room[CONF_PARTICIPATES] = DEFAULT_PARTICIPATES
                 if room.get(CONF_HAS_FAST_SOURCE):
                     room[CONF_ENTITY_FAST_SOURCE] = fast_source
                 if is_first:
@@ -915,8 +876,8 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
       immutable) and entity mapping in place.
     * ``remove_room`` — pick a room, remove it from ``entry.data[CONF_ROOMS]``,
       delete its orphaned entity-registry entries and prune its per-room state.
-    * ``settings`` — per-room shadow<->live toggles, the global kill switch and
-      the advanced :class:`ControllerConfig` knobs (the original options form).
+    * ``settings`` — per-room control-state selects (off / shadow / live) and the
+      advanced :class:`ControllerConfig` knobs (the original options form).
 
     Room definitions live in ``entry.data`` (not ``entry.options``); the room
     leaves therefore persist through ``async_update_entry`` with a fresh
@@ -944,7 +905,14 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Per-room live control, the global kill switch and advanced knobs."""
+        """Per-room control-state selects and advanced controller knobs.
+
+        Provides an emergency / automation-free surface for the per-room control
+        state (off / shadow / live) alongside the advanced
+        :class:`ControllerConfig` knobs; the primary control surface is the
+        panel and the per-room ``select`` entities. Writes the state map to
+        ``entry.options[CONF_ROOM_STATE]``.
+        """
         entry = self.config_entry
         rooms: list[dict[str, Any]] = list(entry.data.get(CONF_ROOMS, []))
         errors: dict[str, str] = {}
@@ -958,36 +926,42 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 _LOGGER.warning("Invalid controller tuning: %s", err)
                 errors["base"] = "invalid_controller"
             else:
-                live_control: dict[str, bool] = {}
+                room_states: dict[str, str] = {}
                 for idx, room_cfg in enumerate(rooms):
                     room_name = str(room_cfg[CONF_ROOM_NAME])
-                    key = self._live_key(idx)
-                    live_control[room_name] = bool(user_input.get(key, False))
+                    key = self._state_key(idx)
+                    state = str(user_input.get(key, DEFAULT_ROOM_STATE))
+                    room_states[room_name] = (
+                        state if state in ROOM_STATES else DEFAULT_ROOM_STATE
+                    )
+                # Merge over the existing options so surfaces this form does not
+                # manage (notably the sparse per-room tuning map CONF_ROOM_TUNING,
+                # set from the panel) are preserved rather than wiped: an options
+                # flow's async_create_entry REPLACES entry.options wholesale.
                 return self.async_create_entry(
                     title="",
                     data={
-                        CONF_LIVE_CONTROL: live_control,
-                        CONF_KILL_SWITCH: bool(
-                            user_input.get(CONF_KILL_SWITCH, DEFAULT_KILL_SWITCH)
-                        ),
+                        **entry.options,
+                        CONF_ROOM_STATE: room_states,
                         CONF_CONTROLLER: asdict(controller),
                     },
                 )
 
-        current_live: dict[str, Any] = entry.options.get(CONF_LIVE_CONTROL, {})
+        current_states: dict[str, Any] = entry.options.get(CONF_ROOM_STATE, {})
         schema_dict: dict[Any, Any] = {}
         for idx, room_cfg in enumerate(rooms):
             room_name = str(room_cfg[CONF_ROOM_NAME])
-            default_live = bool(current_live.get(room_name, DEFAULT_LIVE_CONTROL))
-            schema_dict[vol.Optional(self._live_key(idx), default=default_live)] = (
-                BooleanSelector()
+            default_state = str(current_states.get(room_name, DEFAULT_ROOM_STATE))
+            if default_state not in ROOM_STATES:
+                default_state = DEFAULT_ROOM_STATE
+            schema_dict[vol.Optional(self._state_key(idx), default=default_state)] = (
+                SelectSelector(
+                    SelectSelectorConfig(
+                        options=list(ROOM_STATES),
+                        translation_key="control_state",
+                    )
+                )
             )
-        schema_dict[
-            vol.Optional(
-                CONF_KILL_SWITCH,
-                default=bool(entry.options.get(CONF_KILL_SWITCH, DEFAULT_KILL_SWITCH)),
-            )
-        ] = BooleanSelector()
         schema_dict.update(_controller_schema_dict(current_defaults))
 
         return self.async_show_form(
@@ -1041,9 +1015,6 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                     **room.as_dict(),
                     CONF_ROOM_OFFSET: float(
                         user_input.get(CONF_ROOM_OFFSET, DEFAULT_ROOM_OFFSET_C)
-                    ),
-                    CONF_PARTICIPATES: bool(
-                        user_input.get(CONF_PARTICIPATES, DEFAULT_PARTICIPATES)
                     ),
                 }
                 return await self.async_step_room_entities()
@@ -1129,9 +1100,6 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 self._pending_room = {
                     **room,
                     **room_def.as_dict(),
-                    CONF_PARTICIPATES: bool(
-                        user_input.get(CONF_PARTICIPATES, DEFAULT_PARTICIPATES)
-                    ),
                 }
                 return await self.async_step_room_entities()
 
@@ -1248,12 +1216,12 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 self._async_cleanup_room_entities(removed_name, all_names)
                 await self._async_prune_room_setpoint(removed_name)
                 remaining = [r for i, r in enumerate(rooms) if i != index]
-                live_control = {
-                    name: bool(value)
-                    for name, value in entry.options.get(CONF_LIVE_CONTROL, {}).items()
+                room_state = {
+                    name: str(value)
+                    for name, value in entry.options.get(CONF_ROOM_STATE, {}).items()
                     if name != removed_name
                 }
-                new_options = {**entry.options, CONF_LIVE_CONTROL: live_control}
+                new_options = {**entry.options, CONF_ROOM_STATE: room_state}
                 return self._save_rooms(remaining, options=new_options)
 
         names = [str(r[CONF_ROOM_NAME]) for r in rooms]
@@ -1399,8 +1367,8 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
             )
 
     @staticmethod
-    def _live_key(index: int) -> str:
-        """Return the per-room live-control form key.
+    def _state_key(index: int) -> str:
+        """Return the per-room control-state form key.
 
         Keyed on the room's positional index (not a lossy slug of its name) so
         the key is guaranteed unique even when two rooms have names that would
@@ -1410,9 +1378,9 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
             index: The room's position in the ``CONF_ROOMS`` list.
 
         Returns:
-            A per-room form key, e.g. ``"enable_live_control_0"``.
+            A per-room form key, e.g. ``"room_state_0"``.
         """
-        return f"enable_live_control_{index}"
+        return f"room_state_{index}"
 
     @staticmethod
     def _current_controller(entry: ConfigEntry) -> ControllerConfig:

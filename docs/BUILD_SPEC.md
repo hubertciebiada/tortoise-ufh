@@ -91,7 +91,7 @@ tortoise-ufh/
     number.py                        # global home-temp + per-room offset (writable)
     sensor.py                        # per-room report/diagnostics + GLOBAL safe dew-point sensor
     binary_sensor.py                 # per-room flags (sensor_lost, saturated, live/shadow, safety)
-    switch.py                        # global kill-switch (off = emit no commands)
+    select.py                        # per-room control-state select (off / shadow / live)
     websocket.py                     # panel API commands (get/set config, live data)
     panel.py                         # register sidebar panel + static path for the JS module
     services.yaml                    # set_home_temperature, set_room_offset, set_mode
@@ -203,6 +203,9 @@ class RoomReport:
     integrator_frozen: bool
     flags: tuple[str, ...] = ()              # e.g. "sensor_lost","fast_source_min_runtime","s2_condensation"
     explanation: str = ""                    # short "what & why" text
+    room_temperature_c: float | None = None  # ADDITIVE: echoed measured room temp, None if sensor lost
+    dew_excluded_reason: str | None = None   # ADDITIVE: None if eligible, else not_cooling_mode|cooling_disabled|no_temperature|no_humidity
+    fast_dwell_remaining_s: float | None = None  # ADDITIVE: min ON/OFF dwell lock remaining [s], None if unlocked / no fast source
 
 @dataclass(frozen=True)
 class RoomOutputs:
@@ -220,6 +223,23 @@ class BuildingOutputs:
 **Report must be JSON-serializable** (provide `to_dict()` helpers on `RoomOutputs`/`RoomReport`/
 `BuildingOutputs` returning plain dict/list/str/float/bool; enums -> their `.value`). The HA websocket
 and the panel consume these dicts.
+
+`room_temperature_c` is an **additive, non-breaking** report field (default `None`, appended after
+`explanation` so positional constructors are unaffected). Every `RoomReport` construction site echoes
+the room's measured temperature into it (`None` when the sensor is lost); the panel reads it directly
+instead of reconstructing the measurement from `setpoint - error_c`, which can transiently disagree
+with the broadcast setpoint between a setpoint rebroadcast and the next recompute.
+
+`dew_excluded_reason` and `fast_dwell_remaining_s` are **additive, non-breaking** report fields
+(default `None`, appended after `room_temperature_c`). `dew_excluded_reason` is computed by the pure
+`classify_dew_eligibility(RoomInputs) -> str | None` helper in `controller.py`, the single source of
+truth shared with `BuildingController._eligible_dew_point` (one classifier, two consumers): `None`
+means the room IS eligible for the global safe dew point (COOLING + `cooling_enabled` + usable temp +
+humidity), otherwise one of `not_cooling_mode` / `cooling_disabled` / `no_temperature` / `no_humidity`
+explains why it is excluded (panel surfaces it when the global safe dew point is `None`).
+`fast_dwell_remaining_s` is the seconds left on the fast source's min ON/OFF dwell lock for its
+current state (min-ON while running, min-OFF while idle), `None` once elapsed or when there is no fast
+source; the panel renders it as "unlocks in ~N min".
 
 ---
 
@@ -432,20 +452,26 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   `integration_type:"hub"`, `iot_class:"local_polling"`, `loggers:["tortoise_ufh"]`,
   `requirements:["numpy>=1.26","scipy>=1.12"]`, `version:"0.1.0"`, `codeowners:["@hubertciebiada"]`,
   `documentation`/`issue_tracker` -> github `hubertciebiada/tortoise-ufh`.
-- **`const.py`**: `DOMAIN`, `PLATFORMS=[NUMBER, SENSOR, BINARY_SENSOR, SWITCH]`, `UPDATE_INTERVAL_MINUTES=5`,
+- **`const.py`**: `DOMAIN`, `PLATFORMS=[NUMBER, SENSOR, BINARY_SENSOR, SELECT]`, `UPDATE_INTERVAL_MINUTES=5`,
   full `CONF_*` vocabulary (home_setpoint, mode entity, per-room: temp/humidity/outdoor/valves(list)/
-  supply(list)/return(list)/fast_source entity+kind/offset/enabled/cooling_enabled/participates),
-  `WATCHDOG_TIMEOUT_MINUTES=15`, unit sets (°C/%/W), `ENTITY_STALE_MAX_SECONDS=300`,
-  `CONF_LIVE_CONTROL`, `CONF_KILL_SWITCH`.
+  supply(list)/return(list)/fast_source entity+kind/offset/enabled/cooling_enabled),
+  `WATCHDOG_TIMEOUT_MINUTES=15`, unit sets (°C/%/W), `ENTITY_STALE_MAX_SECONDS=300`. **Canonical
+  per-room control state:** `CONF_ROOM_STATE` (options map `{room: state}`), `ROOM_STATE_OFF/SHADOW/LIVE`,
+  `ROOM_STATES`, `DEFAULT_ROOM_STATE = "shadow"`. `CONF_LIVE_CONTROL` / `CONF_PARTICIPATES` remain only so
+  `async_migrate_entry` can read a legacy v1 entry; the kill-switch key is retired (no constant).
 - **`coordinator.py`** (`TortoiseUfhCoordinator(DataUpdateCoordinator)`, 5-min): builds one
   `BuildingController`; each cycle READS source entity states (`_read_float_state` with stale cache like
   blueprint), assembles `dict[str, RoomInputs]`, calls `BuildingController.step`, stores typed payload
-  (per-room outputs+report, global dew point, watchdog/status), and — for rooms with live control AND
-  the global kill-switch OFF-not-engaged — WRITES: valve via `number.set_value` (all the room's valve
+  (per-room outputs+report, global dew point, watchdog/status), and — for rooms whose control state is
+  **`live`** — WRITES: valve via `number.set_value` (all the room's valve
   entities, but only when the new value differs from last by >= `valve_write_threshold_pct`), split via
   `climate.set_hvac_mode` + `climate.set_temperature`. All writes `blocking=False`, try/except +
   `_LOGGER.exception` (`# noqa: BLE001`). Watchdog + shadow-mode identical pattern to blueprint.
-  **Kill-switch ON or shadow mode => compute + report but emit NO commands.**
+  Holds `_room_states: dict[str, str]` (seeded from `CONF_ROOM_STATE`); `get_room_state`/`set_room_state`
+  (`@callback`, persists options WITHOUT reload — `options_require_reload` treats a state-only change as
+  no-reload so the PID integrator survives). Derived: `participates := state != off` (→ `Mode.OFF` when
+  off), `write := state == live`.
+  **Any room in `off` or `shadow` => compute + report but emit NO commands; only `live` writes.**
 - **`number.py`**: `NumberEntity` for global **home temperature** (writable; range 5..30, step 0.5) and
   one per-room **offset** (writable; range -5..+5, step 0.5). `async_set_native_value` -> coordinator
   setter -> `async_set_updated_data`. These are the setpoint source of truth (config exposure decision).
@@ -454,19 +480,24 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   sensor `global_safe_dew_point`** (°C) = coordinator's `global_safe_dew_point_c` — the value the owner
   pipes to the HP; plus global `algorithm_status`, `last_update` (TIMESTAMP), `watchdog_status`.
 - **`binary_sensor.py`**: per-room `sensor_lost`, `output_saturated`, `s2_condensation_active`,
-  `live_control`. **`switch.py`**: global `kill_switch` (on = module emits no commands) and per-room
-  `live_control` toggle (shadow<->live).
+  `live_control` (RUNNING device class; derived, on when state == live). **`select.py`**: one per-room
+  `control_state` select (`off` / `shadow` / `live`, `translation_key="control_state"`,
+  `EntityCategory.CONFIG`); `async_select_option` → `coordinator.set_room_state`. This native select
+  replaced the retired global kill-switch and per-room `live_control` switch (both purged by migration).
 - **`config_flow.py`**: multi-step wizard with selectors (blueprint §2 pattern). Valve selector uses
   `EntitySelectorConfig(domain=["number"])` **multiple=True** (a room has 1..n valves); supply/return
   `domain=["sensor"], device_class=["temperature"]` (per loop, multiple); room temp sensor+temperature;
   humidity `device_class=["humidity"]`; fast source `domain=["climate"]`; global mode entity
-  `domain=["select","input_select"]`. Rooms can be seeded from HA areas but manual add is fine. Options
-  flow: per-room live-control booleans + kill switch + advanced controller knobs (hidden by default).
-  Use `entity_validator.py` (unit-only, hardware-agnostic).
+  `domain=["select","input_select"]`. Rooms can be seeded from HA areas but manual add is fine. Config
+  flow `VERSION = 2`; `async_migrate_entry` folds legacy v1 (`participates` + `live_control` +
+  `kill_switch`) into `CONF_ROOM_STATE` (safety precedence: `participates == false` ⇒ `off`). Options
+  flow settings step: per-room control-state select (off/shadow/live) + advanced controller knobs (hidden
+  by default). Use `entity_validator.py` (unit-only, hardware-agnostic).
 - **`websocket.py`**: register WS commands `tortoise_ufh/get_config`, `tortoise_ufh/get_live`
-  (returns `BuildingOutputs.to_dict()` + setpoints + statuses), `tortoise_ufh/set_home_temperature`,
-  `tortoise_ufh/set_room_offset`, `tortoise_ufh/set_room_enabled`, `tortoise_ufh/set_mode`,
-  `tortoise_ufh/set_kill_switch`. Each `@websocket_api.websocket_command` + `@callback`, admin-guarded.
+  (returns `BuildingOutputs.to_dict()` + setpoints + per-room `control_state` + statuses),
+  `tortoise_ufh/set_home_temperature`, `tortoise_ufh/set_room_offset`,
+  `tortoise_ufh/set_room_state` (`{room, state ∈ ROOM_STATES}`), `tortoise_ufh/set_mode`.
+  Each `@websocket_api.websocket_command` + `@callback`, admin-guarded.
 - **`panel.py`** + `__init__.py`: serve `frontend/tortoise-ufh-panel.js` via
   `hass.http.async_register_static_paths([StaticPathConfig("/tortoise_ufh_panel/panel.js", <path>,
   False)])` and register a custom sidebar panel with
@@ -484,9 +515,10 @@ A single ES module defining `class TortoiseUfhPanel extends HTMLElement` and
 properties on the element. **No imports from CDNs** (CSP) — plain DOM + inline `<style>` in a shadow root.
 Must render:
 - Header with global **home temperature** (editable -> `set_home_temperature` WS) and **mode** selector
-  (`set_mode`) and a **kill-switch** toggle.
+  (`set_mode`). A whole-home stop is expressed as putting rooms in `off`/`shadow` (no separate kill toggle).
 - A **table, one row per room** (from `get_config`): name, current temp, setpoint (=global+offset),
-  error, valve %, fast-source state, status; editable **offset** and **participation/live** toggles.
+  error, valve %, fast-source state, status; editable **offset** and a **control-state** control
+  (off / shadow / live -> `set_room_state` WS).
 - A **live preview** panel per selected room showing the full **report** JSON (the "okno do black-boxa",
   readable for human + AI). Poll `get_live` every ~5 s (or subscribe if you add an event).
 - Light/dark aware via `hass.themes`; degrade gracefully if a WS command errors (show message, never

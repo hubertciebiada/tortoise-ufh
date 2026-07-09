@@ -90,9 +90,8 @@
       },
       "settings": {
         "title": "Sterowanie i strojenie",
-        "description": "Włącz sterowanie na żywo dla poszczególnych pomieszczeń. Po włączeniu Tortoise-UFH aktywnie steruje zaworami i szybkim źródłem danego pomieszczenia; pomieszczenia wyłączone pozostają w trybie cichym (tylko odczyt). Załączenie wyłącznika awaryjnego wstrzymuje wysyłanie wszystkich poleceń, a regulator nadal liczy i raportuje.",
+        "description": "Ustaw stan sterowania każdego pomieszczenia — wyłączony (poza sterowaniem), obserwuje (tylko liczy i raportuje) lub steruje (napędza zawory i szybkie źródło) — oraz dostosuj zaawansowane wzmocnienia regulatora. Głównym interfejsem są panel i encje select stanu sterowania; ten formularz to awaryjna alternatywa bez automatyzacji.",
         "data": {
-          "kill_switch": "Wyłącznik awaryjny (nie wysyłaj poleceń)",
           "kp": "Wzmocnienie proporcjonalne kp (%/K)",
           "ki": "Wzmocnienie całkujące ki (%/(K·s))",
           "kt": "Wzmocnienie tłumienia trendu kt (%/(K/h))",
@@ -113,7 +112,6 @@
           "room_name": "Nazwa pomieszczenia",
           "room_area": "Powierzchnia podłogi (m²)",
           "room_offset": "Korekta pomieszczenia względem nastawy domu (K)",
-          "participates": "Udział w sterowaniu",
           "has_fast_source": "To pomieszczenie ma szybkie źródło pomocnicze",
           "fast_source_kind": "Szybkie źródło (split / grzałka)",
           "cooling_enabled": "Udział w chłodzeniu podłogowym"
@@ -132,7 +130,6 @@
         "data": {
           "room_area": "Powierzchnia podłogi (m²)",
           "room_offset": "Korekta pomieszczenia względem nastawy domu (K)",
-          "participates": "Udział w sterowaniu",
           "has_fast_source": "To pomieszczenie ma szybkie źródło pomocnicze",
           "fast_source_kind": "Szybkie źródło (split / grzałka)",
           "cooling_enabled": "Udział w chłodzeniu podłogowym"
@@ -177,12 +174,31 @@
     }
   },
   "entity": {
+    "select": {
+      "control_state": {
+        "name": "Stan sterowania",
+        "state": {
+          "off": "Wyłączony",
+          "shadow": "Obserwuje",
+          "live": "Steruje"
+        }
+      }
+    },
     "sensor": {
       "i_term": {
         "name": "Człon całkujący (% zaworu)"
       },
       "trend_term": {
         "name": "Człon tłumienia trendu (% zaworu)"
+      }
+    }
+  },
+  "selector": {
+    "control_state": {
+      "options": {
+        "off": "Wyłączony",
+        "shadow": "Obserwuje",
+        "live": "Steruje"
       }
     }
   }

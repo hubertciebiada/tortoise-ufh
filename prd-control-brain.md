@@ -250,6 +250,9 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 - Ochrona posadzki bez sondy podłogi: temp. wody zasilającej + ostrożne zakresy pozycji.
 - Moduł jest **jedynym właścicielem** zaworów i splitów pokoi z udziałem. Na zewnątrz: globalny tryb,
   kill-switch (off = brak komend), właściciel strony wodnej (PC/CWU).
+  > **Zmienione w v2 — patrz §8.11.** Kill-switch oraz per-pokojowe boole udziału/live-control
+  > scalono w jeden kanoniczny 3-stan pokoju (`off` / `shadow` / `live`). „Wszystko stop" =
+  > wszystkie pokoje w `off`/`shadow`.
 
 ### 8.8 Trzy wyjścia + raport (kontrakt)
 1. **Per-pokój:** pozycja zaworów 0–100% (jedna na strefę).
@@ -261,6 +264,8 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 ### 8.9 Wdrożenie i jakość
 - **Shadow / dry-run** przełącznikiem: liczy i loguje pełny raport, **nie wysyła komend**; potem LIVE
   (per-pokój przejmowanie). Panel daje dobry podgląd (człowiek + agent AI).
+  > **v2:** „shadow/live" per pokój to teraz stany kanonicznego 3-stanu `RoomControlState` (§8.11),
+  > a nie osobny przełącznik obok flagi udziału.
 - **Symulator (cyfrowy bliźniak)** wzorowany na `pump-ahead` (RC 3R3C ZOH przez `expm`,
   `BuildingSimulator`/`SimulatedRoom`, `SyntheticWeather`, `SensorNoise`, `SimMetrics` + asercje) — do
   strojenia PID offline i testów scenariuszowych. `T_slab` istnieje jako ground-truth w symulatorze, ale
@@ -271,3 +276,28 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 - MPC / optymalizacja horyzontu / taryfy, model-learning / identyfikacja RC online, sterowanie pompą
   ciepła i stroną wodną, sonda podłogi, rekuperator/CO₂/free-cooling. (Floor cooling **przeniesione DO
   v1** — §8.4.)
+
+### 8.11 Rewizja (v2) — kanoniczny 3-stan pokoju zamiast kill-switcha
+> **To JAWNY rewers zamrożonej decyzji z §8.7/§8.9.** Odnotowane jako świadoma, datowana zmiana
+> kontraktu (nie dryf). Szczegóły i tabela stanów: `docs/DECISIONS.md` §4.
+
+Pierwotny wywiad zamroził **trzy** oddzielne sterowania udziałem: per-pokojową **flagę udziału**
+(§8.2), per-pokojowy **przełącznik shadow/live** (§8.9) oraz **globalny kill-switch** (§8.7). W praktyce
+kodowały jedno pytanie na pokój — *ile autorytetu ma tu Tortoise-UFH?* — ze stanami nadmiarowymi i
+zachodzącymi na siebie, a kill-switch był słabszy niż „wszystkie pokoje w shadow".
+
+**Decyzja (v2):** scalić je w **jeden `RoomControlState` na pokój**:
+- `off` — pokój poza sterowaniem (rdzeń dostaje `Mode.OFF`: zawór zamrożony, szybkie źródło bezczynne);
+  liczy i raportuje, **nie pisze**.
+- `shadow` — liczy i raportuje, **nie pisze** (dry-run). **Domyślny** dla nowego pokoju.
+- `live` — liczy, raportuje **i pisze** do sprzętu.
+
+Wyprowadzenia: `udział := stan != off`, `pisz := stan == live`. Źródło prawdy:
+`entry.options[CONF_ROOM_STATE] = {pokój: stan}`. „Wszystko stop" = wszystkie pokoje `off`/`shadow`.
+Powierzchnie: encja `select` (`control_state`), panel, komenda WS `tortoise_ufh/set_room_state`, krok
+`settings` w options-flow (awaryjne UI). Zmiana samego stanu **nie przeładowuje** wpisu (integrator PID
+zachowany). **Migracja v1→v2** (jednorazowa): precedencja bezpieczeństwa — `udział == false` ⇒ `off`
+(wygrywa nad `live_control == true`); inaczej `live_control` decyduje `live`/`shadow`; klucze
+`participates`/`live_control`/`kill_switch` oraz encje `switch.*_kill_switch` / `switch.*_live_control`
+zostają usunięte (zastąpione przez `select.*_control_state`). Bez zmian: trzy wyjścia (§8.8), degradacja
+przy utracie czujnika (§8.7), warstwy punktu rosy (§8.4), prawo sterowania (§8.3).

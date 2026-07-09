@@ -90,9 +90,8 @@
       },
       "settings": {
         "title": "Control & Tuning",
-        "description": "Enable live control per room. When enabled, Tortoise-UFH actively drives valves and the fast source for that room; disabled rooms stay in shadow (read-only) mode. Engaging the kill switch stops all command output while the controller keeps computing and reporting.",
+        "description": "Set each room's control state — off (excluded from control), shadow (computed and reported only) or live (drives its valves and fast source) — and adjust the advanced controller gains. The panel and the per-room control-state select entities are the primary surface; this form is an emergency / automation-free fallback.",
         "data": {
-          "kill_switch": "Kill switch (emit no commands)",
           "kp": "Proportional gain kp (%/K)",
           "ki": "Integral gain ki (%/(K·s))",
           "kt": "Trend-damping gain kt (%/(K/h))",
@@ -113,7 +112,6 @@
           "room_name": "Room name",
           "room_area": "Floor area (m²)",
           "room_offset": "Room offset from home setpoint (K)",
-          "participates": "Participates in control",
           "has_fast_source": "This room has a fast auxiliary source",
           "fast_source_kind": "Fast source (split / heater)",
           "cooling_enabled": "Participates in floor cooling"
@@ -132,7 +130,6 @@
         "data": {
           "room_area": "Floor area (m²)",
           "room_offset": "Room offset from home setpoint (K)",
-          "participates": "Participates in control",
           "has_fast_source": "This room has a fast auxiliary source",
           "fast_source_kind": "Fast source (split / heater)",
           "cooling_enabled": "Participates in floor cooling"
@@ -177,12 +174,31 @@
     }
   },
   "entity": {
+    "select": {
+      "control_state": {
+        "name": "Control state",
+        "state": {
+          "off": "Off",
+          "shadow": "Shadow",
+          "live": "Live"
+        }
+      }
+    },
     "sensor": {
       "i_term": {
         "name": "Integral term (valve %)"
       },
       "trend_term": {
         "name": "Trend-damping term (valve %)"
+      }
+    }
+  },
+  "selector": {
+    "control_state": {
+      "options": {
+        "off": "Off",
+        "shadow": "Shadow",
+        "live": "Live"
       }
     }
   }

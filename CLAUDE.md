@@ -71,8 +71,12 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
 - **Split = ON + mode + temp, anti priority-inversion.** The split decision NEVER reduces or
   holds the valve — the floor stays the base source. Split only *adds* boost above
   `boost_offset_c` and releases inside the comfort band. Respects min-ON / min-OFF timers.
-- **Shadow mode.** Per-room live-control toggle + global kill-switch. Kill-switch ON or shadow
-  mode ⇒ compute + report but emit NO commands.
+- **Per-room control state (`RoomControlState = off | shadow | live`).** One canonical
+  three-state per room (adapter `select` entity + panel + `set_room_state` WS), stored in
+  `entry.options[CONF_ROOM_STATE]`. `off` ⇒ core sees `Mode.OFF` (valve held, fast source idle);
+  `shadow` ⇒ compute + report but emit NO commands; `live` ⇒ compute, report AND write. A
+  whole-home stop = every room `off`/`shadow`. This REVERSED the frozen global kill-switch +
+  per-room live-control-boolean decision (config-entry migration v1→v2; see docs/DECISIONS.md).
 - **Sensor loss ⇒ freeze valve + split off** (see valve rule above). Integrator freezes when
   `hp_active_for_ufh is False` (DHW/defrost).
 

@@ -32,6 +32,7 @@ from custom_components.tortoise_ufh.core.controller import (
     GLOBAL_SAFE_DEW_MARGIN_K,
     BuildingController,
     RoomController,
+    classify_dew_eligibility,
 )
 from custom_components.tortoise_ufh.core.dew_point import dew_point
 from custom_components.tortoise_ufh.core.models import (
@@ -40,6 +41,7 @@ from custom_components.tortoise_ufh.core.models import (
     LoopInput,
     Mode,
     RoomInputs,
+    RoomOutputs,
 )
 
 
@@ -575,3 +577,230 @@ class TestReportPopulated:
         assert isinstance(data["valve_position_pct"], float)
         assert isinstance(data["report"]["flags"], list)
         assert data["fast_source"]["mode"] in {"off", "heating", "cooling"}
+        assert data["report"]["room_temperature_c"] == pytest.approx(19.0)
+
+
+class TestRoomTemperatureEcho:
+    """The report echoes the measured room temperature on every path."""
+
+    @pytest.mark.unit
+    def test_active_heating_echoes_measurement(self) -> None:
+        """The HEATING/COOLING PID path echoes the measured room temperature."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(mode=Mode.HEATING, room_temperature_c=19.3),
+            dt_seconds=300.0,
+        )
+        assert out.report.room_temperature_c == pytest.approx(19.3)
+
+    @pytest.mark.unit
+    def test_off_path_echoes_measurement(self) -> None:
+        """The OFF path echoes the measured room temperature."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(mode=Mode.OFF, room_temperature_c=20.7),
+            dt_seconds=300.0,
+        )
+        assert out.report.room_temperature_c == pytest.approx(20.7)
+
+    @pytest.mark.unit
+    def test_transitional_path_echoes_measurement(self) -> None:
+        """The TRANSITIONAL path echoes the measured room temperature."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(mode=Mode.TRANSITIONAL, room_temperature_c=22.1),
+            dt_seconds=300.0,
+        )
+        assert out.report.room_temperature_c == pytest.approx(22.1)
+
+    @pytest.mark.unit
+    def test_cooling_disabled_path_echoes_measurement(self) -> None:
+        """The cooling-disabled path echoes the measured room temperature."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(
+                mode=Mode.COOLING,
+                setpoint_c=23.0,
+                room_temperature_c=25.4,
+                cooling_enabled=False,
+            ),
+            dt_seconds=300.0,
+        )
+        assert "cooling_disabled" in out.report.flags
+        assert out.report.room_temperature_c == pytest.approx(25.4)
+
+    @pytest.mark.unit
+    def test_sensor_lost_path_reports_none(self) -> None:
+        """A lost sensor reports ``room_temperature_c`` as ``None``, not a fake."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(room_temperature_c=None),
+            dt_seconds=300.0,
+        )
+        assert "sensor_lost" in out.report.flags
+        assert out.report.room_temperature_c is None
+
+    @pytest.mark.unit
+    def test_unknown_room_echoes_measurement(self) -> None:
+        """An unknown room echoes its input measurement into the report."""
+        building = BuildingController({"a": ControllerConfig()})
+        out = building.step(
+            {"ghost": make_inputs(room_temperature_c=18.2)},
+            dt_seconds=300.0,
+        )
+        report = out.rooms["ghost"].report
+        assert "unknown_room" in report.flags
+        assert report.room_temperature_c == pytest.approx(18.2)
+
+
+class TestDewExcludedReason:
+    """Classification of a room's safe-dew-point eligibility (one logic)."""
+
+    @pytest.mark.unit
+    def test_eligible_cooling_room_has_none_reason(self) -> None:
+        """A cooling, humid, cooling-enabled room is eligible (reason None)."""
+        inputs = make_inputs(
+            mode=Mode.COOLING,
+            setpoint_c=23.0,
+            room_temperature_c=25.0,
+            humidity_pct=60.0,
+        )
+        assert classify_dew_eligibility(inputs) is None
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(inputs, dt_seconds=300.0)
+        assert out.report.dew_excluded_reason is None
+
+    @pytest.mark.unit
+    def test_not_cooling_mode_reason(self) -> None:
+        """A heating room is excluded with ``not_cooling_mode``."""
+        inputs = make_inputs(
+            mode=Mode.HEATING, room_temperature_c=20.0, humidity_pct=55.0
+        )
+        assert classify_dew_eligibility(inputs) == "not_cooling_mode"
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(inputs, dt_seconds=300.0)
+        assert out.report.dew_excluded_reason == "not_cooling_mode"
+
+    @pytest.mark.unit
+    def test_cooling_disabled_reason(self) -> None:
+        """A cooling-opt-out room is excluded with ``cooling_disabled``."""
+        inputs = make_inputs(
+            mode=Mode.COOLING,
+            setpoint_c=23.0,
+            room_temperature_c=25.0,
+            humidity_pct=60.0,
+            cooling_enabled=False,
+        )
+        assert classify_dew_eligibility(inputs) == "cooling_disabled"
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(inputs, dt_seconds=300.0)
+        assert out.report.dew_excluded_reason == "cooling_disabled"
+
+    @pytest.mark.unit
+    def test_no_temperature_reason(self) -> None:
+        """A cooling room with a lost sensor is excluded with ``no_temperature``."""
+        inputs = make_inputs(
+            mode=Mode.COOLING,
+            setpoint_c=23.0,
+            room_temperature_c=None,
+            humidity_pct=60.0,
+        )
+        assert classify_dew_eligibility(inputs) == "no_temperature"
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(inputs, dt_seconds=300.0)
+        assert out.report.dew_excluded_reason == "no_temperature"
+
+    @pytest.mark.unit
+    def test_no_humidity_reason(self) -> None:
+        """A cooling room without humidity is excluded with ``no_humidity``."""
+        for rh in (None, 0.0):
+            inputs = make_inputs(
+                mode=Mode.COOLING,
+                setpoint_c=23.0,
+                room_temperature_c=25.0,
+                humidity_pct=rh,
+            )
+            assert classify_dew_eligibility(inputs) == "no_humidity"
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(
+                mode=Mode.COOLING,
+                setpoint_c=23.0,
+                room_temperature_c=25.0,
+                humidity_pct=None,
+            ),
+            dt_seconds=300.0,
+        )
+        assert out.report.dew_excluded_reason == "no_humidity"
+
+    @pytest.mark.unit
+    def test_classifier_matches_eligible_dew_point(self) -> None:
+        """The classifier and the building's dew-point gate agree per room."""
+        building = BuildingController({"salon": ControllerConfig()})
+        # Eligible cooling room contributes to the global maximum.
+        eligible = make_inputs(
+            mode=Mode.COOLING,
+            setpoint_c=23.0,
+            room_temperature_c=26.0,
+            humidity_pct=70.0,
+        )
+        out = building.step({"salon": eligible}, dt_seconds=300.0)
+        assert out.global_safe_dew_point_c is not None
+        # Excluded (no humidity) yields no global value.
+        excluded = make_inputs(
+            mode=Mode.COOLING,
+            setpoint_c=23.0,
+            room_temperature_c=26.0,
+            humidity_pct=None,
+        )
+        out2 = building.step({"salon": excluded}, dt_seconds=300.0)
+        assert out2.global_safe_dew_point_c is None
+
+
+class TestFastDwellRemaining:
+    """The ``fast_dwell_remaining_s`` report field counts down the min dwell."""
+
+    @pytest.mark.unit
+    def test_no_fast_source_reports_none(self) -> None:
+        """A room without a fast source reports no dwell timer."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(make_inputs(room_temperature_c=19.0), dt_seconds=300.0)
+        assert out.report.fast_dwell_remaining_s is None
+
+    @pytest.mark.unit
+    def test_dwell_counts_down_then_clears(self) -> None:
+        """After engaging, the min-ON lock counts down and clears to None."""
+        cfg = ControllerConfig(
+            boost_offset_c=1.0, fast_min_on_minutes=10.0, deadband_c=0.3
+        )
+        controller = RoomController(cfg, name="salon")
+
+        def demand(temp: float) -> RoomOutputs:
+            return controller.step(
+                make_inputs(
+                    setpoint_c=21.0,
+                    room_temperature_c=temp,
+                    fast_source_kind=FastSourceKind.SPLIT,
+                ),
+                dt_seconds=300.0,
+            )
+
+        # Engage (demand 2 K): timer resets to 0, min-ON lock = 600 s remains.
+        engaged = demand(19.0)
+        assert engaged.fast_source.on is True
+        assert engaged.report.fast_dwell_remaining_s == pytest.approx(600.0)
+
+        # 300 s later, satisfied but min-ON blocks release: 300 s remain.
+        blocked = demand(21.0)
+        assert blocked.fast_source.on is True
+        assert "fast_source_min_runtime" in blocked.report.flags
+        assert blocked.report.fast_dwell_remaining_s == pytest.approx(300.0)
+
+        # 600 s total reaches min-ON: the split releases, min-OFF lock starts.
+        released = demand(21.0)
+        assert released.fast_source.on is False
+        assert released.report.fast_dwell_remaining_s == pytest.approx(600.0)
+
+        # Idle and satisfied: the min-OFF lock elapses, then clears to None.
+        assert demand(21.0).report.fast_dwell_remaining_s == pytest.approx(300.0)
+        assert demand(21.0).report.fast_dwell_remaining_s is None

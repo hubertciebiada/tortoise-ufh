@@ -193,6 +193,23 @@ class RoomReport:
         integrator_frozen: Whether the PID integrator was frozen this step.
         flags: Diagnostic flag strings (e.g. ``"sensor_lost"``).
         explanation: Short "what & why" text.
+        room_temperature_c: Measured room air temperature [degC] echoed from the
+            room inputs, or ``None`` when the sensor is lost. Surfaced so the
+            panel shows the true measurement instead of reconstructing it from
+            ``setpoint - error_c`` (which can transiently disagree with the
+            broadcast setpoint). Additive, non-breaking field (defaults to
+            ``None`` for compatibility with older report constructors).
+        dew_excluded_reason: Why this room is excluded from the global safe
+            dew-point maximum, or ``None`` when the room IS eligible (COOLING,
+            ``cooling_enabled`` and usable temperature + humidity). One of
+            ``"not_cooling_mode"``, ``"cooling_disabled"``, ``"no_temperature"``,
+            ``"no_humidity"``. Additive, non-breaking field (defaults to
+            ``None``); the panel uses it to explain a missing safe dew point.
+        fast_dwell_remaining_s: Seconds remaining until the fast source may
+            change on/off state under its min ON/OFF dwell lock, or ``None`` when
+            the lock has already elapsed or there is no fast source. Additive,
+            non-breaking field (defaults to ``None``); the panel renders it as
+            "unlocks in ~N min".
 
     Raises:
         ValueError: If ``dew_throttle_factor`` is outside [0, 1].
@@ -212,6 +229,9 @@ class RoomReport:
     integrator_frozen: bool
     flags: tuple[str, ...] = ()  # e.g. "sensor_lost","s2_condensation"
     explanation: str = ""  # short "what & why" text
+    room_temperature_c: float | None = None  # echoed measurement, None if lost
+    dew_excluded_reason: str | None = None  # why excluded from safe dew point
+    fast_dwell_remaining_s: float | None = None  # min ON/OFF lock remaining [s]
 
     def __post_init__(self) -> None:
         """Validate the dew-point throttle factor range."""
@@ -242,6 +262,9 @@ class RoomReport:
             "integrator_frozen": self.integrator_frozen,
             "flags": list(self.flags),
             "explanation": self.explanation,
+            "room_temperature_c": self.room_temperature_c,
+            "dew_excluded_reason": self.dew_excluded_reason,
+            "fast_dwell_remaining_s": self.fast_dwell_remaining_s,
         }
 
 

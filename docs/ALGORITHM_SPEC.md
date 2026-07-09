@@ -42,8 +42,9 @@ the full benefit of PI + trend damping — it simply has no fast fallback when t
 
 ### 1.2 Operating modes (one global house mode)
 
-A single global house mode (`Mode` enum) drives every room; per room only *participation*,
-*cooling participation* and *offset* differ.
+A single global house mode (`Mode` enum) drives every room; per room only the *control state*
+(off / shadow / live — `off` maps to `Mode.OFF` in the core), *cooling participation* and *offset*
+differ.
 
 | `Mode` | Valve | Fast source |
 |--------|-------|-------------|
@@ -439,9 +440,11 @@ timer for safety conditions (lost sensor, OFF mode).
 `BuildingController.step` never raises on a single room: it catches `(ValueError, ArithmeticError)`
 per room and substitutes a degraded `RoomOutputs`. A **watchdog** (HA adapter): no fresh data
 > 15 min → emergency/alarm state in the report (recovery after 5 min). The module is the *sole
-owner* of participating rooms' valves and splits; externally there is only the global mode, a
-kill-switch (off = emit no commands), and the water-side owner (heat pump / DHW). Kill-switch ON or
-shadow mode → compute + full report but emit **no** commands. Floor protection without a slab sensor
+owner* of participating rooms' valves and splits; externally there is only the global mode, the
+per-room control state (off / shadow / live), and the water-side owner (heat pump / DHW). A room in
+**off** (core fed `Mode.OFF`, valve held) or **shadow** → compute + full report but emit **no**
+commands; only a **live** room writes. A whole-home stop is every room off/shadow (the per-room
+three-state replaced the earlier global kill-switch in v2). Floor protection without a slab sensor
 relies on the supply-water temperature proxy (safety rules S1/S2) plus conservative valve ranges.
 
 ---
@@ -471,7 +474,7 @@ relies on the supply-water temperature proxy (safety rules S1/S2) plus conservat
 2. **Simulation (`-m simulation`, seed 12345):** a session-scoped `run_scenario` harness returning
    `(SimulationLog, SimMetrics)`; parametrized scenarios calling `assert_*` per room.
 3. **Shadow mode on the live system:** the coordinator computes and logs the full report but emits
-   no commands until a room is switched live (Aneks §8.9).
+   no commands until a room's control state is switched to `live` (Aneks §8.9 / §8.11).
 
 ### 10.3 Scenario library and acceptance metrics
 

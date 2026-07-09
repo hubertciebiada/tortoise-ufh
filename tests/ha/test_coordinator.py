@@ -2,7 +2,7 @@
 
 Exercises the coordinator through the real config-entry setup (see
 ``conftest.py``): the typed payload it stores, its response to a changed source
-sensor, and the shadow/live/kill-switch gating of actuator writes. The actuator
+sensor, and the off/shadow/live gating of actuator writes. The actuator
 service calls (``number.set_value`` / ``climate.*``) are intercepted by
 registering mock service handlers (``async_mock_service``) so we assert on what
 the coordinator *would* write. ``ServiceRegistry.async_call`` is a read-only
@@ -17,7 +17,12 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from pytest_homeassistant_custom_component.common import async_mock_service
 
-from custom_components.tortoise_ufh.const import CONF_ENTITY_VALVES
+from custom_components.tortoise_ufh.const import (
+    CONF_ENTITY_VALVES,
+    ROOM_STATE_LIVE,
+    ROOM_STATE_OFF,
+    ROOM_STATE_SHADOW,
+)
 from custom_components.tortoise_ufh.core.controller import GLOBAL_SAFE_DEW_MARGIN_K
 from custom_components.tortoise_ufh.core.dew_point import dew_point
 from custom_components.tortoise_ufh.core.models import RoomOutputs
@@ -115,7 +120,7 @@ async def test_shadow_mode_issues_no_actuator_writes(
 ) -> None:
     """The default shadow state computes results but writes nothing."""
     coordinator = _get_coordinator(setup_integration)
-    assert not coordinator.get_live_control("Salon")
+    assert coordinator.get_room_state("Salon") == ROOM_STATE_SHADOW
 
     mocks = _mock_actuator_services(hass)
     await _refresh(hass, coordinator)
@@ -125,15 +130,14 @@ async def test_shadow_mode_issues_no_actuator_writes(
     assert coordinator.data.rooms["Salon"].outputs is not None
 
 
-async def test_live_room_writes_valve_when_kill_switch_off(
+async def test_live_room_writes_valve(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
-    """A live room with the kill-switch off writes to number.set_value."""
+    """A room in the live state writes to number.set_value."""
     coordinator = _get_coordinator(setup_integration)
-    # Flip live control directly: the public setter persists options and would
-    # reload the whole entry, replacing this coordinator instance.
-    coordinator._live_control["Salon"] = True
-    assert not coordinator.get_kill_switch()
+    # Flip the state directly on the in-memory map: the public setter persists
+    # options and could reload the entry, replacing this coordinator instance.
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
 
     mocks = _mock_actuator_services(hass)
     await _refresh(hass, coordinator)
@@ -144,13 +148,12 @@ async def test_live_room_writes_valve_when_kill_switch_off(
     )
 
 
-async def test_kill_switch_suppresses_all_writes(
+async def test_off_room_issues_no_writes(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
-    """An engaged kill-switch suppresses writes even for a live room."""
+    """A room switched fully off is fed Mode.OFF and writes nothing."""
     coordinator = _get_coordinator(setup_integration)
-    coordinator._live_control["Salon"] = True
-    coordinator._kill_switch_engaged = True
+    coordinator._room_states["Salon"] = ROOM_STATE_OFF
 
     mocks = _mock_actuator_services(hass)
     await _refresh(hass, coordinator)
@@ -287,3 +290,68 @@ async def test_write_debounce_suppresses_repeat_position(
 
     assert len(mocks[("number", "set_value")]) == 1
     assert len(mocks[("valve", "set_valve_position")]) == 1
+
+
+# -- Setpoint-change recompute + measurement echo (F1 / bugs J1, J2) ---------
+
+
+async def test_report_echoes_measured_room_temperature(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """The report carries the measured room temperature (J1), not a fake."""
+    coordinator = _get_coordinator(setup_integration)
+    hass.states.async_set("sensor.salon_temp", "19.25", _TEMP_ATTRS)
+    await _refresh(hass, coordinator)
+
+    report = coordinator.data.rooms["Salon"].report
+    assert report.room_temperature_c == pytest.approx(19.25)
+    # It survives serialisation for the websocket / panel.
+    assert report.to_dict()["room_temperature_c"] == pytest.approx(19.25)
+
+
+async def test_room_offset_change_rewrites_split_target_same_cycle(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """J2 regression: a room offset change re-emits the split target promptly.
+
+    ``set_room_offset`` schedules a debounced recompute; the full update re-runs
+    the control step and the write path emits ``climate.set_temperature`` with
+    the NEW target, with the report/setpoint staying mutually consistent. The
+    per-instance recompute debouncer is swapped for an immediate one so the
+    trailing refresh completes deterministically under ``async_block_till_done``
+    instead of waiting out the real ~2 s cooldown.
+    """
+    from homeassistant.helpers.debounce import Debouncer
+
+    coordinator = _get_coordinator(setup_integration)
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    # A cold room makes the split boost and self-regulate to the room target.
+    hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
+    await _refresh(hass, coordinator)
+    assert coordinator.data.rooms["Salon"].outputs.fast_source.on is True
+
+    # Force the scheduled recompute to run immediately (function -> async_refresh
+    # so the full update path executes within block_till_done).
+    coordinator._recompute_debouncer = Debouncer(
+        hass,
+        coordinator.logger,
+        cooldown=0.0,
+        immediate=True,
+        function=coordinator.async_refresh,
+    )
+
+    mocks = _mock_actuator_services(hass)
+    coordinator.set_room_offset("Salon", 2.0)
+    await hass.async_block_till_done()
+
+    salon = coordinator.data.rooms["Salon"]
+    # Setpoint rebroadcast immediately and the recompute stays consistent.
+    assert salon.setpoint_c == pytest.approx(23.0)
+    assert salon.report.error_c == pytest.approx(8.0, abs=0.05)  # 23.0 - 15.0
+
+    set_temp_calls = mocks[("climate", "set_temperature")]
+    assert any(
+        call.data.get("entity_id") == "climate.salon_split"
+        and call.data.get("temperature") == pytest.approx(23.0)
+        for call in set_temp_calls
+    )

@@ -52,7 +52,40 @@ from .safety import SafetyAction, SafetyEvaluator, SensorSnapshot
 __all__ = [
     "BuildingController",
     "RoomController",
+    "classify_dew_eligibility",
 ]
+
+
+def classify_dew_eligibility(room_inputs: RoomInputs) -> str | None:
+    """Classify a room's eligibility for the global safe dew-point maximum.
+
+    Single source of truth shared by two consumers: :meth:`RoomController.step`
+    records the result in :attr:`~tortoise_ufh.models.RoomReport.dew_excluded_reason`,
+    and :meth:`BuildingController._eligible_dew_point` uses it (a ``None`` return
+    meaning eligible) to decide whether the room feeds the global maximum.
+
+    A room is eligible (returns ``None``) only when it is in :attr:`Mode.COOLING`
+    with ``cooling_enabled`` and both a room-temperature and a usable humidity
+    reading. Otherwise the first failing precondition names the reason.
+
+    Args:
+        room_inputs: The room's raw inputs for this cycle.
+
+    Returns:
+        ``None`` when the room is eligible, else one of ``"not_cooling_mode"``,
+        ``"cooling_disabled"``, ``"no_temperature"`` or ``"no_humidity"``.
+    """
+    if room_inputs.mode is not Mode.COOLING:
+        return "not_cooling_mode"
+    if not room_inputs.cooling_enabled:
+        return "cooling_disabled"
+    if room_inputs.room_temperature_c is None:
+        return "no_temperature"
+    rh = room_inputs.humidity_pct
+    if rh is None or rh <= 0.0:
+        return "no_humidity"
+    return None
+
 
 # --- Module constants -------------------------------------------------------
 
@@ -125,6 +158,10 @@ class RoomController:
         self._seeded: bool = False
         self._fast_on: bool = False
         self._fast_timer_s: float = _INITIAL_FAST_TIMER_S
+        # Seconds remaining on the min ON/OFF dwell lock (None = unlocked / no
+        # fast source). Recomputed each cycle by the fast-source decision and
+        # surfaced in the report for the panel's assist timer.
+        self._fast_dwell_remaining_s: float | None = None
         # Stateful hard-safety layer (S1..S5) with per-rule hysteresis, held
         # across cycles and applied as a post-processing override of the
         # computed outputs (PRD 8.7).
@@ -174,7 +211,8 @@ class RoomController:
         # -- Step 1: missing room temperature -> safe degrade ---------------
         t_room = inputs.room_temperature_c
         if t_room is None:
-            return self._apply_safety(inputs, self._safe_degrade(inputs.mode))
+            degraded = self._apply_safety(inputs, self._safe_degrade(inputs.mode))
+            return self._finalize(inputs, degraded)
 
         # A live-sensor step has run: future safe-degrade holds the real last
         # commanded valve rather than the mode-aware cold-start default.
@@ -202,6 +240,7 @@ class RoomController:
                 trend=trend,
                 room_dew=room_dew,
                 explanation=f"Off ({self._name}): zawor 0%, brak komend.".strip(),
+                room_temperature_c=t_room,
             )
         # -- Step 3: TRANSITIONAL (valves parked, split bidirectional) ------
         elif mode is Mode.TRANSITIONAL:
@@ -222,7 +261,30 @@ class RoomController:
                 dt_seconds=dt_seconds,
             )
 
-        return self._apply_safety(inputs, result)
+        return self._finalize(inputs, self._apply_safety(inputs, result))
+
+    def _finalize(self, inputs: RoomInputs, result: RoomOutputs) -> RoomOutputs:
+        """Stamp the additive dew-reason and dwell-remaining report fields.
+
+        Runs after the safety override so the dwell value reflects the final
+        fast-source state (a safety force-off clears it). Uses ``replace`` to
+        keep the frozen result immutable.
+
+        Args:
+            inputs: The room's raw inputs for this cycle (for the dew-reason
+                classification).
+            result: The post-safety computed outputs.
+
+        Returns:
+            The result with ``dew_excluded_reason`` and ``fast_dwell_remaining_s``
+            filled in.
+        """
+        report = replace(
+            result.report,
+            dew_excluded_reason=classify_dew_eligibility(inputs),
+            fast_dwell_remaining_s=self._fast_dwell_remaining_s,
+        )
+        return replace(result, report=report)
 
     def reset(self) -> None:
         """Clear all internal state (PID, trend, held valve, fast timers)."""
@@ -232,6 +294,7 @@ class RoomController:
         self._seeded = False
         self._fast_on = False
         self._fast_timer_s = _INITIAL_FAST_TIMER_S
+        self._fast_dwell_remaining_s = None
         self._safety.reset()
 
     # -- internal: result builders -----------------------------------------
@@ -279,6 +342,7 @@ class RoomController:
                 "Utrata czujnika pokoju: zawor trzyma ostatnia pozycje "
                 f"{valve:.0f}%, split OFF."
             ),
+            room_temperature_c=None,
         )
         return RoomOutputs(valve_position_pct=valve, fast_source=fast, report=report)
 
@@ -290,6 +354,7 @@ class RoomController:
         trend: float,
         room_dew: float | None,
         explanation: str,
+        room_temperature_c: float | None,
     ) -> RoomOutputs:
         """Build an OFF-mode result (valve parked, fast source forced OFF).
 
@@ -299,6 +364,8 @@ class RoomController:
             trend: Measured trend [K/h].
             room_dew: Room dew point [degC] or ``None``.
             explanation: Report text.
+            room_temperature_c: Measured room temperature [degC] echoed into the
+                report, or ``None`` when unavailable.
 
         Returns:
             The passive :class:`~tortoise_ufh.models.RoomOutputs`.
@@ -320,6 +387,7 @@ class RoomController:
             integrator_frozen=True,
             flags=(),
             explanation=explanation,
+            room_temperature_c=room_temperature_c,
         )
         return RoomOutputs(valve_position_pct=valve, fast_source=fast, report=report)
 
@@ -420,6 +488,7 @@ class RoomController:
                 f"Przejsciowy: zawor zaparkowany (0%). Split {direction}, "
                 f"{'ON' if fast.on else 'OFF'}. Blad {error_c:+.1f} K."
             ),
+            room_temperature_c=inputs.room_temperature_c,
         )
         return RoomOutputs(valve_position_pct=valve, fast_source=fast, report=report)
 
@@ -473,6 +542,7 @@ class RoomController:
                 explanation=(
                     f"Chlodzenie wykluczone ({self._name}): zawor 0%, split OFF."
                 ),
+                room_temperature_c=inputs.room_temperature_c,
             )
             return RoomOutputs(valve_position_pct=0.0, fast_source=fast, report=report)
 
@@ -559,6 +629,7 @@ class RoomController:
             integrator_frozen=freeze,
             flags=tuple(flags),
             explanation=explanation,
+            room_temperature_c=inputs.room_temperature_c,
         )
         return RoomOutputs(valve_position_pct=valve, fast_source=fast, report=report)
 
@@ -764,6 +835,13 @@ class RoomController:
                 self._fast_timer_s = 0.0
             elif "fast_source_min_runtime" not in flags:
                 flags.append("fast_source_min_runtime")
+        # Remaining lock on the CURRENT state: min ON while running (cannot turn
+        # off yet), min OFF while idle (cannot turn on yet). None once elapsed.
+        min_lock_min = (
+            cfg.fast_min_on_minutes if self._fast_on else cfg.fast_min_off_minutes
+        )
+        remaining = min_lock_min * 60.0 - self._fast_timer_s
+        self._fast_dwell_remaining_s = remaining if remaining > 0.0 else None
         if self._fast_on:
             return FastSourceCommand(on=True, mode=fs_mode, target_temperature_c=target)
         return FastSourceCommand(
@@ -783,6 +861,10 @@ class RoomController:
         if self._fast_on:
             self._fast_timer_s = 0.0
         self._fast_on = False
+        # A forced OFF is a safety / OFF-mode condition, not a normal dwell gate:
+        # the panel shows no assist timer here (the min-runtime flag conveys any
+        # block instead).
+        self._fast_dwell_remaining_s = None
         return FastSourceCommand(
             on=False, mode=FastSourceMode.OFF, target_temperature_c=None
         )
@@ -949,12 +1031,16 @@ class BuildingController:
         for name, room_inputs in inputs.items():
             controller = self._controllers.get(name)
             if controller is None:
-                rooms[name] = self._unknown_room_output(name)
+                rooms[name] = self._unknown_room_output(
+                    name, room_inputs.room_temperature_c
+                )
                 continue
             try:
                 rooms[name] = controller.step(room_inputs, dt_seconds=dt_seconds)
             except (ValueError, ArithmeticError) as exc:
-                rooms[name] = self._degraded_room_output(controller, exc)
+                rooms[name] = self._degraded_room_output(
+                    controller, exc, room_inputs.room_temperature_c
+                )
 
             dew = self._eligible_dew_point(room_inputs)
             if dew is not None:
@@ -974,8 +1060,10 @@ class BuildingController:
     def _eligible_dew_point(room_inputs: RoomInputs) -> float | None:
         """Return a room's dew point if it is eligible for the global maximum.
 
-        Eligible = COOLING mode, ``cooling_enabled``, and a usable temperature
-        and humidity reading.
+        Eligibility is decided by :func:`classify_dew_eligibility` (the same
+        classifier that fills ``RoomReport.dew_excluded_reason``): a ``None``
+        reason means COOLING mode, ``cooling_enabled`` and usable temperature +
+        humidity — one logic, two consumers.
 
         Args:
             room_inputs: The room's raw inputs.
@@ -984,20 +1072,24 @@ class BuildingController:
             Dew-point temperature [degC], or ``None`` when the room is not
             eligible.
         """
-        if room_inputs.mode is not Mode.COOLING or not room_inputs.cooling_enabled:
+        if classify_dew_eligibility(room_inputs) is not None:
             return None
         t_room = room_inputs.room_temperature_c
         rh = room_inputs.humidity_pct
-        if t_room is None or rh is None or rh <= 0.0:
+        if t_room is None or rh is None:  # narrowed by the classifier above
             return None
         return dew_point(t_room, rh)
 
     @staticmethod
-    def _unknown_room_output(name: str) -> RoomOutputs:
+    def _unknown_room_output(
+        name: str, room_temperature_c: float | None = None
+    ) -> RoomOutputs:
         """Build a safe-degraded output for a room with no controller.
 
         Args:
             name: The unknown room name.
+            room_temperature_c: Measured room temperature [degC] echoed into the
+                report, or ``None`` when unavailable.
 
         Returns:
             A closed-valve, fast-OFF :class:`~tortoise_ufh.models.RoomOutputs`.
@@ -1017,6 +1109,7 @@ class BuildingController:
             integrator_frozen=True,
             flags=("unknown_room",),
             explanation=f"Brak konfiguracji regulatora dla pokoju '{name}': zawor 0%.",
+            room_temperature_c=room_temperature_c,
         )
         return RoomOutputs(
             valve_position_pct=0.0,
@@ -1026,7 +1119,9 @@ class BuildingController:
 
     @staticmethod
     def _degraded_room_output(
-        controller: RoomController, exc: Exception
+        controller: RoomController,
+        exc: Exception,
+        room_temperature_c: float | None = None,
     ) -> RoomOutputs:
         """Build a safe-degraded output after a room controller raised.
 
@@ -1036,6 +1131,8 @@ class BuildingController:
         Args:
             controller: The room controller that raised.
             exc: The exception raised.
+            room_temperature_c: Measured room temperature [degC] echoed into the
+                report, or ``None`` when unavailable.
 
         Returns:
             A held-valve, fast-OFF :class:`~tortoise_ufh.models.RoomOutputs`.
@@ -1059,6 +1156,7 @@ class BuildingController:
                 f"Blad regulatora pokoju '{controller.name}': {exc}. "
                 f"Zawor trzyma {valve:.0f}%, split OFF."
             ),
+            room_temperature_c=room_temperature_c,
         )
         return RoomOutputs(
             valve_position_pct=valve,

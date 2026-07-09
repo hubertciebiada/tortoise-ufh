@@ -114,10 +114,10 @@
       <button data-scenario-btn="cooling">Chłodzenie</button>
       <button data-scenario-btn="stale">Stale</button>
       <span class="sep"></span>
-      <!-- Kill-switch is config-only (not in get_live), so engage it through
-           the panel's own hero button — that is the real user flow. -->
+      <!-- Per-room control is the three-state segment in the room table's first
+           column (Off / Shadow / Live) — click it to exercise set_room_state. -->
       <span class="hint" style="color: var(--secondary-text-color)"
-        >Kill-switch → przycisk w panelu</span
+        >Sterowanie pokoju → segment 3-stanu w tabeli</span
       >
       <span class="sep"></span>
       <button id="poll-btn">Symuluj poll (+70 s)</button>
@@ -147,6 +147,9 @@
               "mdi:cog-outline": "⚙",
               "mdi:close": "✕",
               "mdi:open-in-new": "↗",
+              "mdi:power": "⏻",
+              "mdi:eye-outline": "◎",
+              "mdi:play": "▶",
             };
             this.textContent = map[icon] || "•";
             this.style.display = "inline-flex";
@@ -190,16 +193,14 @@
         return {
           home_setpoint_c: 21.0,
           mode,
-          kill_switch: scenario === "killed",
           global_safe_dew_point_entity_id: "sensor.tortoise_global_safe_dew_point",
           rooms: [
             {
               name: "Salon",
               area_m2: 32.5,
               offset_c: 0.5,
-              participates: true,
               cooling_enabled: true,
-              live_control: true,
+              control_state: state.roomStates["Salon"],
               fast_source_kind: "split",
               entities: {
                 entity_temp_room: "sensor.salon_temp",
@@ -225,9 +226,8 @@
               name: "Kuchnia",
               area_m2: 18.0,
               offset_c: 0.0,
-              participates: true,
               cooling_enabled: false,
-              live_control: false,
+              control_state: state.roomStates["Kuchnia"],
               fast_source_kind: "none",
               entities: {
                 entity_temp_room: "sensor.kuchnia_temp",
@@ -243,9 +243,8 @@
               name: "Łazienka",
               area_m2: 8.5,
               offset_c: 1.5,
-              participates: true,
               cooling_enabled: true,
-              live_control: true,
+              control_state: state.roomStates["Łazienka"],
               fast_source_kind: "none",
               entities: {
                 entity_temp_room: "sensor.lazienka_temp",
@@ -381,6 +380,13 @@
                 },
           ),
         };
+        // Inject the canonical three-state control + its derived boolean from
+        // the shared room-state map (mirrors LiveRoomView.to_dict).
+        for (const [name, lr] of Object.entries(rooms)) {
+          const st = state.roomStates[name] || "shadow";
+          lr.control_state = st;
+          lr.live_control_enabled = st === "live";
+        }
         return {
           rooms,
           global_safe_dew_point_c: cooling ? 19.4 : null,
@@ -449,8 +455,48 @@
       }
 
       // --- Mock hass --------------------------------------------------------
-      const state = { theme: "light", lang: "pl", scenario: "heating", ageSeconds: 45 };
+      // `roomStates` is the canonical three-state control map the coordinator
+      // owns; both get_config and get_live read from it, and set_room_state
+      // mutates it so the optimistic UI reconciles on the follow-up poll.
+      const state = {
+        theme: "light",
+        lang: "pl",
+        scenario: "heating",
+        ageSeconds: 45,
+        roomStates: { Salon: "live", Kuchnia: "shadow", "Łazienka": "live" },
+        // Sparse per-room controller overrides (mirrors CONF_ROOM_TUNING).
+        tuningRooms: { Salon: { kt: 8.0 } },
+      };
       const logEl = document.getElementById("log");
+
+      // --- Sample get_tuning (matches TuningResult.to_dict) -----------------
+      // Ranges mirror const.CONTROLLER_NUMBER_KNOBS + the boolean knob.
+      const TUNE_FIELDS = [
+        { name: "kp", type: "number", min: 0, max: 50, step: 0.1, unit: "%/K" },
+        { name: "ki", type: "number", min: 0, max: 1, step: 0.001, unit: "%/(K·s)" },
+        { name: "kt", type: "number", min: 0, max: 50, step: 0.1, unit: "%/(K/h)" },
+        { name: "deadband_c", type: "number", min: 0, max: 5, step: 0.1, unit: "K" },
+        { name: "valve_floor_pct", type: "number", min: 0, max: 100, step: 1, unit: "%" },
+        { name: "boost_offset_c", type: "number", min: 0, max: 10, step: 0.1, unit: "K" },
+        { name: "fast_min_on_minutes", type: "number", min: 0, max: 60, step: 1, unit: "min" },
+        { name: "fast_min_off_minutes", type: "number", min: 0, max: 60, step: 1, unit: "min" },
+        { name: "dew_margin_k", type: "number", min: 0, max: 10, step: 0.1, unit: "K" },
+        { name: "dew_ramp_k", type: "number", min: 0.1, max: 10, step: 0.1, unit: "K" },
+        { name: "outdoor_ff_enabled", type: "bool", unit: "" },
+      ];
+      const TUNE_DEFAULTS = {
+        kp: 8.0, ki: 0.02, kt: 6.0, deadband_c: 0.3, valve_floor_pct: 15.0,
+        boost_offset_c: 1.0, fast_min_on_minutes: 10.0, fast_min_off_minutes: 10.0,
+        dew_margin_k: 2.0, dew_ramp_k: 2.0, outdoor_ff_enabled: false,
+      };
+      function sampleTuning() {
+        return {
+          fields: TUNE_FIELDS,
+          global: { ...TUNE_DEFAULTS },
+          rooms: JSON.parse(JSON.stringify(state.tuningRooms)),
+          defaults: { ...TUNE_DEFAULTS },
+        };
+      }
 
       function makeHass() {
         return {
@@ -483,16 +529,34 @@
             if (msg.type === "tortoise_ufh/set_room_offset") {
               return Promise.resolve({ room: msg.room, offset_c: msg.offset });
             }
-            if (msg.type === "tortoise_ufh/set_room_enabled") {
-              return Promise.resolve({ room: msg.room, live_control: msg.enabled });
+            if (msg.type === "tortoise_ufh/set_room_state") {
+              state.roomStates[msg.room] = msg.state;
+              return Promise.resolve({ room: msg.room, state: msg.state });
             }
             if (msg.type === "tortoise_ufh/set_mode") {
               state.scenario = msg.mode === "cooling" ? "cooling" : "heating";
               return Promise.resolve({ mode: msg.mode });
             }
-            if (msg.type === "tortoise_ufh/set_kill_switch") {
-              state.scenario = msg.engaged ? "killed" : "heating";
-              return Promise.resolve({ kill_switch: msg.engaged });
+            if (msg.type === "tortoise_ufh/get_tuning") {
+              return Promise.resolve(sampleTuning());
+            }
+            if (msg.type === "tortoise_ufh/set_tuning") {
+              if (msg.scope !== "global") {
+                const ovr = { ...(state.tuningRooms[msg.scope] || {}) };
+                for (const [k, v] of Object.entries(msg.values || {})) {
+                  if (v === null) {
+                    delete ovr[k];
+                  } else {
+                    ovr[k] = v;
+                  }
+                }
+                if (Object.keys(ovr).length) {
+                  state.tuningRooms[msg.scope] = ovr;
+                } else {
+                  delete state.tuningRooms[msg.scope];
+                }
+              }
+              return Promise.resolve({ scope: msg.scope, ...sampleTuning() });
             }
             return Promise.reject(new Error("unknown command: " + msg.type));
           },

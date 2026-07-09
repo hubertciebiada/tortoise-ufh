@@ -35,7 +35,7 @@ PLATFORMS: list[Platform] = [
     Platform.NUMBER,
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
-    Platform.SWITCH,
+    Platform.SELECT,
 ]
 
 # ---------------------------------------------------------------------------
@@ -48,11 +48,39 @@ CONF_HOME_SETPOINT: str = "home_setpoint"
 CONF_ENTITY_MODE: str = "entity_mode"
 """Global mode input entity (select/input_select): heating/transitional/cooling/off."""
 
-CONF_KILL_SWITCH: str = "kill_switch"
-"""Master kill-switch flag. When engaged the module emits NO commands (compute-only)."""
-
 CONF_LIVE_CONTROL: str = "live_control"
-"""Per-room shadow->live toggle map (options), keyed by room name. False = shadow."""
+"""LEGACY per-room shadow->live toggle map (options), keyed by room name.
+
+Retired in favour of the canonical three-state :data:`CONF_ROOM_STATE` map. Kept
+only so :func:`async_migrate_entry` can read a v1 entry's value while translating
+it to the new state map; never written by the current code.
+"""
+
+# ---------------------------------------------------------------------------
+# Per-room control state (the canonical three-state OFF / SHADOW / LIVE)
+# ---------------------------------------------------------------------------
+
+CONF_ROOM_STATE: str = "room_state"
+"""Options map ``{room_name: state}`` — the single source of truth for a room's
+control participation. ``state`` is one of :data:`ROOM_STATES`."""
+
+CONF_ROOM_TUNING: str = "room_tuning"
+"""Options map ``{room_name: {field: value}}`` of *sparse* per-room controller
+overrides. Only fields a room deliberately overrides are stored; every other
+field falls back to the global :data:`~config_flow.CONF_CONTROLLER` tuning. An
+empty override dict for a room means "back to global" and is pruned entirely."""
+
+ROOM_STATE_OFF: str = "off"
+"""Room does not participate in control at all (core sees ``Mode.OFF``)."""
+
+ROOM_STATE_SHADOW: str = "shadow"
+"""Room is computed and reported but no commands are written (dry-run)."""
+
+ROOM_STATE_LIVE: str = "live"
+"""Room is computed, reported and its commands are written to the actuators."""
+
+ROOM_STATES: list[str] = [ROOM_STATE_OFF, ROOM_STATE_SHADOW, ROOM_STATE_LIVE]
+"""Accepted per-room control states (off / shadow / live)."""
 
 # ---------------------------------------------------------------------------
 # Configuration keys — rooms (config-flow step 2)
@@ -144,7 +172,12 @@ DEFAULT_COOLING_ENABLED: bool = True
 DEFAULT_LIVE_CONTROL: bool = False
 """New rooms start in shadow (dry-run) mode until explicitly promoted to live."""
 
-DEFAULT_KILL_SWITCH: bool = False
+DEFAULT_ROOM_STATE: str = ROOM_STATE_SHADOW
+"""New / unknown rooms start safely in shadow (dry-run) mode.
+
+Preserves the historical ``DEFAULT_LIVE_CONTROL = False`` default: a room the
+coordinator has never seen a persisted state for is observed, not driven.
+"""
 
 # ---------------------------------------------------------------------------
 # Writable number-entity ranges (home setpoint + per-room offset)
@@ -157,6 +190,56 @@ HOME_SETPOINT_STEP_C: float = 0.5
 ROOM_OFFSET_MIN_C: float = -5.0
 ROOM_OFFSET_MAX_C: float = 5.0
 ROOM_OFFSET_STEP_C: float = 0.5
+
+# ---------------------------------------------------------------------------
+# Advanced controller-knob specs — single source of truth
+# ---------------------------------------------------------------------------
+
+CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
+    ("kp", 0.0, 50.0, 0.1),
+    ("ki", 0.0, 1.0, 0.001),
+    ("kt", 0.0, 50.0, 0.1),
+    ("deadband_c", 0.0, 5.0, 0.1),
+    ("valve_floor_pct", 0.0, 100.0, 1.0),
+    ("boost_offset_c", 0.0, 10.0, 0.1),
+    ("fast_min_on_minutes", 0.0, 60.0, 1.0),
+    ("fast_min_off_minutes", 0.0, 60.0, 1.0),
+    ("dew_margin_k", 0.0, 10.0, 0.1),
+    ("dew_ramp_k", 0.1, 10.0, 0.1),
+)
+"""Numeric :class:`~tortoise_ufh.config.ControllerConfig` fields exposed as
+advanced knobs, each as ``(field, min, max, step)``.
+
+Single authoritative source for the config flow (``algorithm`` / ``settings``
+steps), the ``get_tuning`` / ``set_tuning`` websocket range validation, and — via
+the ``get_tuning`` payload — the panel's Tuning tab, so the ranges are never
+duplicated in JavaScript.
+
+Note: the derivative gain ``kd`` is deliberately not exposed — Aneks §8.3 forbids
+a derivative-on-error term, so ``ControllerConfig.kd`` stays at its ``0.0``
+default. The non-tuning bookkeeping fields ``cycle_seconds`` /
+``valve_write_threshold_pct`` are likewise not user-facing.
+"""
+
+CONTROLLER_BOOL_KNOB: str = "outdoor_ff_enabled"
+"""Boolean :class:`~tortoise_ufh.config.ControllerConfig` knob: outdoor-temperature
+feedforward. Exposed alongside :data:`CONTROLLER_NUMBER_KNOBS`."""
+
+CONTROLLER_KNOB_UNITS: dict[str, str] = {
+    "kp": "%/K",
+    "ki": "%/(K·s)",
+    "kt": "%/(K/h)",
+    "deadband_c": "K",
+    "valve_floor_pct": "%",
+    "boost_offset_c": "K",
+    "fast_min_on_minutes": "min",
+    "fast_min_off_minutes": "min",
+    "dew_margin_k": "K",
+    "dew_ramp_k": "K",
+    CONTROLLER_BOOL_KNOB: "",
+}
+"""Display unit per controller knob (empty for the boolean knob). Surfaced in the
+``get_tuning`` payload so the panel labels each stepper with its unit."""
 
 # ---------------------------------------------------------------------------
 # Coordinator / watchdog timing

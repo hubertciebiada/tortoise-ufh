@@ -12,12 +12,11 @@ Every 5 minutes this coordinator:
    report and the global safe dew point.
 3. Stores a typed payload in :attr:`coordinator.data` for the entity platforms
    and the websocket/panel to consume.
-4. For rooms whose per-room live control is ON *and* while the global
-   kill-switch is OFF, WRITES the commands to the actuators
+4. For rooms in the ``live`` control state, WRITES the commands to the actuators
    (``number.set_value`` or ``valve.set_valve_position`` per valve entity,
    dispatched by the entity's domain; ``climate.set_hvac_mode`` +
-   ``climate.set_temperature`` for the split). Kill-switch ON or a shadow (not
-   live) room means: compute and report, but emit no commands.
+   ``climate.set_temperature`` for the split). An ``off`` or ``shadow`` room
+   means: compute and report, but emit no commands.
 
 The global home temperature and per-room offsets are the single source of truth
 for setpoints and live in this coordinator; the writable ``number`` entities and
@@ -32,11 +31,14 @@ from __future__ import annotations
 
 import logging
 import math
+import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import callback, split_entity_id
+from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
@@ -53,14 +55,17 @@ from .const import (
     CONF_ENTITY_VALVES,
     CONF_FAST_SOURCE_KIND,
     CONF_HOME_SETPOINT,
-    CONF_KILL_SWITCH,
-    CONF_LIVE_CONTROL,
-    CONF_PARTICIPATES,
     CONF_ROOM_NAME,
     CONF_ROOM_OFFSET,
+    CONF_ROOM_STATE,
+    CONF_ROOM_TUNING,
     CONF_ROOMS,
+    DEFAULT_ROOM_STATE,
     DOMAIN,
     ENTITY_STALE_MAX_SECONDS,
+    ROOM_STATE_LIVE,
+    ROOM_STATE_OFF,
+    ROOM_STATES,
     UPDATE_INTERVAL_MINUTES,
     WATCHDOG_RECOVERY_MINUTES,
     WATCHDOG_TIMEOUT_MINUTES,
@@ -93,6 +98,21 @@ _SETPOINT_STORE_VERSION: int = 1
 
 _SETPOINT_SAVE_DELAY_S: float = 1.0
 """Debounce delay before a setpoint change is flushed to the Store [s]."""
+
+_RECOMPUTE_DEBOUNCE_S: float = 2.0
+"""Cooldown [s] before a setpoint change triggers a full trailing recompute.
+
+A burst of stepper clicks collapses to a single ``async_request_refresh`` so the
+control step is re-run once with a consistent ``error_c`` and the write path
+(notably the split target temperature) is re-emitted promptly. The default
+coordinator debouncer cooldown (10 s) is too slow for this UX.
+"""
+
+_MIN_DT_SECONDS: float = 1.0
+"""Lower clamp for the measured control step interval [s]."""
+
+_MAX_DT_SECONDS: float = 900.0
+"""Upper clamp for the measured control step interval [s]."""
 
 # Per-room config key for an optional heat-pump-status source entity. Defined
 # here (not in const.py) because this file is the only adapter surface allowed
@@ -130,6 +150,24 @@ and is driven via ``valve.set_valve_position`` (integer ``position``); a
 ``number.set_value`` (float ``value``). Everything else in the read/write path
 is domain-agnostic.
 """
+
+
+def _reload_signature(options: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the reload-relevant subset of ``entry.options``.
+
+    The per-room control-state map (:data:`CONF_ROOM_STATE`) is applied in memory
+    by :meth:`TortoiseUfhCoordinator.set_room_state` without a reload (a reload
+    would reset the PID integrator), so it is excluded here: any change to the
+    remaining keys — controller tuning, per-room tuning, … — still requires a
+    full coordinator rebuild.
+
+    Args:
+        options: A config entry's options mapping.
+
+    Returns:
+        A plain dict of every option key except :data:`CONF_ROOM_STATE`.
+    """
+    return {key: value for key, value in options.items() if key != CONF_ROOM_STATE}
 
 
 # ---------------------------------------------------------------------------
@@ -233,8 +271,8 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
     :class:`~tortoise_ufh.controller.BuildingController` (one room controller per
     configured room) and the authoritative setpoint state (global home
     temperature + per-room offsets). It reads sources, runs the black box,
-    stores :class:`CoordinatorData`, and — gated by the kill-switch and per-room
-    live control — writes the commands to the actuators.
+    stores :class:`CoordinatorData`, and — for rooms in the ``live`` control
+    state — writes the commands to the actuators.
     """
 
     config_entry: ConfigEntry
@@ -244,8 +282,8 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         Args:
             hass: The Home Assistant instance.
-            entry: The config entry holding room configs (``entry.data``) and
-                per-room live-control / kill-switch flags (``entry.options``).
+            entry: The config entry holding room configs (``entry.data``) and the
+                per-room control-state map (``entry.options``).
         """
         super().__init__(
             hass,
@@ -255,6 +293,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             update_interval=timedelta(minutes=UPDATE_INTERVAL_MINUTES),
         )
         self._cycle_seconds: float = UPDATE_INTERVAL_MINUTES * 60.0
+        # Monotonic timestamp of the previous control step; used to feed the core
+        # the REAL elapsed time (clamped) rather than the nominal cycle length,
+        # so a debounced off-cycle recompute does not advance the integrator,
+        # trend and dwell timers by a full 5 minutes.
+        self._last_step_monotonic: float | None = None
 
         # Per-room configuration (list of dicts, one per room).
         raw_rooms: Any = entry.data.get(CONF_ROOMS, [])
@@ -286,13 +329,23 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         )
         self._setpoints_loaded: bool = False
 
-        # Live-control map (shadow<->live) and global kill-switch flag.
-        live_map: Any = entry.options.get(CONF_LIVE_CONTROL, {})
-        self._live_control: dict[str, bool] = {
-            name: bool(live_map.get(name, False)) for name in self._room_names
-        }
-        self._kill_switch_engaged: bool = bool(
-            entry.options.get(CONF_KILL_SWITCH, False)
+        # Canonical per-room control state (off / shadow / live). Seeded for
+        # every configured room from the persisted state map; an unknown or
+        # invalid persisted value falls back to the safe default (shadow).
+        state_map: Any = entry.options.get(CONF_ROOM_STATE, {})
+        self._room_states: dict[str, str] = {}
+        for name in self._room_names:
+            raw_state = str(state_map.get(name, DEFAULT_ROOM_STATE))
+            self._room_states[name] = (
+                raw_state if raw_state in ROOM_STATES else DEFAULT_ROOM_STATE
+            )
+
+        # Snapshot of the reload-relevant options (everything except the
+        # per-room state map) captured at build time. Used by
+        # :meth:`options_require_reload` so a state-only option change made
+        # through :meth:`set_room_state` does not trigger a whole-entry reload.
+        self._reload_signature_snapshot: dict[str, Any] = _reload_signature(
+            entry.options
         )
 
         # One core controller (one room controller per room). Apply the
@@ -311,9 +364,31 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 exc_info=True,
             )
             controller_config = ControllerConfig()
-        self._controller_configs: dict[str, ControllerConfig] = {
-            name: controller_config for name in self._room_names
-        }
+        # Sparse per-room overrides layered over the global tuning: a room's
+        # ControllerConfig is built from {**global, **room_override}. An invalid
+        # override degrades that room to the global config with a warning.
+        room_tuning: Any = entry.options.get(CONF_ROOM_TUNING, {})
+        self._controller_configs: dict[str, ControllerConfig] = {}
+        for name in self._room_names:
+            override: dict[str, Any] = {}
+            if isinstance(room_tuning, Mapping):
+                raw_override = room_tuning.get(name, {})
+                if isinstance(raw_override, Mapping):
+                    override = dict(raw_override)
+            if not override:
+                self._controller_configs[name] = controller_config
+                continue
+            try:
+                self._controller_configs[name] = ControllerConfig(
+                    **{**merged_controller, **override}
+                )
+            except (TypeError, ValueError):
+                _LOGGER.warning(
+                    "Invalid per-room tuning override for %s; using global config",
+                    name,
+                    exc_info=True,
+                )
+                self._controller_configs[name] = controller_config
         self._building = (
             BuildingController(self._controller_configs)
             if self._controller_configs
@@ -337,6 +412,17 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # so a clean start/reload reports "ok" immediately.
         self._watchdog_faulted: bool = False
 
+        # Trailing debouncer that turns a burst of setpoint edits into a single
+        # off-cycle recompute + re-write (explicit short cooldown; see
+        # _RECOMPUTE_DEBOUNCE_S). Cancelled on unload via async_cancel_recompute.
+        self._recompute_debouncer: Debouncer[Any] = Debouncer(
+            hass,
+            _LOGGER,
+            cooldown=_RECOMPUTE_DEBOUNCE_S,
+            immediate=False,
+            function=self.async_request_refresh,
+        )
+
     # -- Setpoint / flag accessors (single source of truth) -----------------
 
     def get_home_temperature(self) -> float:
@@ -353,6 +439,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._home_temperature_c = float(value)
         self._persist_setpoints()
         self._rebroadcast_setpoints()
+        self._schedule_recompute()
 
     def get_room_offset(self, room_name: str) -> float:
         """Return a room's setpoint offset from the home temperature [K].
@@ -377,6 +464,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self._room_offsets[room_name] = float(offset)
             self._persist_setpoints()
             self._rebroadcast_setpoints()
+            self._schedule_recompute()
 
     def get_room_setpoint(self, room_name: str) -> float:
         """Return a room's effective target temperature [degC].
@@ -413,69 +501,94 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 )
             )
 
-    def get_kill_switch(self) -> bool:
-        """Return whether the global kill-switch is engaged (True = no writes)."""
-        return self._kill_switch_engaged
-
-    @callback
-    def set_kill_switch(self, engaged: bool) -> None:
-        """Engage or release the global kill-switch.
-
-        Args:
-            engaged: ``True`` to suppress all command writes.
-        """
-        self._kill_switch_engaged = bool(engaged)
-        # Persist so the safety cut-out survives a reload/restart regardless of
-        # which surface engaged it (switch entity or panel/websocket).
-        self._persist_options({CONF_KILL_SWITCH: self._kill_switch_engaged})
-
-    def get_live_control(self, room_name: str) -> bool:
-        """Return whether a room is in live control (writes) vs shadow.
+    def get_room_state(self, room_name: str) -> str:
+        """Return a room's control state (``off`` / ``shadow`` / ``live``).
 
         Args:
             room_name: The room name.
 
         Returns:
-            ``True`` when live, ``False`` when shadow / unknown.
+            The room's state string, or :data:`DEFAULT_ROOM_STATE` for a room the
+            coordinator has no persisted state for.
         """
-        return self._live_control.get(room_name, False)
+        return self._room_states.get(room_name, DEFAULT_ROOM_STATE)
 
     @callback
-    def set_live_control(self, room_name: str, enabled: bool) -> None:
-        """Toggle a room between live control and shadow mode.
+    def set_room_state(self, room_name: str, state: str) -> None:
+        """Set a room's control state and rebroadcast immediately.
+
+        Updates the in-memory state first (so the running control loop and the
+        panel see the change at once), then persists the new state map to
+        ``entry.options``. Because :meth:`options_require_reload` reports a
+        state-only change as *not* requiring a reload, this write does not tear
+        down and rebuild the coordinator (which would reset the PID integrator);
+        the persisted value simply survives a restart.
 
         Args:
-            room_name: The room name.
-            enabled: ``True`` for live (writes commands), ``False`` for shadow.
+            room_name: The room name (ignored when unknown).
+            state: One of :data:`ROOM_STATES`.
+
+        Raises:
+            ValueError: If ``state`` is not a recognised room state.
         """
-        if room_name in self._live_control:
-            self._live_control[room_name] = bool(enabled)
-            # Persist so a panel/websocket toggle survives a reload/restart
-            # identically to the switch-entity path (both write entry.options).
-            live_map: dict[str, Any] = dict(
-                self.config_entry.options.get(CONF_LIVE_CONTROL, {})
+        if state not in ROOM_STATES:
+            msg = f"state must be one of {ROOM_STATES}, got {state!r}"
+            raise ValueError(msg)
+        if room_name not in self._room_states:
+            return
+        self._room_states[room_name] = state
+        state_map: dict[str, Any] = dict(
+            self.config_entry.options.get(CONF_ROOM_STATE, {})
+        )
+        state_map[room_name] = state
+        self._persist_options({CONF_ROOM_STATE: state_map})
+        if self.data is not None and room_name in self.data.rooms:
+            old = self.data.rooms[room_name]
+            new_rooms = dict(self.data.rooms)
+            new_rooms[room_name] = RoomRuntime(
+                outputs=old.outputs,
+                report=old.outputs.report,
+                live_control_enabled=state == ROOM_STATE_LIVE,
+                setpoint_c=old.setpoint_c,
             )
-            live_map[room_name] = self._live_control[room_name]
-            self._persist_options({CONF_LIVE_CONTROL: live_map})
-            if self.data is not None and room_name in self.data.rooms:
-                old = self.data.rooms[room_name]
-                new_rooms = dict(self.data.rooms)
-                new_rooms[room_name] = RoomRuntime(
-                    outputs=old.outputs,
-                    report=old.outputs.report,
-                    live_control_enabled=bool(enabled),
-                    setpoint_c=old.setpoint_c,
+            self.async_set_updated_data(
+                CoordinatorData(
+                    rooms=new_rooms,
+                    global_safe_dew_point_c=self.data.global_safe_dew_point_c,
+                    algorithm_status=self.data.algorithm_status,
+                    watchdog_state=self.data.watchdog_state,
+                    last_update_timestamp=self.data.last_update_timestamp,
+                    mode=self.data.mode,
                 )
-                self.async_set_updated_data(
-                    CoordinatorData(
-                        rooms=new_rooms,
-                        global_safe_dew_point_c=self.data.global_safe_dew_point_c,
-                        algorithm_status=self.data.algorithm_status,
-                        watchdog_state=self.data.watchdog_state,
-                        last_update_timestamp=self.data.last_update_timestamp,
-                        mode=self.data.mode,
-                    )
-                )
+            )
+
+    def options_require_reload(self, new_options: Mapping[str, Any]) -> bool:
+        """Return whether an options change needs a full config-entry reload.
+
+        A change to any reload-relevant option key (controller tuning, per-room
+        tuning, …) requires rebuilding the coordinator. A change limited to the
+        per-room control-state map (:data:`CONF_ROOM_STATE`) does not — *when* it
+        was applied through :meth:`set_room_state`, which already updated the
+        in-memory state and rebroadcast. A state map that differs from the
+        in-memory state (e.g. one written directly by the options flow) still
+        forces a reload so the coordinator adopts it.
+
+        Args:
+            new_options: The config entry's freshly persisted options mapping.
+
+        Returns:
+            ``True`` when the entry must be reloaded, ``False`` otherwise.
+        """
+        if _reload_signature(new_options) != self._reload_signature_snapshot:
+            return True
+        new_states = new_options.get(CONF_ROOM_STATE, {})
+        if not isinstance(new_states, Mapping):
+            return True
+        for name in self._room_names:
+            persisted = str(new_states.get(name, DEFAULT_ROOM_STATE))
+            if persisted != self.get_room_state(name):
+                return True
+        return False
 
     # -- Internal: persistence of setpoint state ----------------------------
 
@@ -532,11 +645,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
     def _persist_options(self, changes: dict[str, Any]) -> None:
         """Merge ``changes`` into ``entry.options`` and persist them.
 
-        Used by the flag setters (kill-switch, live-control) so a change made
-        from any surface (switch entity or panel/websocket) survives a reload or
-        restart. Writing ``entry.options`` intentionally fires the update
-        listener and reloads the entry, re-synchronising a rebuilt coordinator
-        from the same persisted values.
+        Used by :meth:`set_room_state` so a control-state change made from any
+        surface (the select entity or the panel/websocket) survives a reload or
+        restart. Writing ``entry.options`` fires the update listener; for a
+        state-only change that listener consults :meth:`options_require_reload`
+        and skips the reload (the in-memory state is already current), so the PID
+        integrator is preserved.
 
         Args:
             changes: Option keys/values to merge into ``entry.options``.
@@ -576,6 +690,27 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             )
         )
 
+    @callback
+    def _schedule_recompute(self) -> None:
+        """Request a debounced full recompute after a setpoint change.
+
+        The immediate ``_rebroadcast_setpoints`` already shows the new target in
+        the entities and panel; this additionally schedules a trailing
+        :meth:`async_request_refresh` so a full :meth:`_async_update_data` re-runs
+        the control step with a consistent ``error_c`` and re-emits the write
+        path — notably the split ``set_temperature`` with the new target. A burst
+        of stepper clicks collapses to one refresh via the debouncer's cooldown.
+        """
+        self.hass.async_create_task(
+            self._recompute_debouncer.async_call(),
+            name=f"{DOMAIN}_recompute_{self.config_entry.entry_id}",
+        )
+
+    @callback
+    def async_cancel_recompute(self) -> None:
+        """Cancel any pending debounced recompute (called on entry unload)."""
+        self._recompute_debouncer.async_cancel()
+
     # -- Update cycle -------------------------------------------------------
 
     async def _async_update_data(self) -> CoordinatorData:
@@ -602,10 +737,21 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         outputs_by_room: dict[str, RoomOutputs] = {}
         global_dew: float | None = None
         if self._building is not None and inputs:
-            try:
-                building_outputs = self._building.step(
-                    inputs, dt_seconds=self._cycle_seconds
+            # Feed the core the REAL elapsed time since the previous step
+            # (clamped), so an off-cycle debounced recompute integrates honestly
+            # instead of assuming a full nominal cycle. On the first step there is
+            # no reference, so fall back to the nominal cycle length.
+            now_monotonic = time.monotonic()
+            if self._last_step_monotonic is None:
+                dt_seconds = self._cycle_seconds
+            else:
+                dt_seconds = min(
+                    _MAX_DT_SECONDS,
+                    max(_MIN_DT_SECONDS, now_monotonic - self._last_step_monotonic),
                 )
+            self._last_step_monotonic = now_monotonic
+            try:
+                building_outputs = self._building.step(inputs, dt_seconds=dt_seconds)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("BuildingController.step failed")
                 algorithm_status = "error"
@@ -634,20 +780,18 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             rooms[name] = RoomRuntime(
                 outputs=room_outputs,
                 report=room_outputs.report,
-                live_control_enabled=self.get_live_control(name),
+                live_control_enabled=self.get_room_state(name) == ROOM_STATE_LIVE,
                 setpoint_c=self.get_room_setpoint(name),
             )
 
-        # Emit commands (kill-switch OFF and per-room live control ON only).
-        if not self._kill_switch_engaged:
-            for room_cfg, name in zip(
-                self._room_configs, self._room_names, strict=True
-            ):
-                runtime = rooms.get(name)
-                if runtime is None or not runtime.live_control_enabled:
-                    continue
-                await self._write_valves(room_cfg, name, runtime.outputs)
-                await self._write_fast_source(room_cfg, name, runtime.outputs)
+        # Emit commands for LIVE rooms only; OFF and SHADOW rooms are computed
+        # and reported but never written.
+        for room_cfg, name in zip(self._room_configs, self._room_names, strict=True):
+            runtime = rooms.get(name)
+            if runtime is None or not runtime.live_control_enabled:
+                continue
+            await self._write_valves(room_cfg, name, runtime.outputs)
+            await self._write_fast_source(room_cfg, name, runtime.outputs)
 
         return CoordinatorData(
             rooms=rooms,
@@ -676,7 +820,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         """
         setpoint = self.get_room_setpoint(name)
         cooling_enabled = bool(room_cfg.get(CONF_COOLING_ENABLED, True))
-        participates = bool(room_cfg.get(CONF_PARTICIPATES, True))
+        # A room participates in control unless it is switched fully off; an
+        # OFF room is fed Mode.OFF so the core holds the valve and idles the
+        # fast source. SHADOW and LIVE both participate (compute); only LIVE is
+        # written (gated below in _async_update_data).
+        participates = self.get_room_state(name) != ROOM_STATE_OFF
         mode = self._mode if participates else Mode.OFF
         # Validate humidity independently: an out-of-range reading only nulls
         # the dew-point input rather than degrading the whole room.

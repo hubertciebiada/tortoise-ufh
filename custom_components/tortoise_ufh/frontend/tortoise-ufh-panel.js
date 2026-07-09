@@ -3,10 +3,12 @@
  *
  * A dependency-free custom element (no CDN / external imports / build step,
  * CSP-safe) that renders the per-room underfloor-heating control state as a
- * health hero + room-card grid + master/detail room inspector, and lets an
- * admin edit the global home temperature, mode, kill-switch and per-room
- * offset / live-control. It talks to the integration exclusively through the
- * `tortoise_ufh/*` websocket commands (get_config / get_live / set_*).
+ * health hero + a tabbed workspace (a room table plus placeholder Tuning /
+ * Valves / Assist tabs) + a master/detail room inspector, and lets an admin
+ * edit the global home temperature, mode, per-room offset and each room's
+ * three-state control (off / shadow / live). It talks to the integration
+ * exclusively through the `tortoise_ufh/*` websocket commands (get_config /
+ * get_live / set_*).
  *
  * The panel is registered with `embed_iframe: False`, so it lives in Home
  * Assistant's main document: HA theme CSS custom properties inherit across the
@@ -46,15 +48,49 @@ const MANAGE_ROOMS_PATH = "/config/integrations/integration/tortoise_ufh";
 
 const MODES = ["heating", "transitional", "cooling", "off"];
 
+/** Canonical per-room control state (mirrors the adapter's `ROOM_STATES`). */
+const STATE_OFF = "off";
+const STATE_SHADOW = "shadow";
+const STATE_LIVE = "live";
+const ROOM_STATES = [STATE_OFF, STATE_SHADOW, STATE_LIVE];
+
+/**
+ * Three-state segment control metadata (column 1 of the room table).
+ *
+ * One button per state, rendered as an icon with a tooltip; the active state's
+ * button is highlighted. Icons resolve through `_icon` (native `<ha-icon>` when
+ * available, else a plain-glyph fallback — CSP-safe either way).
+ */
+const STATE_META = [
+  { state: STATE_OFF, icon: "mdi:power", glyph: "⏻", key: "state_off" },
+  { state: STATE_SHADOW, icon: "mdi:eye-outline", glyph: "◎", key: "state_shadow" },
+  { state: STATE_LIVE, icon: "mdi:play", glyph: "▶", key: "state_live" },
+];
+
+/** Top-level tabs. Order is authoritative for keyboard navigation. */
+const TABS = [
+  { key: "rooms", label: "tab_rooms" },
+  { key: "tuning", label: "tab_tuning" },
+  { key: "valves", label: "tab_valves" },
+  { key: "assist", label: "tab_assist" },
+];
+const TAB_ORDER = TABS.map((t) => t.key);
+const DEFAULT_TAB = "rooms";
+const ACTIVE_TAB_STORAGE_KEY = "tortoise-ufh.activeTab";
+
+/** Width below which the table drops its Error and Assist columns. */
+const NARROW_MAX_PX = 560;
+
 /** Websocket command type strings (frozen backend contract). */
 const WS = {
   getConfig: "tortoise_ufh/get_config",
   getLive: "tortoise_ufh/get_live",
   setHome: "tortoise_ufh/set_home_temperature",
   setOffset: "tortoise_ufh/set_room_offset",
-  setEnabled: "tortoise_ufh/set_room_enabled",
+  setRoomState: "tortoise_ufh/set_room_state",
   setMode: "tortoise_ufh/set_mode",
-  setKill: "tortoise_ufh/set_kill_switch",
+  getTuning: "tortoise_ufh/get_tuning",
+  setTuning: "tortoise_ufh/set_tuning",
   // Core recorder commands (read-only history for charts). These are HA
   // built-ins, not part of the tortoise_ufh contract.
   history: "history/history_during_period",
@@ -77,6 +113,7 @@ const WINDOWS = {
   "7d": { hours: 168, mode: "stats", period: "hour", periodMs: 3600 * 1000 },
 };
 const WINDOW_ORDER = ["6h", "24h", "7d"];
+/** Default window used as a fallback when an unknown window key is requested. */
 const SPARK_WINDOW = "24h";
 
 /** Cached history is reused for this long before a background refetch. */
@@ -88,51 +125,58 @@ const CHART_MARGIN = { l: 42, r: 46, t: 12, b: 26 };
 const CHART_MIN_W = 300;
 const CHART_MAX_W = 900;
 
-/** Sparkline geometry (fixed viewBox; scaled to card width, non-distorting stroke). */
-const SPARK_VB_W = 240;
-const SPARK_VB_H = 40;
-const SPARK_PAD = 3;
-
 // --- i18n -------------------------------------------------------------------
 
 const STR = {
   pl: {
-    status_running: "Działa · ostatni cykl {age}",
+    status_running: "Działa · cykl {age}",
     status_stale: "Nieaktualne",
     status_error: "Błąd algorytmu",
     status_nodata: "Brak danych",
-    age_now: "przed chwilą",
-    age_min: "{n} min temu",
-    age_hour: "{n} h temu",
+    age_sec: "{s} s temu",
+    age_min_sec: "{m} min {s} s temu",
+    age_min: "{m} min temu",
+    age_hour_min: "{h} h {m} min temu",
     age_unknown: "brak znacznika czasu",
-    rooms_live_cap: "Pokoje live",
+    rooms_live_cap: "Steruje",
     flags_cap: "Flagi",
-    dew_cap: "Bezp. punkt rosy",
+    dew_cap: "Bezpieczny punkt rosy",
     home_cap: "Temperatura domu",
     mode_cap: "Tryb",
     mode_heating: "Grzanie",
     mode_transitional: "Przejściowy",
     mode_cooling: "Chłodzenie",
     mode_off: "Wył.",
-    kill_on: "KILL-SWITCH: tylko obserwacja",
-    kill_off: "Kill-switch: wył.",
-    kill_hint_on: "Sterowanie wstrzymane — klik, aby wznowić",
-    kill_hint_off: "Klik, aby zatrzymać wszystkie komendy",
+    tab_rooms: "Pokoje",
+    tab_tuning: "Strojenie",
+    tab_valves: "Zawory",
+    tab_assist: "Wspomaganie",
+    soon_title: "Wkrótce",
+    soon_body: "Ta zakładka pojawi się w kolejnej wersji.",
     manage_rooms: "Zarządzaj pokojami",
     loading: "Ładowanie…",
     no_rooms: "Brak skonfigurowanych pokoi.",
-    card_measured: "Pomiar",
+    th_room: "Pokój",
+    th_measured: "Pomiar",
+    th_setpoint: "Zadana",
+    th_error: "Uchył",
+    th_valve: "Zawór",
+    th_assist: "Wspomaganie",
+    th_state: "Sterowanie",
     card_setpoint: "Zadana",
     card_offset: "korekta {v}",
-    card_valve: "Zawór",
-    live: "Live",
-    shadow: "Obserwacja",
-    fast_on: "wł.",
-    fast_off: "źródło wył.",
-    fmode_heating: "grzanie",
-    fmode_cooling: "chłodzenie",
-    fmode_off: "wył.",
-    not_participating: "nie uczestniczy",
+    state_off: "Wyłączony",
+    state_shadow: "Obserwuje",
+    state_live: "Steruje",
+    assist_split: "Split",
+    assist_heater: "Grzałka",
+    assist_none: "—",
+    assist_state_off: "wył.",
+    assist_state_heating: "grzeje",
+    assist_state_cooling: "chłodzi",
+    kind_split: "Klimatyzator (split)",
+    kind_heater: "Grzałka elektryczna",
+    kind_none: "brak wspomagania",
     detail_close: "Zamknij",
     sec_wiring: "Okablowanie",
     sec_decision: "Decyzja regulatora",
@@ -182,17 +226,78 @@ const STR = {
     no: "nie",
     raw_show: "Pokaż surowe dane",
     no_live_room: "Brak danych na żywo dla tego pokoju.",
+    tune_intro:
+      "Globalne nastawy regulatora oraz rzadkie nadpisania per pokój. " +
+      "Zapis przeładowuje regulator (integrator PID zostaje wyzerowany).",
+    tune_scope_global: "Globalne",
+    tune_save: "Zapisz",
+    tune_saving: "Zapisywanie…",
+    tune_saved: "Zapisano",
+    tune_overridden: "nadpisane",
+    tune_revert: "Wróć do globalnej",
+    tune_inherited: "globalna",
+    tune_on: "wł.",
+    tune_off: "wył.",
+    tune_kp: "Wzmocnienie P",
+    tune_ki: "Wzmocnienie I",
+    tune_kt: "Człon trendu",
+    tune_deadband_c: "Strefa nieczułości",
+    tune_valve_floor_pct: "Minimalne otwarcie zaworu",
+    tune_boost_offset_c: "Próg dogrzewu",
+    tune_fast_min_on_minutes: "Min. czas pracy wspomagania",
+    tune_fast_min_off_minutes: "Min. czas postoju wspomagania",
+    tune_dew_margin_k: "Margines punktu rosy",
+    tune_dew_ramp_k: "Rampa dławienia rosy",
+    tune_outdoor_ff_enabled: "Sprzężenie pogodowe",
+    val_th_command: "Komenda",
+    val_th_raw: "Surowy",
+    val_th_floor: "Podłoga",
+    val_th_sat: "Saturacja",
+    val_th_s2: "Dławienie S2",
+    val_th_feedback: "Feedback",
+    val_raw_tooltip: "P {p} · I {i} · Trend {t} · FF {f}",
+    val_floor_chip: "min. otwarcie {v}%",
+    val_s2_flow: "przepływ {v}%",
+    val_s2_condensation: "kondensacja",
+    val_loop: "Pętla {n}",
+    val_supply: "Zasilanie",
+    val_return: "Powrót",
+    val_dt: "ΔT",
+    val_feedback_pos: "poz. {v}%",
+    val_no_loops: "brak przypisanych zaworów",
+    val_show_loops: "Pokaż pętle ({n})",
+    val_hide_loops: "Ukryj pętle",
+    val_empty: "Brak skonfigurowanych pokoi.",
+    ast_th_kind: "Rodzaj",
+    ast_th_command: "Komenda",
+    ast_th_actual: "Stan rzeczywisty",
+    ast_th_timer: "Timer",
+    ast_th_flags: "Flagi",
+    ast_th_entity: "Encja",
+    ast_none_line: "Bez wspomagania: {rooms}",
+    ast_timer_unlock: "odblokuje się za ~{n} min",
+    ast_timer_locked: "blokada min. czasu",
+    ast_tune_link: "dostrój",
+    ast_actual_unknown: "—",
+    ast_empty: "Żaden pokój nie ma szybkiego źródła.",
+    dew_reason_no_humidity: "brak czujnika wilgotności",
+    dew_reason_cooling_disabled: "chłodzenie wyłączone",
+    dew_reason_not_cooling_mode: "pokój nie chłodzi",
+    dew_reason_no_temperature: "brak pomiaru temperatury",
+    dew_none_collective: "{n} pokoi bez danych do punktu rosy",
+    dec_dew_reason: "Powód braku punktu rosy",
   },
   en: {
-    status_running: "Running · last cycle {age}",
+    status_running: "Running · cycle {age}",
     status_stale: "Stale",
     status_error: "Algorithm error",
     status_nodata: "No data",
-    age_now: "just now",
-    age_min: "{n} min ago",
-    age_hour: "{n} h ago",
+    age_sec: "{s} s ago",
+    age_min_sec: "{m} min {s} s ago",
+    age_min: "{m} min ago",
+    age_hour_min: "{h} h {m} min ago",
     age_unknown: "no timestamp",
-    rooms_live_cap: "Rooms live",
+    rooms_live_cap: "Live",
     flags_cap: "Flags",
     dew_cap: "Safe dew point",
     home_cap: "Home temperature",
@@ -201,25 +306,36 @@ const STR = {
     mode_transitional: "Transitional",
     mode_cooling: "Cooling",
     mode_off: "Off",
-    kill_on: "KILL-SWITCH: observe only",
-    kill_off: "Kill-switch: off",
-    kill_hint_on: "Control paused — click to resume",
-    kill_hint_off: "Click to stop all commands",
+    tab_rooms: "Rooms",
+    tab_tuning: "Tuning",
+    tab_valves: "Valves",
+    tab_assist: "Assist",
+    soon_title: "Coming soon",
+    soon_body: "This tab will arrive in a later release.",
     manage_rooms: "Manage rooms",
     loading: "Loading…",
     no_rooms: "No rooms configured.",
-    card_measured: "Measured",
+    th_room: "Room",
+    th_measured: "Measured",
+    th_setpoint: "Setpoint",
+    th_error: "Error",
+    th_valve: "Valve",
+    th_assist: "Assist",
+    th_state: "Control",
     card_setpoint: "Setpoint",
     card_offset: "offset {v}",
-    card_valve: "Valve",
-    live: "Live",
-    shadow: "Shadow",
-    fast_on: "on",
-    fast_off: "source off",
-    fmode_heating: "heat",
-    fmode_cooling: "cool",
-    fmode_off: "off",
-    not_participating: "not participating",
+    state_off: "Off",
+    state_shadow: "Shadow",
+    state_live: "Live",
+    assist_split: "Split",
+    assist_heater: "Heater",
+    assist_none: "—",
+    assist_state_off: "off",
+    assist_state_heating: "heating",
+    assist_state_cooling: "cooling",
+    kind_split: "Air-con (split)",
+    kind_heater: "Electric heater",
+    kind_none: "no assist",
     detail_close: "Close",
     sec_wiring: "Wiring",
     sec_decision: "Controller decision",
@@ -269,6 +385,66 @@ const STR = {
     no: "no",
     raw_show: "Show raw data",
     no_live_room: "No live data for this room yet.",
+    tune_intro:
+      "Global controller tuning plus sparse per-room overrides. " +
+      "Saving reloads the controller (the PID integrator is reset).",
+    tune_scope_global: "Global",
+    tune_save: "Save",
+    tune_saving: "Saving…",
+    tune_saved: "Saved",
+    tune_overridden: "overridden",
+    tune_revert: "Revert to global",
+    tune_inherited: "global",
+    tune_on: "on",
+    tune_off: "off",
+    tune_kp: "P gain",
+    tune_ki: "I gain",
+    tune_kt: "Trend damping",
+    tune_deadband_c: "Deadband",
+    tune_valve_floor_pct: "Valve floor",
+    tune_boost_offset_c: "Boost threshold",
+    tune_fast_min_on_minutes: "Assist min on-time",
+    tune_fast_min_off_minutes: "Assist min off-time",
+    tune_dew_margin_k: "Dew-point margin",
+    tune_dew_ramp_k: "Dew throttle ramp",
+    tune_outdoor_ff_enabled: "Weather feedforward",
+    val_th_command: "Command",
+    val_th_raw: "Raw",
+    val_th_floor: "Floor",
+    val_th_sat: "Saturation",
+    val_th_s2: "S2 throttle",
+    val_th_feedback: "Feedback",
+    val_raw_tooltip: "P {p} · I {i} · Trend {t} · FF {f}",
+    val_floor_chip: "min opening {v}%",
+    val_s2_flow: "flow {v}%",
+    val_s2_condensation: "condensation",
+    val_loop: "Loop {n}",
+    val_supply: "Supply",
+    val_return: "Return",
+    val_dt: "ΔT",
+    val_feedback_pos: "pos {v}%",
+    val_no_loops: "no valves assigned",
+    val_show_loops: "Show loops ({n})",
+    val_hide_loops: "Hide loops",
+    val_empty: "No rooms configured.",
+    ast_th_kind: "Kind",
+    ast_th_command: "Command",
+    ast_th_actual: "Actual state",
+    ast_th_timer: "Timer",
+    ast_th_flags: "Flags",
+    ast_th_entity: "Entity",
+    ast_none_line: "No assist: {rooms}",
+    ast_timer_unlock: "unlocks in ~{n} min",
+    ast_timer_locked: "min-runtime lock",
+    ast_tune_link: "tune",
+    ast_actual_unknown: "—",
+    ast_empty: "No room has a fast source.",
+    dew_reason_no_humidity: "no humidity sensor",
+    dew_reason_cooling_disabled: "cooling disabled",
+    dew_reason_not_cooling_mode: "room not cooling",
+    dew_reason_no_temperature: "no temperature reading",
+    dew_none_collective: "{n} rooms lack dew-point data",
+    dec_dew_reason: "Safe dew-point exclusion",
   },
 };
 
@@ -294,16 +470,20 @@ const FLAG_LABELS = {
   unknown_room: { pl: "Brak konfiguracji", en: "Unknown room", sev: "problem" },
   controller_error: { pl: "Błąd regulatora", en: "Controller error", sev: "problem" },
   fast_source_cannot_cool: {
-    pl: "Szybkie źródło nie chłodzi",
-    en: "Fast source can't cool",
+    pl: "Wspomaganie nie chłodzi",
+    en: "Assist can't cool",
     sev: "warn",
   },
   fast_source_min_runtime: {
-    pl: "Min. czas pracy źródła",
-    en: "Fast source min runtime",
+    pl: "Wspomaganie: blokada min. czasu pracy",
+    en: "Assist: min-runtime lock",
     sev: "warn",
   },
-  cooling_disabled: { pl: "Chłodzenie wyłączone", en: "Cooling disabled", sev: "warn" },
+  cooling_disabled: {
+    pl: "Chłodzenie wyłączone w tym pokoju",
+    en: "Cooling disabled in this room",
+    sev: "warn",
+  },
   saturated: { pl: "Nasycenie zaworu", en: "Valve saturated", sev: "warn" },
   valve_floor: { pl: "Minimalne otwarcie", en: "Valve floor", sev: "warn" },
 };
@@ -322,6 +502,22 @@ const WIRING_ROLES = [
 ];
 
 const UNAVAILABLE_STATES = new Set(["unavailable", "unknown", "none", ""]);
+
+/** Map a core `dew_excluded_reason` code to its localised STR key. */
+const DEW_REASON_KEYS = {
+  no_humidity: "dew_reason_no_humidity",
+  cooling_disabled: "dew_reason_cooling_disabled",
+  not_cooling_mode: "dew_reason_not_cooling_mode",
+  no_temperature: "dew_reason_no_temperature",
+};
+
+/** Config `entities` keys carrying per-loop valve / water-probe entity lists. */
+const LOOP_VALVE_KEY = "entity_valves";
+const LOOP_SUPPLY_KEY = "entity_supply";
+const LOOP_RETURN_KEY = "entity_return";
+
+/** Command↔feedback divergence [%] above which the valve row flags a mismatch. */
+const VALVE_MISMATCH_PCT = 12;
 
 // --- Small pure helpers -----------------------------------------------------
 
@@ -357,6 +553,16 @@ function clamp(v, lo, hi) {
 /** Round `v` to the nearest multiple of `step`. */
 function roundStep(v, step) {
   return Math.round(v / step) * step;
+}
+
+/** Number of decimals implied by a stepper `step` (0.001 → 3, 1 → 0). */
+function stepDecimals(step) {
+  if (!(step > 0)) {
+    return 0;
+  }
+  const str = String(step);
+  const dot = str.indexOf(".");
+  return dot < 0 ? 0 : str.length - dot - 1;
 }
 
 /** Return the first non-null/undefined key present in `obj`, else `fallback`. */
@@ -583,13 +789,25 @@ class TortoiseUfhPanel extends HTMLElement {
     this._builtLang = null;
     this._els = null; // stable skeleton element refs
     this._hero = null; // hero part refs
-    this._cards = new Map(); // room name -> card element
+    this._tabs = null; // tab-bar + section refs
+    this._activeTab = this._loadActiveTab();
+    this._rows = new Map(); // room name -> table <tr> element
     this._detail = null; // detail part refs
     this._detailRoom = null; // room name the detail is currently built for
 
     this._view = []; // normalized room view-models
     this._viewByName = new Map();
     this._lastUpdateMs = null; // parsed last_update_timestamp (epoch ms)
+
+    // Tuning tab (lazy-loaded on first activation; not part of the 5 s poll).
+    this._tuning = null; // last get_tuning payload
+    this._tuningScope = "global"; // "global" | <room name>
+    this._tuningDraft = null; // { values: {field: val}, overridden: Set<field> }
+    this._tuningEls = null; // stable Tuning-section refs
+    this._tuningLoading = false; // in-flight guard for the lazy fetch
+    // Errors are suppressed until this epoch-ms (a save reloads the entry, so
+    // get_live / get_tuning briefly return not_found — that is expected).
+    this._suppressErrorUntil = 0;
 
     this._pollTimer = null;
     this._ageTimer = null;
@@ -617,6 +835,28 @@ class TortoiseUfhPanel extends HTMLElement {
     }
   }
 
+  /** Restore the persisted active tab, defaulting to `rooms` (storage may throw). */
+  _loadActiveTab() {
+    try {
+      const v = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+      if (v && TAB_ORDER.includes(v)) {
+        return v;
+      }
+    } catch (err) {
+      /* private mode / disabled storage: fall through to default */
+    }
+    return DEFAULT_TAB;
+  }
+
+  /** Persist the active tab (best-effort; storage may be unavailable). */
+  _saveActiveTab(tab) {
+    try {
+      window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, tab);
+    } catch (err) {
+      /* ignore */
+    }
+  }
+
   // -- Lifecycle -----------------------------------------------------------
 
   /** HA assigns this on every state change; keep the latest handle. */
@@ -639,13 +879,19 @@ class TortoiseUfhPanel extends HTMLElement {
   }
 
   connectedCallback() {
+    this._activeTab = this._loadActiveTab();
     this._hasHaIcon = !!(window.customElements && customElements.get("ha-icon"));
     if (!this._hasHaIcon && window.customElements && customElements.whenDefined) {
       customElements.whenDefined("ha-icon").then(
         () => {
           this._hasHaIcon = true;
-          // Force the detail to rebuild so icon affordances swap in.
+          // Force the detail AND the table rows to rebuild so the native icon
+          // affordances (segment control, close, links) swap in.
           this._detailRoom = null;
+          for (const [, el] of this._rows) {
+            el.remove();
+          }
+          this._rows.clear();
           this._render();
         },
         () => {},
@@ -733,6 +979,11 @@ class TortoiseUfhPanel extends HTMLElement {
   _modeLabel(mode) {
     const key = "mode_" + mode;
     return key in STR.en ? this._t(key) : mode;
+  }
+
+  _knobLabel(name) {
+    const key = "tune_" + name;
+    return key in STR.en ? this._t(key) : name;
   }
 
   // -- Websocket -----------------------------------------------------------
@@ -953,26 +1204,33 @@ class TortoiseUfhPanel extends HTMLElement {
     this._poll();
   }
 
-  async _toggleKill() {
-    const engaged = !(this._config && this._config.kill_switch);
-    this._patchConfig((c) => {
-      c.kill_switch = engaged;
-    });
-    await this._callWS({ type: WS.setKill, engaged });
-    this._loadConfig();
-    this._poll();
-  }
-
-  async _toggleLive(room) {
+  async _setRoomState(room, state) {
+    if (!ROOM_STATES.includes(state)) {
+      return;
+    }
     const view = this._viewByName.get(room);
-    const enabled = !(view && view.live);
+    if (view && view.state === state) {
+      return;
+    }
+    // Optimistic patch of both payloads: config (authoritative on next
+    // get_config) and the live view (polled), so the segment reflects the
+    // click before the round-trip and the poll reconciles.
     this._patchConfig((c) => {
       const r = (c.rooms || []).find((x) => x.name === room);
       if (r) {
-        r.live_control = enabled;
+        r.control_state = state;
       }
     });
-    await this._callWS({ type: WS.setEnabled, room, enabled });
+    if (this._live && this._live.rooms && this._live.rooms[room]) {
+      const lr = { ...this._live.rooms[room], control_state: state };
+      lr.live_control_enabled = state === STATE_LIVE;
+      this._live = {
+        ...this._live,
+        rooms: { ...this._live.rooms, [room]: lr },
+      };
+      this._render();
+    }
+    await this._callWS({ type: WS.setRoomState, room, state });
     this._loadConfig();
     this._poll();
   }
@@ -1015,6 +1273,36 @@ class TortoiseUfhPanel extends HTMLElement {
     return rank >= 2 ? "problem" : rank === 1 ? "warn" : "ok";
   }
 
+  /** Coerce any control-state value to one of `ROOM_STATES` (default shadow). */
+  _normState(value) {
+    const s = String(value);
+    return ROOM_STATES.includes(s) ? s : STATE_SHADOW;
+  }
+
+  /**
+   * Localised fast-source (assist) badge for a room view-model.
+   *
+   * Returns `{ text, cls }` where `cls` is `on` / `off` / `none`. Composes the
+   * source kind (Split / Heater) with its command state and target, e.g.
+   * "Split: heating → 22.0 °C"; a room with no fast source reads as an em dash.
+   */
+  _assistLabel(r) {
+    if (r.fastKind === "none") {
+      return { text: this._t("assist_none"), cls: "none" };
+    }
+    const short =
+      r.fastKind === "heater" ? this._t("assist_heater") : this._t("assist_split");
+    if (!r.fastOn || r.fastMode === "off") {
+      return { text: short + ": " + this._t("assist_state_off"), cls: "off" };
+    }
+    const verb =
+      r.fastMode === "cooling"
+        ? this._t("assist_state_cooling")
+        : this._t("assist_state_heating");
+    const target = r.fastTarget !== null ? " → " + fmt(r.fastTarget, 1, " °C") : "";
+    return { text: short + ": " + verb + target, cls: "on" };
+  }
+
   /** Merge config + live into a sorted list of normalized room view-models. */
   _computeView() {
     const cfg = this._config || {};
@@ -1053,9 +1341,16 @@ class TortoiseUfhPanel extends HTMLElement {
         ),
       );
       const errorC = num(report.error_c);
-      // room_temp = setpoint - error (heating sign convention, all modes).
+      // Prefer the measured room temperature echoed in the report. Only fall
+      // back to reconstructing it from `setpoint - error` when the field is
+      // ABSENT (older backend); a present-but-null value means the sensor is
+      // lost and must render as "—", never as a fabricated number.
       const current =
-        setpoint !== null && errorC !== null ? setpoint - errorC : null;
+        report.room_temperature_c !== undefined
+          ? num(report.room_temperature_c)
+          : setpoint !== null && errorC !== null
+            ? setpoint - errorC
+            : null;
       const flags = Array.isArray(report.flags) ? report.flags.slice() : [];
 
       rows.push({
@@ -1079,9 +1374,15 @@ class TortoiseUfhPanel extends HTMLElement {
         fastOn: !!fast.on,
         fastMode: pick(fast, ["mode"], "off"),
         fastTarget: num(fast.target_temperature_c),
-        live: !!pick(lv, ["live_control_enabled"], pick(c, ["live_control"], false)),
+        fastKind: String(pick(c, ["fast_source_kind"], "none") || "none"),
+        // Canonical three-state control: prefer the polled live value, then the
+        // config value, defaulting to shadow (safe, matches the adapter).
+        state: this._normState(pick(lv, ["control_state"], pick(c, ["control_state"], STATE_SHADOW))),
         cooling: !!pick(c, ["cooling_enabled"], false),
-        participates: pick(c, ["participates"], true) !== false,
+        // Additive report fields (F5): why the room is excluded from the global
+        // safe dew point, and the fast-source min ON/OFF dwell lock remaining.
+        dewReason: pick(report, ["dew_excluded_reason"], null) || null,
+        fastDwell: num(report.fast_dwell_remaining_s),
         flags,
         explanation: pick(report, ["explanation"], "") || "",
         severity: this._severity(flags),
@@ -1104,6 +1405,12 @@ class TortoiseUfhPanel extends HTMLElement {
   // -- Rendering: skeleton -------------------------------------------------
 
   _setError(msg) {
+    // While a save is reloading the entry, transient errors (get_live /
+    // get_tuning → not_found) are expected: swallow non-empty messages during
+    // the suppression window. Clears (empty msg) always pass through.
+    if (msg && Date.now() < this._suppressErrorUntil) {
+      return;
+    }
     if (msg === this._error) {
       return;
     }
@@ -1132,9 +1439,11 @@ class TortoiseUfhPanel extends HTMLElement {
     } else if (this._els && this._els.wrap) {
       // Language changed at runtime: drop content, keep the <style>.
       this._els.wrap.remove();
-      this._cards = new Map();
+      this._rows = new Map();
+      this._tabs = null;
       this._detail = null;
       this._detailRoom = null;
+      this._tuningEls = null;
     }
     this._hasHaIcon = !!(window.customElements && customElements.get("ha-icon"));
     this._builtLang = this._lang;
@@ -1145,15 +1454,1157 @@ class TortoiseUfhPanel extends HTMLElement {
   _buildSkeleton() {
     const banner = h("div", { class: "banner", style: "display:none" });
     const hero = this._buildHero();
-    const grid = h("div", { class: "grid" });
-    const empty = h("div", { class: "empty", text: this._t("loading") });
-    const main = h("div", { class: "col-main" }, [empty, grid]);
+    const tabbar = this._buildTabs();
+
+    // Four sections, built once and toggled with `display` (never rebuilt), so
+    // switching tabs is instant and never disturbs scroll or in-flight fetches.
+    const roomsSection = this._buildRoomsSection();
+    const sections = {
+      rooms: roomsSection.el,
+      tuning: this._buildTuningSection(),
+      valves: this._buildValvesSection(),
+      assist: this._buildAssistSection(),
+    };
+    this._tabs.sections = sections;
+
+    const main = h("div", { class: "col-main" }, TAB_ORDER.map((k) => sections[k]));
     const detail = h("section", { class: "detail", style: "display:none" });
     const layout = h("div", { class: "layout" }, [main, detail]);
-    const wrap = h("div", { class: "wrap" }, [banner, hero, layout]);
+    const wrap = h("div", { class: "wrap" }, [banner, hero, tabbar, layout]);
 
-    this._els = { wrap, banner, grid, empty, detail, layout };
+    this._els = {
+      wrap,
+      banner,
+      tbody: roomsSection.tbody,
+      empty: roomsSection.empty,
+      tableWrap: roomsSection.wrapEl,
+      detail,
+      layout,
+    };
     this.shadowRoot.appendChild(wrap);
+  }
+
+  /** Build the tablist between the hero and the layout; stores refs on `_tabs`. */
+  _buildTabs() {
+    const btns = {};
+    const bar = h("div", { class: "tabbar", role: "tablist" });
+    TABS.forEach((t, i) => {
+      const btn = h("button", {
+        class: "tab",
+        type: "button",
+        role: "tab",
+        text: this._t(t.label),
+        dataset: { tab: t.key },
+        tabindex: "-1",
+        on: {
+          click: () => this._setActiveTab(t.key),
+          keydown: (e) => this._onTabKey(e, i),
+        },
+      });
+      btns[t.key] = btn;
+      bar.appendChild(btn);
+    });
+    this._tabs = { bar, btns, sections: null };
+    return bar;
+  }
+
+  /** Arrow-key navigation across the tablist (roving tabindex). */
+  _onTabKey(ev, index) {
+    let next = null;
+    if (ev.key === "ArrowRight" || ev.key === "ArrowDown") {
+      next = (index + 1) % TAB_ORDER.length;
+    } else if (ev.key === "ArrowLeft" || ev.key === "ArrowUp") {
+      next = (index - 1 + TAB_ORDER.length) % TAB_ORDER.length;
+    } else if (ev.key === "Home") {
+      next = 0;
+    } else if (ev.key === "End") {
+      next = TAB_ORDER.length - 1;
+    } else {
+      return;
+    }
+    ev.preventDefault();
+    const key = TAB_ORDER[next];
+    this._setActiveTab(key);
+    const btn = this._tabs && this._tabs.btns[key];
+    if (btn) {
+      btn.focus();
+    }
+  }
+
+  /** Build the Rooms tab: an accessible table with a sticky header. */
+  _buildRoomsSection() {
+    const empty = h("div", { class: "empty", text: this._t("loading") });
+
+    const headCells = [
+      h("th", { class: "col-state", scope: "col" }, [
+        h("span", { class: "sr-only", text: this._t("th_state") }),
+      ]),
+      h("th", { class: "col-room", scope: "col", text: this._t("th_room") }),
+      h("th", { class: "col-measured", scope: "col", text: this._t("th_measured") }),
+      h("th", { class: "col-setpoint", scope: "col", text: this._t("th_setpoint") }),
+      h("th", { class: "col-error", scope: "col", text: this._t("th_error") }),
+      h("th", { class: "col-valve", scope: "col", text: this._t("th_valve") }),
+      h("th", { class: "col-assist", scope: "col", text: this._t("th_assist") }),
+    ];
+    const thead = h("thead", null, [h("tr", null, headCells)]);
+    const tbody = h("tbody");
+    const table = h("table", { class: "rooms-table" }, [thead, tbody]);
+    const wrapEl = h("div", { class: "table-wrap" }, [table]);
+
+    const el = h("section", {
+      class: "tab-section",
+      role: "tabpanel",
+      dataset: { tab: "rooms" },
+    });
+    el.appendChild(empty);
+    el.appendChild(wrapEl);
+    return { el, tbody, empty, wrapEl };
+  }
+
+  /** Build a "coming soon" placeholder section for a not-yet-built tab. */
+  _buildPlaceholder(labelKey) {
+    return h(
+      "section",
+      { class: "tab-section", role: "tabpanel", style: "display:none" },
+      [
+        h("div", { class: "placeholder" }, [
+          h("h2", { text: this._t(labelKey) }),
+          h("div", { class: "muted", text: this._t("soon_title") }),
+          h("div", { class: "muted", text: this._t("soon_body") }),
+        ]),
+      ],
+    );
+  }
+
+  // -- Valves tab ----------------------------------------------------------
+
+  /** Read a raw HA state string for an entity, or null when absent. */
+  _hassState(entityId) {
+    if (!entityId) {
+      return null;
+    }
+    const st = this._hass && this._hass.states && this._hass.states[entityId];
+    return st || null;
+  }
+
+  /** Numeric temperature/state for an entity (state number), or null. */
+  _stateNum(entityId) {
+    const st = this._hassState(entityId);
+    if (!st) {
+      return null;
+    }
+    if (UNAVAILABLE_STATES.has(String(st.state))) {
+      return null;
+    }
+    return num(st.state);
+  }
+
+  /**
+   * Valve feedback position [%] for an entity: `current_position` for the
+   * native `valve` domain, else the numeric state (a `number`/`input_number`).
+   */
+  _valvePosition(entityId) {
+    const st = this._hassState(entityId);
+    if (!st) {
+      return null;
+    }
+    const attrs = st.attributes || {};
+    if (attrs.current_position !== undefined && attrs.current_position !== null) {
+      return num(attrs.current_position);
+    }
+    if (UNAVAILABLE_STATES.has(String(st.state))) {
+      return null;
+    }
+    return num(st.state);
+  }
+
+  /** Split a config `entities` value into a clean id list (single or array). */
+  _entityList(value) {
+    if (Array.isArray(value)) {
+      return value.filter(Boolean);
+    }
+    return value ? [value] : [];
+  }
+
+  /** Loop descriptors (valve / supply / return ids) zipped by index. */
+  _roomLoops(r) {
+    const ent = r.entities || {};
+    const valves = this._entityList(ent[LOOP_VALVE_KEY]);
+    const supplies = this._entityList(ent[LOOP_SUPPLY_KEY]);
+    const returns = this._entityList(ent[LOOP_RETURN_KEY]);
+    const count = Math.max(valves.length, supplies.length, returns.length);
+    const loops = [];
+    for (let i = 0; i < count; i += 1) {
+      loops.push({
+        valveId: valves[i] || null,
+        supplyId: supplies[i] || null,
+        returnId: returns[i] || null,
+      });
+    }
+    return loops;
+  }
+
+  /** Build the Valves section skeleton (rows populated by `_renderValves`). */
+  _buildValvesSection() {
+    const empty = h("div", { class: "empty", text: this._t("loading") });
+    const headCells = [
+      h("th", { scope: "col", text: this._t("th_room") }),
+      h("th", { scope: "col", text: this._t("val_th_command") }),
+      h("th", { scope: "col", text: this._t("val_th_raw") }),
+      h("th", { scope: "col", text: this._t("val_th_floor") }),
+      h("th", { scope: "col", text: this._t("val_th_sat") }),
+      h("th", { scope: "col", text: this._t("val_th_s2") }),
+      h("th", { scope: "col", text: this._t("val_th_feedback") }),
+    ];
+    const thead = h("thead", null, [h("tr", null, headCells)]);
+    const tbody = h("tbody");
+    const table = h("table", { class: "valves-table" }, [thead, tbody]);
+    const wrapEl = h("div", { class: "table-wrap" }, [table]);
+    const el = h(
+      "section",
+      { class: "tab-section", role: "tabpanel", style: "display:none", dataset: { tab: "valves" } },
+      [empty, wrapEl],
+    );
+    this._valvesEls = { el, tbody, empty, wrapEl, rows: new Map() };
+    return el;
+  }
+
+  /** Reconcile the Valves table from the current view + live HA states. */
+  _renderValves() {
+    const E = this._valvesEls;
+    if (!E) {
+      return;
+    }
+    const rows = this._view;
+    if (!rows.length) {
+      for (const [, entry] of E.rows) {
+        entry.tr.remove();
+        entry.detailTr.remove();
+      }
+      E.rows.clear();
+      const loading = !this._config && !this._live;
+      E.empty.textContent = loading ? this._t("loading") : this._t("val_empty");
+      E.empty.style.display = "";
+      E.wrapEl.style.display = "none";
+      return;
+    }
+    E.empty.style.display = "none";
+    E.wrapEl.style.display = "";
+
+    const desired = new Set(rows.map((r) => r.name));
+    for (const [name, entry] of [...E.rows]) {
+      if (!desired.has(name)) {
+        entry.tr.remove();
+        entry.detailTr.remove();
+        E.rows.delete(name);
+      }
+    }
+
+    for (const r of rows) {
+      let entry = E.rows.get(r.name);
+      const loopCount = this._roomLoops(r).length;
+      // Rebuild if the loop wiring changed (e.g. after a config reload).
+      if (entry && entry.loopCount !== loopCount) {
+        entry.tr.remove();
+        entry.detailTr.remove();
+        E.rows.delete(r.name);
+        entry = undefined;
+      }
+      if (!entry) {
+        entry = this._buildValveRow(r);
+        E.rows.set(r.name, entry);
+      }
+      // Append in sorted order (moving existing nodes is cheap, no flicker).
+      E.tbody.appendChild(entry.tr);
+      E.tbody.appendChild(entry.detailTr);
+      this._updateValveRow(entry, r);
+    }
+  }
+
+  _buildValveRow(r) {
+    const p = {};
+    const loops = this._roomLoops(r);
+    const many = loops.length > 1;
+
+    // Column 1: name (+ loop disclosure caret when there is more than one loop).
+    p.caret = h(
+      "button",
+      {
+        class: "loop-caret",
+        type: "button",
+        title: this._t("val_show_loops"),
+        style: many ? "" : "display:none",
+        on: {
+          click: (e) => {
+            e.stopPropagation();
+            this._toggleValveLoops(r.name);
+          },
+        },
+      },
+      [this._icon("mdi:chevron-right", "▸")],
+    );
+    p.name = h("span", { class: "card-name", text: r.name });
+    const nameCell = h("td", { class: "col-room" }, [
+      h("div", { class: "name-cell" }, [p.caret, p.name]),
+    ]);
+
+    // Column 2: commanded valve % + mini-bar.
+    p.cmdVal = h("span", { class: "valve-val" });
+    p.cmdFill = h("span", { class: "valve-fill" });
+    const cmdCell = h("td", null, [
+      h("div", { class: "valve-mini" }, [
+        p.cmdVal,
+        h("div", { class: "valve-track" }, [p.cmdFill]),
+      ]),
+    ]);
+
+    // Column 3: raw valve % (pre-limits), with the term breakdown in the title.
+    p.raw = h("span", { class: "mono" });
+    const rawCell = h("td", null, [p.raw]);
+
+    // Column 4: heating valve-floor chip.
+    p.floor = h("span");
+    const floorCell = h("td", null, [p.floor]);
+
+    // Column 5: saturation chip.
+    p.sat = h("span");
+    const satCell = h("td", null, [p.sat]);
+
+    // Column 6: S2 cooling throttle chip.
+    p.s2 = h("span");
+    const s2Cell = h("td", null, [p.s2]);
+
+    // Column 7: aggregated loop feedback %.
+    p.feedback = h("span", { class: "mono" });
+    const fbCell = h("td", null, [p.feedback]);
+
+    const tr = h(
+      "tr",
+      {
+        class: "valve-row",
+        tabindex: "0",
+        dataset: { room: r.name },
+        on: {
+          click: (e) => {
+            if (e.target.closest("button")) {
+              return;
+            }
+            this._select(r.name);
+          },
+          keydown: (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              this._select(r.name);
+            }
+          },
+        },
+      },
+      [nameCell, cmdCell, rawCell, floorCell, satCell, s2Cell, fbCell],
+    );
+
+    // Detail row: per-loop probes (feedback / supply / return / ΔT).
+    const loopWrap = h("div", { class: "loop-list" });
+    const loopRefs = [];
+    loops.forEach((loop, i) => {
+      const ref = this._buildLoopRow(loop, i);
+      loopRefs.push(ref);
+      loopWrap.appendChild(ref.rowEl);
+    });
+    if (!loops.length) {
+      loopWrap.appendChild(
+        h("div", { class: "loop-row muted", text: this._t("val_no_loops") }),
+      );
+    }
+    const detailCell = h("td", { colspan: "7" }, [loopWrap]);
+    const detailTr = h("tr", { class: "loop-detail", style: "display:none" }, [detailCell]);
+
+    return { tr, detailTr, parts: p, loops: loopRefs, loopCount: loops.length, expanded: false };
+  }
+
+  _buildLoopRow(loop, index) {
+    const label = h("span", {
+      class: "loop-label",
+      text: fmtStr(this._t("val_loop"), { n: index + 1 }),
+    });
+    const fbEl = h("span", { class: "mono" });
+    const valveLink = h(
+      "button",
+      {
+        class: "loop-link",
+        type: "button",
+        style: loop.valveId ? "" : "display:none",
+        title: loop.valveId || "",
+        on: {
+          click: (e) => {
+            e.stopPropagation();
+            this._moreInfo(loop.valveId);
+          },
+        },
+      },
+      [fbEl, this._icon("mdi:open-in-new", "›")],
+    );
+    const supEl = h("span", { class: "mono" });
+    const retEl = h("span", { class: "mono" });
+    const dtEl = h("span", { class: "mono" });
+    const rowEl = h("div", { class: "loop-row" }, [
+      label,
+      h("span", { class: "loop-metric" }, [valveLink]),
+      h("span", { class: "loop-metric" }, [
+        h("span", { class: "loop-cap", text: this._t("val_supply") }),
+        supEl,
+      ]),
+      h("span", { class: "loop-metric" }, [
+        h("span", { class: "loop-cap", text: this._t("val_return") }),
+        retEl,
+      ]),
+      h("span", { class: "loop-metric" }, [
+        h("span", { class: "loop-cap", text: this._t("val_dt") }),
+        dtEl,
+      ]),
+    ]);
+    return { loop, fbEl, supEl, retEl, dtEl, rowEl };
+  }
+
+  /** Toggle a room's loop-detail row open/closed (persists across polls). */
+  _toggleValveLoops(name) {
+    const entry = this._valvesEls && this._valvesEls.rows.get(name);
+    if (!entry) {
+      return;
+    }
+    entry.expanded = !entry.expanded;
+    entry.detailTr.style.display = entry.expanded ? "" : "none";
+    entry.parts.caret.classList.toggle("open", entry.expanded);
+    entry.parts.caret.title = entry.expanded
+      ? this._t("val_hide_loops")
+      : this._t("val_show_loops");
+  }
+
+  _updateValveRow(entry, r) {
+    const p = entry.parts;
+    entry.tr.classList.toggle("selected", r.name === this._selectedRoom);
+
+    // Command valve % + bar.
+    const cmd = r.valve === null ? 0 : clamp(r.valve, 0, 100);
+    p.cmdFill.style.width = cmd + "%";
+    p.cmdVal.textContent = fmt(r.valve, 0, "%");
+
+    // Raw valve % with the term contributions in the tooltip.
+    p.raw.textContent = fmt(r.rawValve, 0, "%");
+    p.raw.title = fmtStr(this._t("val_raw_tooltip"), {
+      p: signed(r.pTerm, 1, "%"),
+      i: signed(r.iTerm, 1, "%"),
+      t: signed(r.trendTerm, 1, "%"),
+      f: signed(r.ffTerm, 1, "%"),
+    });
+
+    // Floor chip (only when the heating valve floor was applied).
+    if (r.valveFloor) {
+      p.floor.className = "chip chip-warn";
+      p.floor.textContent = fmtStr(this._t("val_floor_chip"), {
+        v: fmt(r.valve, 0),
+      });
+    } else {
+      p.floor.className = "muted";
+      p.floor.textContent = "—";
+    }
+
+    // Saturation chip.
+    if (r.saturated) {
+      p.sat.className = "chip chip-warn";
+      p.sat.textContent = this._t("yes");
+    } else {
+      p.sat.className = "muted";
+      p.sat.textContent = "—";
+    }
+
+    // S2 cooling throttle: 0 → condensation, (0,1) → reduced flow, 1 → open.
+    if (r.throttle !== null && r.throttle < 1) {
+      if (r.throttle <= 0) {
+        p.s2.className = "chip chip-problem";
+        p.s2.textContent = this._t("val_s2_condensation");
+      } else {
+        p.s2.className = "chip chip-warn";
+        p.s2.textContent = fmtStr(this._t("val_s2_flow"), {
+          v: fmt(r.throttle * 100, 0),
+        });
+      }
+    } else {
+      p.s2.className = "muted";
+      p.s2.textContent = "—";
+    }
+
+    // Aggregated loop feedback + per-loop rows.
+    const positions = [];
+    for (const ref of entry.loops) {
+      const pos = this._valvePosition(ref.loop.valveId);
+      ref.fbEl.textContent =
+        pos === null
+          ? this._t("wire_missing")
+          : fmtStr(this._t("val_feedback_pos"), { v: fmt(pos, 0) });
+      const sup = this._stateNum(ref.loop.supplyId);
+      const ret = this._stateNum(ref.loop.returnId);
+      ref.supEl.textContent = fmt(sup, 1, "°");
+      ref.retEl.textContent = fmt(ret, 1, "°");
+      ref.dtEl.textContent =
+        sup !== null && ret !== null ? signed(sup - ret, 1, " K") : "—";
+      if (pos !== null) {
+        positions.push(pos);
+      }
+    }
+    if (positions.length) {
+      const avg = positions.reduce((s, v) => s + v, 0) / positions.length;
+      p.feedback.textContent = fmt(avg, 0, "%");
+      const mismatch = r.valve !== null && Math.abs(avg - r.valve) > VALVE_MISMATCH_PCT;
+      p.feedback.classList.toggle("mismatch", mismatch);
+    } else {
+      p.feedback.textContent = "—";
+      p.feedback.classList.remove("mismatch");
+    }
+  }
+
+  // -- Assist tab ----------------------------------------------------------
+
+  /** Build the Assist section skeleton (rows populated by `_renderAssist`). */
+  _buildAssistSection() {
+    const empty = h("div", { class: "empty", text: this._t("loading") });
+    const headCells = [
+      h("th", { scope: "col", text: this._t("th_room") }),
+      h("th", { scope: "col", text: this._t("ast_th_kind") }),
+      h("th", { scope: "col", text: this._t("ast_th_command") }),
+      h("th", { scope: "col", text: this._t("ast_th_actual") }),
+      h("th", { scope: "col", text: this._t("ast_th_timer") }),
+      h("th", { scope: "col", text: this._t("ast_th_flags") }),
+      h("th", { scope: "col", text: this._t("ast_th_entity") }),
+    ];
+    const thead = h("thead", null, [h("tr", null, headCells)]);
+    const tbody = h("tbody");
+    const table = h("table", { class: "assist-table" }, [thead, tbody]);
+    const wrapEl = h("div", { class: "table-wrap" }, [table]);
+    const noneLine = h("div", { class: "assist-none muted", style: "display:none" });
+    const el = h(
+      "section",
+      { class: "tab-section", role: "tabpanel", style: "display:none", dataset: { tab: "assist" } },
+      [empty, wrapEl, noneLine],
+    );
+    this._assistEls = { el, tbody, empty, wrapEl, noneLine, rows: new Map() };
+    return el;
+  }
+
+  /** Reconcile the Assist table from the current view + live HA states. */
+  _renderAssist() {
+    const E = this._assistEls;
+    if (!E) {
+      return;
+    }
+    const withAssist = this._view.filter((r) => r.fastKind !== "none");
+    const without = this._view.filter((r) => r.fastKind === "none");
+
+    // "No assist" summary line (rooms without a fast source).
+    if (without.length) {
+      E.noneLine.textContent = fmtStr(this._t("ast_none_line"), {
+        rooms: without.map((r) => r.name).join(", "),
+      });
+      E.noneLine.style.display = "";
+    } else {
+      E.noneLine.style.display = "none";
+    }
+
+    if (!withAssist.length) {
+      for (const [, entry] of E.rows) {
+        entry.tr.remove();
+      }
+      E.rows.clear();
+      const loading = !this._config && !this._live;
+      E.empty.textContent = loading ? this._t("loading") : this._t("ast_empty");
+      E.empty.style.display = "";
+      E.wrapEl.style.display = "none";
+      return;
+    }
+    E.empty.style.display = "none";
+    E.wrapEl.style.display = "";
+
+    const desired = new Set(withAssist.map((r) => r.name));
+    for (const [name, entry] of [...E.rows]) {
+      if (!desired.has(name)) {
+        entry.tr.remove();
+        E.rows.delete(name);
+      }
+    }
+    for (const r of withAssist) {
+      let entry = E.rows.get(r.name);
+      if (!entry) {
+        entry = this._buildAssistRow(r);
+        E.rows.set(r.name, entry);
+      }
+      E.tbody.appendChild(entry.tr);
+      this._updateAssistRow(entry, r);
+    }
+  }
+
+  _buildAssistRow(r) {
+    const p = {};
+    p.name = h("span", { class: "card-name", text: r.name });
+    const nameCell = h("td", { class: "col-room" }, [p.name]);
+
+    p.kind = h("span");
+    const kindCell = h("td", null, [p.kind]);
+
+    p.command = h("span", { class: "fast-badge" });
+    const cmdCell = h("td", null, [p.command]);
+
+    p.actual = h("span", { class: "mono" });
+    const actualCell = h("td", null, [p.actual]);
+
+    p.timer = h("span");
+    const timerCell = h("td", null, [p.timer]);
+
+    p.flags = h("div", { class: "chips" });
+    const flagsCell = h("td", null, [p.flags]);
+
+    p.link = h(
+      "button",
+      {
+        class: "loop-link",
+        type: "button",
+        on: {
+          click: (e) => {
+            e.stopPropagation();
+            this._moreInfo(p.entityId);
+          },
+        },
+      },
+      [this._icon("mdi:open-in-new", "›")],
+    );
+    p.tune = h("button", {
+      class: "link-btn",
+      type: "button",
+      text: this._t("ast_tune_link"),
+      on: {
+        click: (e) => {
+          e.stopPropagation();
+          this._tuneRoom(r.name);
+        },
+      },
+    });
+    const entityCell = h("td", null, [
+      h("div", { class: "assist-actions" }, [p.link, p.tune]),
+    ]);
+
+    const tr = h(
+      "tr",
+      {
+        class: "assist-row",
+        tabindex: "0",
+        dataset: { room: r.name },
+        on: {
+          click: (e) => {
+            if (e.target.closest("button")) {
+              return;
+            }
+            this._select(r.name);
+          },
+          keydown: (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              this._select(r.name);
+            }
+          },
+        },
+      },
+      [nameCell, kindCell, cmdCell, actualCell, timerCell, flagsCell, entityCell],
+    );
+    return { tr, parts: p };
+  }
+
+  _updateAssistRow(entry, r) {
+    const p = entry.parts;
+    entry.tr.classList.toggle("selected", r.name === this._selectedRoom);
+
+    // Kind (§8 labels).
+    p.kind.textContent =
+      r.fastKind === "heater" ? this._t("kind_heater") : this._t("kind_split");
+
+    // Command badge (Off / heating → target / cooling → target).
+    const assist = this._assistLabel(r);
+    p.command.className = "fast-badge " + assist.cls;
+    p.command.textContent = assist.text;
+
+    // Actual state from the climate entity (hvac_action, else state).
+    const entityId = this._entityList((r.entities || {}).entity_fast_source)[0] || null;
+    p.entityId = entityId;
+    const st = this._hassState(entityId);
+    let actualText = this._t("ast_actual_unknown");
+    let action = null;
+    if (st) {
+      const attrs = st.attributes || {};
+      action = attrs.hvac_action ? String(attrs.hvac_action) : String(st.state);
+      actualText = action;
+    }
+    p.actual.textContent = actualText;
+    // Divergence: commanded ON but idle/off, or commanded OFF but running.
+    const cmdOn = r.fastOn && r.fastMode !== "off";
+    const acting = action === "heating" || action === "cooling";
+    const idleish = action === "off" || action === "idle";
+    const mismatch = st && ((cmdOn && idleish) || (!cmdOn && acting));
+    p.actual.classList.toggle("mismatch", !!mismatch);
+
+    // Timer: remaining dwell → "unlocks in ~N min"; else min-runtime lock; else —.
+    if (r.fastDwell !== null) {
+      p.timer.className = "";
+      p.timer.textContent = fmtStr(this._t("ast_timer_unlock"), {
+        n: Math.max(1, Math.ceil(r.fastDwell / 60)),
+      });
+    } else if (r.flags.includes("fast_source_min_runtime")) {
+      p.timer.className = "chip chip-warn";
+      p.timer.textContent = this._t("ast_timer_locked");
+    } else {
+      p.timer.className = "muted";
+      p.timer.textContent = "—";
+    }
+
+    // Flags: the assist-relevant subset.
+    p.flags.textContent = "";
+    for (const f of ["fast_source_min_runtime", "fast_source_cannot_cool"]) {
+      if (r.flags.includes(f)) {
+        p.flags.appendChild(this._chip(f));
+      }
+    }
+
+    // Entity link visibility.
+    p.link.style.display = entityId ? "" : "none";
+    p.link.title = entityId || "";
+  }
+
+  /** Jump to the Tuning tab scoped to a room (the assist "tune" shortcut). */
+  _tuneRoom(name) {
+    this._setActiveTab("tuning");
+    this._ensureTuningLoaded();
+    if (this._tuning) {
+      this._setTuningScope(name);
+    } else {
+      // Payload not loaded yet: remember the desired scope for `_adoptTuning`.
+      this._tuningScope = name;
+    }
+  }
+
+  /** Localised text for a `dew_excluded_reason` code (raw code as fallback). */
+  _dewReasonText(code) {
+    const key = DEW_REASON_KEYS[code];
+    return key ? this._t(key) : String(code);
+  }
+
+  /** Aggregated reason why the safe dew point is unavailable (hero subline). */
+  _dewReasonSummary() {
+    const excluded = this._view.filter((r) => r.dewReason);
+    if (!excluded.length) {
+      return "";
+    }
+    if (excluded.length <= 3) {
+      return excluded
+        .map((r) => r.name + ": " + this._dewReasonText(r.dewReason))
+        .join(" · ");
+    }
+    return fmtStr(this._t("dew_none_collective"), { n: excluded.length });
+  }
+
+  // -- Tuning tab ----------------------------------------------------------
+
+  /** Build the Tuning section skeleton (populated lazily by `_renderTuning`). */
+  _buildTuningSection() {
+    const intro = h("div", { class: "tune-intro", text: this._t("tune_intro") });
+    const scopeBar = h("div", { class: "tune-scopes", role: "group" });
+    const body = h("div", { class: "tune-body" }, [
+      h("div", { class: "empty", text: this._t("loading") }),
+    ]);
+    const saveBtn = h("button", {
+      class: "tune-save",
+      type: "button",
+      text: this._t("tune_save"),
+      on: { click: () => this._saveTuning() },
+    });
+    const saveNote = h("span", { class: "tune-note" });
+    const footer = h("div", { class: "tune-footer" }, [saveBtn, saveNote]);
+
+    const el = h(
+      "section",
+      { class: "tab-section", role: "tabpanel", style: "display:none" },
+      [h("div", { class: "tune" }, [intro, scopeBar, body, footer])],
+    );
+    this._tuningEls = { el, scopeBar, body, saveBtn, saveNote, fields: new Map() };
+    return el;
+  }
+
+  /** Configured room names (for the Tuning scope chips), or an empty list. */
+  _configRoomNames() {
+    const rooms = (this._config && this._config.rooms) || [];
+    return rooms.map((r) => String(r.name)).filter((n) => n);
+  }
+
+  /** Fetch the tuning payload once, then render it (in-flight de-duplicated). */
+  _ensureTuningLoaded() {
+    if (this._tuning || this._tuningLoading) {
+      return;
+    }
+    this._loadTuning();
+  }
+
+  async _loadTuning() {
+    if (this._tuningLoading) {
+      return;
+    }
+    this._tuningLoading = true;
+    const res = await this._callWS({ type: WS.getTuning });
+    this._tuningLoading = false;
+    if (res && Array.isArray(res.fields)) {
+      this._adoptTuning(res);
+    }
+  }
+
+  /** Adopt a fresh tuning payload, reconciling scope, draft and DOM. */
+  _adoptTuning(payload) {
+    this._tuning = payload;
+    if (
+      this._tuningScope !== "global" &&
+      !this._configRoomNames().includes(this._tuningScope)
+    ) {
+      this._tuningScope = "global";
+    }
+    this._initTuningDraft();
+    this._renderTuning();
+  }
+
+  /** Seed the working draft from the payload for the active scope. */
+  _initTuningDraft() {
+    if (!this._tuning) {
+      this._tuningDraft = null;
+      return;
+    }
+    const global = this._tuning.global || {};
+    if (this._tuningScope === "global") {
+      this._tuningDraft = { values: { ...global }, overridden: new Set() };
+      return;
+    }
+    const override = (this._tuning.rooms || {})[this._tuningScope] || {};
+    this._tuningDraft = {
+      values: { ...global, ...override },
+      overridden: new Set(Object.keys(override)),
+    };
+  }
+
+  /** Switch the tuning scope (global / a room), re-seeding the draft. */
+  _setTuningScope(scope) {
+    if (scope === this._tuningScope) {
+      return;
+    }
+    if (scope !== "global" && !this._configRoomNames().includes(scope)) {
+      return;
+    }
+    this._tuningScope = scope;
+    this._initTuningDraft();
+    this._renderTuning();
+  }
+
+  /** (Re)build the scope chips + knob cards from the current payload + scope. */
+  _renderTuning() {
+    const E = this._tuningEls;
+    if (!E) {
+      return;
+    }
+    // Scope chips: Global + one per configured room.
+    E.scopeBar.textContent = "";
+    const scopes = ["global", ...this._configRoomNames()];
+    for (const scope of scopes) {
+      const label = scope === "global" ? this._t("tune_scope_global") : scope;
+      const chip = h("button", {
+        class: "tune-scope" + (scope === this._tuningScope ? " active" : ""),
+        type: "button",
+        text: label,
+        "aria-pressed": scope === this._tuningScope ? "true" : "false",
+        on: { click: () => this._setTuningScope(scope) },
+      });
+      E.scopeBar.appendChild(chip);
+    }
+
+    // Knob cards.
+    E.body.textContent = "";
+    E.fields = new Map();
+    const fields = (this._tuning && this._tuning.fields) || [];
+    if (!this._tuningDraft || fields.length === 0) {
+      E.body.appendChild(h("div", { class: "empty", text: this._t("loading") }));
+      return;
+    }
+    for (const field of fields) {
+      E.body.appendChild(this._buildTuneCard(field));
+    }
+    E.saveNote.textContent = "";
+  }
+
+  /** Build one knob card (number stepper or boolean toggle) and register refs. */
+  _buildTuneCard(field) {
+    const name = field.name;
+    const isRoom = this._tuningScope !== "global";
+    const label = h("span", { class: "tune-label", text: this._knobLabel(name) });
+    const unit = field.unit
+      ? h("span", { class: "tune-unit", text: "[" + field.unit + "]" })
+      : null;
+    const badge = h("span", {
+      class: "tune-badge",
+      text: this._t("tune_overridden"),
+      style: "display:none",
+    });
+    const revert = h("button", {
+      class: "tune-revert",
+      type: "button",
+      title: this._t("tune_revert"),
+      "aria-label": this._t("tune_revert"),
+      style: "display:none",
+      on: { click: () => this._revertTuneField(name) },
+    });
+    revert.appendChild(this._icon("mdi:backup-restore", "⟲"));
+    const head = h("div", { class: "tune-card-head" }, [label, unit, badge, revert]);
+
+    const refs = { field, badge, revert, valEl: null, minus: null, plus: null, toggle: null };
+    let control;
+    if (field.type === "bool") {
+      const toggle = h("button", {
+        class: "tune-toggle",
+        type: "button",
+        on: { click: () => this._toggleTuneBool(name) },
+      });
+      refs.toggle = toggle;
+      control = toggle;
+    } else {
+      const minus = h("button", { class: "step-btn", type: "button", text: "−" });
+      const val = h("span", { class: "step-val" });
+      const plus = h("button", { class: "step-btn", type: "button", text: "+" });
+      this._bindHold(minus, () => this._nudgeTune(name, -1));
+      this._bindHold(plus, () => this._nudgeTune(name, 1));
+      refs.valEl = val;
+      refs.minus = minus;
+      refs.plus = plus;
+      control = h("div", { class: "stepper" }, [minus, val, plus]);
+    }
+
+    const card = h("div", { class: "tune-card" + (isRoom ? " inherited" : "") }, [
+      head,
+      control,
+    ]);
+    refs.card = card;
+    this._tuningEls.fields.set(name, refs);
+    this._applyTuneField(name);
+    return card;
+  }
+
+  /** Update a single knob card's value + override affordances in place. */
+  _applyTuneField(name) {
+    const E = this._tuningEls;
+    if (!E || !this._tuningDraft) {
+      return;
+    }
+    const refs = E.fields.get(name);
+    if (!refs) {
+      return;
+    }
+    const field = refs.field;
+    const value = this._tuningDraft.values[name];
+    const isRoom = this._tuningScope !== "global";
+    const overridden = isRoom && this._tuningDraft.overridden.has(name);
+
+    if (field.type === "bool") {
+      const on = !!value;
+      refs.toggle.textContent = on ? this._t("tune_on") : this._t("tune_off");
+      refs.toggle.classList.toggle("on", on);
+      refs.toggle.setAttribute("aria-pressed", on ? "true" : "false");
+    } else {
+      const dec = stepDecimals(field.step);
+      const nv = num(value);
+      refs.valEl.textContent = nv === null ? "—" : nv.toFixed(dec);
+      refs.minus.disabled = nv === null || nv <= field.min;
+      refs.plus.disabled = nv === null || nv >= field.max;
+    }
+
+    refs.card.classList.toggle("inherited", isRoom && !overridden);
+    refs.badge.style.display = overridden ? "" : "none";
+    refs.revert.style.display = overridden ? "" : "none";
+  }
+
+  /** Nudge a numeric knob by ±step (clamped); marks it overridden in a room. */
+  _nudgeTune(name, dir) {
+    if (!this._tuningDraft) {
+      return;
+    }
+    const refs = this._tuningEls && this._tuningEls.fields.get(name);
+    if (!refs || refs.field.type === "bool") {
+      return;
+    }
+    const field = refs.field;
+    const cur = num(this._tuningDraft.values[name]);
+    if (cur === null) {
+      return;
+    }
+    let next = clamp(roundStep(cur + dir * field.step, field.step), field.min, field.max);
+    next = Number(next.toFixed(6));
+    if (next === cur) {
+      return;
+    }
+    this._tuningDraft.values[name] = next;
+    if (this._tuningScope !== "global") {
+      this._tuningDraft.overridden.add(name);
+    }
+    this._applyTuneField(name);
+  }
+
+  /** Flip a boolean knob; marks it overridden in a room scope. */
+  _toggleTuneBool(name) {
+    if (!this._tuningDraft) {
+      return;
+    }
+    this._tuningDraft.values[name] = !this._tuningDraft.values[name];
+    if (this._tuningScope !== "global") {
+      this._tuningDraft.overridden.add(name);
+    }
+    this._applyTuneField(name);
+  }
+
+  /** Drop a room override for one knob, reverting it to the global value. */
+  _revertTuneField(name) {
+    if (!this._tuningDraft || this._tuningScope === "global") {
+      return;
+    }
+    this._tuningDraft.overridden.delete(name);
+    const global = (this._tuning && this._tuning.global) || {};
+    this._tuningDraft.values[name] = global[name];
+    this._applyTuneField(name);
+  }
+
+  /** Build the `values` payload for `set_tuning` from the working draft. */
+  _buildTuneSaveValues() {
+    const draft = this._tuningDraft;
+    if (this._tuningScope === "global") {
+      return { ...draft.values };
+    }
+    const prev = (this._tuning && this._tuning.rooms && this._tuning.rooms[this._tuningScope]) || {};
+    const values = {};
+    const names = ((this._tuning && this._tuning.fields) || []).map((f) => f.name);
+    for (const name of names) {
+      if (draft.overridden.has(name)) {
+        values[name] = draft.values[name];
+      } else if (name in prev) {
+        // Was overridden, now reverted → null asks the backend to drop it.
+        values[name] = null;
+      }
+    }
+    return values;
+  }
+
+  async _saveTuning() {
+    if (!this._tuning || !this._tuningDraft) {
+      return;
+    }
+    const scope = this._tuningScope;
+    const values = this._buildTuneSaveValues();
+    // A save reloads the entry; suppress the transient not_found banner.
+    this._suppressErrorUntil = Date.now() + 5000;
+    const E = this._tuningEls;
+    if (E) {
+      E.saveBtn.disabled = true;
+      E.saveNote.textContent = this._t("tune_saving");
+    }
+    const res = await this._callWS({ type: WS.setTuning, scope, values });
+    if (E) {
+      E.saveBtn.disabled = false;
+    }
+    if (res && Array.isArray(res.fields)) {
+      this._adoptTuning(res);
+      if (this._tuningEls) {
+        this._tuningEls.saveNote.textContent = this._t("tune_saved");
+      }
+    } else if (E) {
+      E.saveNote.textContent = "";
+    }
+    // Reload the rest of the panel (the entry rebuilds in the background).
+    this._loadConfig();
+    this._poll();
+  }
+
+  /** Press-and-hold repeat with acceleration; keyboard-activated once. */
+  _bindHold(btn, fn) {
+    let timer = null;
+    let delay = 350;
+    const stop = () => {
+      if (timer) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    };
+    const repeat = () => {
+      timer = window.setTimeout(() => {
+        fn();
+        delay = Math.max(45, delay * 0.82);
+        repeat();
+      }, delay);
+    };
+    btn.addEventListener("pointerdown", (e) => {
+      if (e.button != null && e.button !== 0) {
+        return;
+      }
+      if (btn.disabled) {
+        return;
+      }
+      fn();
+      delay = 350;
+      stop();
+      repeat();
+    });
+    for (const ev of ["pointerup", "pointerleave", "pointercancel"]) {
+      btn.addEventListener(ev, stop);
+    }
+    btn.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        fn();
+      }
+    });
+  }
+
+  /** Switch the active tab, persist it, and reveal / lazily update its section. */
+  _setActiveTab(tab) {
+    if (!TAB_ORDER.includes(tab)) {
+      return;
+    }
+    if (tab !== this._activeTab) {
+      this._activeTab = tab;
+      this._saveActiveTab(tab);
+    }
+    this._syncTabs();
+  }
+
+  /**
+   * Toggle section visibility + tab ARIA to match `_activeTab`, then update only
+   * the visible section (hidden sections stay stale until shown — lazy).
+   */
+  _syncTabs() {
+    const T = this._tabs;
+    if (!T || !T.sections) {
+      return;
+    }
+    for (const key of TAB_ORDER) {
+      const on = key === this._activeTab;
+      T.sections[key].style.display = on ? "" : "none";
+      const btn = T.btns[key];
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+      btn.tabIndex = on ? 0 : -1;
+    }
+    if (this._activeTab === "rooms") {
+      this._reconcileTable();
+    } else if (this._activeTab === "tuning") {
+      this._ensureTuningLoaded();
+    } else if (this._activeTab === "valves") {
+      this._renderValves();
+    } else if (this._activeTab === "assist") {
+      this._renderAssist();
+    }
   }
 
   _buildHero() {
@@ -1193,9 +2644,13 @@ class TortoiseUfhPanel extends HTMLElement {
     ]);
 
     H.dewVal = h("span", { class: "metric-val" });
+    H.dewSub = h("span", { class: "chip-sub", style: "display:none" });
     H.dewChip = h("div", { class: "chip chip-dew", style: "display:none" }, [
-      h("span", { class: "chip-cap", text: this._t("dew_cap") }),
-      H.dewVal,
+      h("div", { class: "chip-main" }, [
+        h("span", { class: "chip-cap", text: this._t("dew_cap") }),
+        H.dewVal,
+      ]),
+      H.dewSub,
     ]);
 
     const statusRow = h("div", { class: "hero-row status-row" }, [
@@ -1205,7 +2660,7 @@ class TortoiseUfhPanel extends HTMLElement {
       H.dewChip,
     ]);
 
-    // Controls: home stepper, mode segmented, kill switch.
+    // Controls: home stepper + mode segmented.
     H.homeMinus = h("button", {
       class: "step-btn",
       type: "button",
@@ -1245,17 +2700,7 @@ class TortoiseUfhPanel extends HTMLElement {
       seg,
     ]);
 
-    H.killBtn = h("button", {
-      class: "kill-btn",
-      type: "button",
-      on: { click: () => this._toggleKill() },
-    });
-    const killCtl = h("div", { class: "ctl ctl-kill" }, [
-      h("span", { class: "ctl-cap", text: " " }),
-      H.killBtn,
-    ]);
-
-    const ctlRow = h("div", { class: "hero-row ctl-row" }, [homeCtl, modeCtl, killCtl]);
+    const ctlRow = h("div", { class: "hero-row ctl-row" }, [homeCtl, modeCtl]);
 
     this._hero = H;
     return h("header", { class: "hero" }, [brandRow, statusRow, ctlRow]);
@@ -1273,7 +2718,7 @@ class TortoiseUfhPanel extends HTMLElement {
     }
 
     this._updateHero();
-    this._reconcileCards();
+    this._syncTabs();
     this._syncDetail();
   }
 
@@ -1287,14 +2732,21 @@ class TortoiseUfhPanel extends HTMLElement {
   }
 
   _ageText(ms) {
-    const minutes = Math.floor(ms / 60000);
-    if (minutes < 1) {
-      return this._t("age_now");
+    const totalSec = Math.floor(ms / 1000);
+    if (totalSec < 60) {
+      return fmtStr(this._t("age_sec"), { s: totalSec });
     }
-    if (minutes < 60) {
-      return fmtStr(this._t("age_min"), { n: minutes });
+    const totalMin = Math.floor(totalSec / 60);
+    if (totalMin < 10) {
+      return fmtStr(this._t("age_min_sec"), { m: totalMin, s: totalSec % 60 });
     }
-    return fmtStr(this._t("age_hour"), { n: Math.floor(minutes / 60) });
+    if (totalMin < 60) {
+      return fmtStr(this._t("age_min"), { m: totalMin });
+    }
+    return fmtStr(this._t("age_hour_min"), {
+      h: Math.floor(totalMin / 60),
+      m: totalMin % 60,
+    });
   }
 
   _pillState() {
@@ -1325,6 +2777,18 @@ class TortoiseUfhPanel extends HTMLElement {
     const { sev, text } = this._pillState();
     this._hero.pill.className = "pill pill-" + sev;
     this._hero.pillText.textContent = text;
+    // Tooltip: the exact local timestamp (with seconds) of the last cycle.
+    this._hero.pill.title =
+      this._lastUpdateMs === null
+        ? this._t("age_unknown")
+        : new Date(this._lastUpdateMs).toLocaleString(this._lang, {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          });
   }
 
   /** 1-second tick: refresh only the age-dependent pill (cheap, no reflow). */
@@ -1342,7 +2806,7 @@ class TortoiseUfhPanel extends HTMLElement {
     this._applyPill();
 
     const total = this._view.length;
-    const liveN = this._view.filter((r) => r.live).length;
+    const liveN = this._view.filter((r) => r.state === STATE_LIVE).length;
     H.liveVal.textContent = total ? `${liveN}/${total}` : "—";
 
     const flagN = this._view.reduce((s, r) => s + r.flags.length, 0);
@@ -1357,11 +2821,24 @@ class TortoiseUfhPanel extends HTMLElement {
       H.modeBtns[m].classList.toggle("active", m === mode);
     }
 
-    // Safe dew point is only meaningful while cooling.
+    // Safe dew point is only meaningful while cooling; the chip stays visible
+    // throughout cooling and, when there is no value, explains why (per room
+    // for a small house, collectively above three rooms).
     const dew = num(live.global_safe_dew_point_c);
     if (mode === "cooling") {
       H.dewChip.style.display = "";
-      H.dewVal.textContent = fmt(dew, 1, " °C");
+      if (dew !== null) {
+        H.dewVal.textContent = fmt(dew, 1, " °C");
+        H.dewSub.textContent = "";
+        H.dewSub.style.display = "none";
+        H.dewChip.title = "";
+      } else {
+        H.dewVal.textContent = "—";
+        const reason = this._dewReasonSummary();
+        H.dewSub.textContent = reason;
+        H.dewSub.style.display = reason ? "" : "none";
+        H.dewChip.title = reason;
+      }
     } else {
       H.dewChip.style.display = "none";
     }
@@ -1370,133 +2847,121 @@ class TortoiseUfhPanel extends HTMLElement {
     H.homeVal.textContent = fmt(homeTemp, 1, " °C");
     H.homeMinus.disabled = homeTemp === null || homeTemp <= HOME_MIN;
     H.homePlus.disabled = homeTemp === null || homeTemp >= HOME_MAX;
-
-    const kill = !!pick(cfg, ["kill_switch"], pick(live, ["kill_switch"], false));
-    H.killBtn.textContent = kill ? this._t("kill_on") : this._t("kill_off");
-    H.killBtn.title = kill ? this._t("kill_hint_on") : this._t("kill_hint_off");
-    H.killBtn.classList.toggle("engaged", kill);
-    this._els.wrap.classList.toggle("killed", kill);
   }
 
-  // -- Rendering: room cards ----------------------------------------------
+  // -- Rendering: room table ----------------------------------------------
 
-  _reconcileCards() {
-    const grid = this._els.grid;
+  _reconcileTable() {
+    const tbody = this._els.tbody;
     const rows = this._view;
 
     if (rows.length === 0) {
-      for (const [, el] of this._cards) {
+      for (const [, el] of this._rows) {
         el.remove();
       }
-      this._cards.clear();
+      this._rows.clear();
       const loading = !this._config && !this._live;
       this._els.empty.textContent = loading ? this._t("loading") : this._t("no_rooms");
       this._els.empty.style.display = "";
+      this._els.tableWrap.style.display = "none";
       return;
     }
     this._els.empty.style.display = "none";
+    this._els.tableWrap.style.display = "";
 
     const desired = new Set(rows.map((r) => r.name));
-    for (const [name, el] of [...this._cards]) {
+    for (const [name, el] of [...this._rows]) {
       if (!desired.has(name)) {
         el.remove();
-        this._cards.delete(name);
+        this._rows.delete(name);
       }
     }
 
     rows.forEach((r, i) => {
-      let card = this._cards.get(r.name);
-      if (!card) {
-        card = this._buildCard(r.name);
-        this._cards.set(r.name, card);
+      let tr = this._rows.get(r.name);
+      if (!tr) {
+        tr = this._buildRow(r.name);
+        this._rows.set(r.name, tr);
       }
-      const at = grid.children[i];
-      if (at !== card) {
-        grid.insertBefore(card, at || null);
+      const at = tbody.children[i];
+      if (at !== tr) {
+        tbody.insertBefore(tr, at || null);
       }
-      this._updateCard(card, r);
+      this._updateRow(tr, r);
     });
   }
 
-  _buildCard(name) {
+  _buildRow(name) {
     const p = {};
+
+    // Column 1: three-state control segment (Off / Shadow / Live).
+    p.stateBtns = {};
+    const seg = h("div", { class: "seg3", role: "group" });
+    for (const meta of STATE_META) {
+      const btn = h(
+        "button",
+        {
+          class: "seg3-btn",
+          type: "button",
+          title: this._t(meta.key),
+          "aria-label": this._t(meta.key),
+          dataset: { state: meta.state },
+          on: {
+            click: (e) => {
+              e.stopPropagation();
+              this._setRoomState(name, meta.state);
+            },
+          },
+        },
+        [this._icon(meta.icon, meta.glyph)],
+      );
+      p.stateBtns[meta.state] = btn;
+      seg.appendChild(btn);
+    }
+    const stateCell = h("td", { class: "col-state" }, [seg]);
+
+    // Column 2: severity dot + name.
     p.dot = h("span", { class: "dot" });
     p.name = h("span", { class: "card-name", text: name });
-    p.live = h("button", {
-      class: "badge live-badge",
-      type: "button",
-      on: {
-        click: (e) => {
-          e.stopPropagation();
-          this._toggleLive(name);
-        },
-      },
-    });
-    const head = h("div", { class: "card-head" }, [
-      p.dot,
-      p.name,
-      h("span", { class: "spacer" }),
-      p.live,
+    const nameCell = h("td", { class: "col-room" }, [
+      h("div", { class: "name-cell" }, [p.dot, p.name]),
     ]);
 
-    p.temp = h("span", { class: "big-val" });
+    // Column 3: measured room temperature + trend arrow.
+    p.temp = h("span", { class: "meas-val" });
     p.trend = h("span", { class: "trend" });
-    const tempCell = h("div", { class: "cell" }, [
-      h("span", { class: "cell-cap", text: this._t("card_measured") }),
-      h("div", { class: "big-row" }, [p.temp, p.trend]),
+    const measCell = h("td", { class: "col-measured" }, [
+      h("div", { class: "meas-cell" }, [p.temp, p.trend]),
     ]);
 
-    p.spMinus = h("button", {
-      class: "step-btn sm",
-      type: "button",
-      text: "−",
-      on: {
-        click: (e) => {
-          e.stopPropagation();
-          this._nudgeOffset(name, -OFFSET_STEP);
-        },
-      },
-    });
-    p.spVal = h("span", { class: "step-val" });
-    p.spPlus = h("button", {
-      class: "step-btn sm",
-      type: "button",
-      text: "+",
-      on: {
-        click: (e) => {
-          e.stopPropagation();
-          this._nudgeOffset(name, OFFSET_STEP);
-        },
-      },
-    });
+    // Column 4: setpoint + offset annotation.
+    p.spVal = h("span", { class: "sp-val" });
     p.spOffset = h("span", { class: "cell-sub" });
-    const spCell = h("div", { class: "cell" }, [
-      h("span", { class: "cell-cap", text: this._t("card_setpoint") }),
-      h("div", { class: "stepper" }, [p.spMinus, p.spVal, p.spPlus]),
-      p.spOffset,
+    const spCell = h("td", { class: "col-setpoint" }, [
+      h("div", { class: "sp-cell" }, [p.spVal, p.spOffset]),
     ]);
 
-    const grid2 = h("div", { class: "card-grid" }, [tempCell, spCell]);
+    // Column 5: error = setpoint - measured (signed, computed in the panel).
+    p.err = h("span", { class: "err-val" });
+    const errCell = h("td", { class: "col-error" }, [p.err]);
 
-    p.valveFill = h("span", { class: "valve-fill" });
+    // Column 6: valve percent + mini-bar.
     p.valveVal = h("span", { class: "valve-val" });
-    const valveBlock = h("div", { class: "valve-block" }, [
-      h("div", { class: "valve-line" }, [
-        h("span", { class: "cell-cap", text: this._t("card_valve") }),
+    p.valveFill = h("span", { class: "valve-fill" });
+    const valveCell = h("td", { class: "col-valve" }, [
+      h("div", { class: "valve-mini" }, [
         p.valveVal,
+        h("div", { class: "valve-track" }, [p.valveFill]),
       ]),
-      h("div", { class: "valve-track" }, [p.valveFill]),
     ]);
 
-    p.spark = h("div", { class: "spark" });
+    // Column 7: fast-source (assist) badge.
+    p.fast = h("span", { class: "fast-badge" });
+    const assistCell = h("td", { class: "col-assist" }, [p.fast]);
 
-    p.fast = h("div", { class: "fast-badge" });
-    p.flags = h("div", { class: "chips card-chips" });
-
-    const card = h(
-      "article",
+    const tr = h(
+      "tr",
       {
-        class: "card",
         tabindex: "0",
         dataset: { room: name },
         on: {
@@ -1514,184 +2979,55 @@ class TortoiseUfhPanel extends HTMLElement {
           },
         },
       },
-      [head, grid2, valveBlock, p.spark, p.fast, p.flags],
+      [stateCell, nameCell, measCell, spCell, errCell, valveCell, assistCell],
     );
-    card._parts = p;
-    card._flagKey = null;
-    return card;
+    tr._parts = p;
+    return tr;
   }
 
-  _updateCard(card, r) {
-    const p = card._parts;
+  _updateRow(tr, r) {
+    const p = tr._parts;
 
-    card.classList.toggle("selected", r.name === this._selectedRoom);
-    card.classList.toggle("dim", !r.participates);
+    tr.classList.toggle("selected", r.name === this._selectedRoom);
+    tr.classList.toggle("off", r.state === STATE_OFF);
     p.dot.className = "dot sev-" + r.severity;
 
+    // Three-state segment: highlight the active state's button.
+    for (const meta of STATE_META) {
+      p.stateBtns[meta.state].classList.toggle("active", r.state === meta.state);
+    }
+
+    // Measured — the echoed room temperature, never setpoint - error.
     p.temp.textContent = fmt(r.current, 1, "°");
     p.trend.textContent = trendArrow(r.trend) + " " + fmt(r.trend, 1, " K/h");
 
-    p.spVal.textContent = fmt(r.setpoint, 1);
-    p.spOffset.textContent = fmtStr(this._t("card_offset"), {
-      v: signed(r.offset, 1),
-    });
-    p.spMinus.disabled = r.offset <= OFFSET_MIN;
-    p.spPlus.disabled = r.offset >= OFFSET_MAX;
+    // Setpoint + offset annotation (shown only when the offset is non-zero).
+    p.spVal.textContent = fmt(r.setpoint, 1, "°");
+    if (r.offset) {
+      p.spOffset.textContent = fmtStr(this._t("card_offset"), {
+        v: signed(r.offset, 1),
+      });
+      p.spOffset.style.display = "";
+    } else {
+      p.spOffset.textContent = "";
+      p.spOffset.style.display = "none";
+    }
 
+    // Error = setpoint - measured (signed K), consistent by construction with
+    // the two adjacent columns.
+    const err =
+      r.setpoint !== null && r.current !== null ? r.setpoint - r.current : null;
+    p.err.textContent = signed(err, 1, " K");
+
+    // Valve percent + bar.
     const valve = r.valve === null ? 0 : clamp(r.valve, 0, 100);
     p.valveFill.style.width = valve + "%";
     p.valveVal.textContent = fmt(r.valve, 0, "%");
 
-    if (r.fastOn) {
-      p.fast.className = "fast-badge on";
-      p.fast.textContent =
-        this._t("fast_on") +
-        " · " +
-        this._t("fmode_" + r.fastMode) +
-        (r.fastTarget !== null ? " · " + fmt(r.fastTarget, 1, "°") : "");
-    } else {
-      p.fast.className = "fast-badge off";
-      p.fast.textContent = this._t("fast_off");
-    }
-
-    p.live.textContent = r.live ? this._t("live") : this._t("shadow");
-    p.live.className = "badge live-badge " + (r.live ? "on" : "off");
-
-    const flagKey = r.flags.join("|");
-    if (card._flagKey !== flagKey) {
-      card._flagKey = flagKey;
-      p.flags.textContent = "";
-      for (const f of r.flags) {
-        p.flags.appendChild(this._chip(f));
-      }
-      p.flags.style.display = r.flags.length ? "" : "none";
-    }
-
-    this._renderSpark(p.spark, r);
-  }
-
-  // -- Sparkline (24 h room temperature; one per card) ---------------------
-
-  /**
-   * Render / refresh a card's 24 h temperature sparkline.
-   *
-   * Fetches (cached) the room-temp source entity's history and draws a single
-   * gap-aware trace. Redraw is gated by a data signature so a 5 s poll only
-   * repaints when new samples actually arrived; with no temp entity the block
-   * stays empty (charts degrade silently).
-   */
-  _renderSpark(container, r) {
-    const tempId = r.entities ? r.entities.entity_temp_room : null;
-    if (!tempId) {
-      container._sig = "none";
-      container.textContent = "";
-      container.style.display = "none";
-      return;
-    }
-    container.style.display = "";
-    this._series(tempId, SPARK_WINDOW).then((entry) => {
-      // Guard: the card may have been recycled to another room mid-flight.
-      if (!container.isConnected) {
-        return;
-      }
-      const cur = this._viewByName.get(r.name);
-      if (cur && cur.entities && cur.entities.entity_temp_room !== tempId) {
-        return;
-      }
-      const sig = tempId + "|" + entry.at + "|" + Math.round((cur && cur.setpoint) || 0);
-      if (container._sig === sig) {
-        return;
-      }
-      container._sig = sig;
-      this._drawSpark(container, entry.data, cur ? cur.setpoint : null);
-    });
-  }
-
-  _drawSpark(container, data, setpoint) {
-    container.textContent = "";
-    const segs = segments(data || []);
-    const pts = segs.flat();
-    if (pts.length < 2) {
-      return; // nothing meaningful to draw
-    }
-    let vmin = Infinity;
-    let vmax = -Infinity;
-    for (const p of pts) {
-      if (p.v < vmin) vmin = p.v;
-      if (p.v > vmax) vmax = p.v;
-    }
-    if (setpoint != null && Number.isFinite(setpoint)) {
-      vmin = Math.min(vmin, setpoint);
-      vmax = Math.max(vmax, setpoint);
-    }
-    if (!(vmax > vmin)) {
-      vmax = vmin + 1;
-    }
-    const t0 = pts[0].t;
-    const t1 = pts[pts.length - 1].t;
-    const tSpan = t1 - t0 || 1;
-    const xOf = (t) =>
-      SPARK_PAD + ((t - t0) / tSpan) * (SPARK_VB_W - 2 * SPARK_PAD);
-    const yOf = (v) =>
-      SPARK_PAD + (1 - (v - vmin) / (vmax - vmin)) * (SPARK_VB_H - 2 * SPARK_PAD);
-
-    const svg = s("svg", {
-      class: "spark-svg",
-      viewBox: `0 0 ${SPARK_VB_W} ${SPARK_VB_H}`,
-      preserveAspectRatio: "none",
-      "aria-hidden": "true",
-    });
-
-    if (setpoint != null && Number.isFinite(setpoint)) {
-      const y = yOf(setpoint).toFixed(1);
-      svg.appendChild(
-        s("line", {
-          class: "spark-setpoint",
-          x1: SPARK_PAD,
-          x2: SPARK_VB_W - SPARK_PAD,
-          y1: y,
-          y2: y,
-        }),
-      );
-    }
-
-    // Area under the first→last segment span (visual weight), then the line.
-    const areaParts = [];
-    const lineParts = [];
-    for (const seg of segs) {
-      if (seg.length < 2) {
-        continue;
-      }
-      let ad = "M" + xOf(seg[0].t).toFixed(1) + " " + (SPARK_VB_H - SPARK_PAD).toFixed(1);
-      let ld = "";
-      seg.forEach((p, i) => {
-        const x = xOf(p.t).toFixed(1);
-        const y = yOf(p.v).toFixed(1);
-        ad += " L" + x + " " + y;
-        ld += (i === 0 ? "M" : "L") + x + " " + y + " ";
-      });
-      ad +=
-        " L" + xOf(seg[seg.length - 1].t).toFixed(1) + " " + (SPARK_VB_H - SPARK_PAD).toFixed(1) + " Z";
-      areaParts.push(ad);
-      lineParts.push(ld.trim());
-    }
-    if (areaParts.length) {
-      svg.appendChild(s("path", { class: "spark-area", d: areaParts.join(" ") }));
-    }
-    if (lineParts.length) {
-      svg.appendChild(s("path", { class: "spark-line", d: lineParts.join(" ") }));
-    }
-    // Last-value dot.
-    const last = pts[pts.length - 1];
-    svg.appendChild(
-      s("circle", {
-        class: "spark-dot",
-        cx: xOf(last.t).toFixed(1),
-        cy: yOf(last.v).toFixed(1),
-        r: "2.5",
-      }),
-    );
-    container.appendChild(svg);
+    // Assist badge.
+    const assist = this._assistLabel(r);
+    p.fast.className = "fast-badge " + assist.cls;
+    p.fast.textContent = assist.text;
   }
 
   _chip(code) {
@@ -1765,6 +3101,30 @@ class TortoiseUfhPanel extends HTMLElement {
       close,
     ]);
 
+    // Setpoint / offset stepper (the room table's setpoint column is read-only;
+    // the offset control lives here).
+    D.spMinus = h("button", {
+      class: "step-btn sm",
+      type: "button",
+      text: "−",
+      on: { click: () => this._nudgeOffset(name, -OFFSET_STEP) },
+    });
+    D.spVal = h("span", { class: "step-val" });
+    D.spPlus = h("button", {
+      class: "step-btn sm",
+      type: "button",
+      text: "+",
+      on: { click: () => this._nudgeOffset(name, OFFSET_STEP) },
+    });
+    D.spOffset = h("span", { class: "cell-sub" });
+    const spControl = h("div", { class: "detail-sp" }, [
+      h("span", { class: "ctl-cap", text: this._t("card_setpoint") }),
+      h("div", { class: "detail-sp-row" }, [
+        h("div", { class: "stepper" }, [D.spMinus, D.spVal, D.spPlus]),
+        D.spOffset,
+      ]),
+    ]);
+
     // Section 1: wiring.
     D.wiringBody = h("div", { class: "wire-list" });
     const wiring = this._section(this._t("sec_wiring"), D.wiringBody);
@@ -1782,6 +3142,7 @@ class TortoiseUfhPanel extends HTMLElement {
     const history = this._section(this._t("sec_history"), historyMount);
 
     detail.appendChild(header);
+    detail.appendChild(spControl);
     detail.appendChild(wiring);
     detail.appendChild(dec);
     detail.appendChild(history);
@@ -1898,6 +3259,7 @@ class TortoiseUfhPanel extends HTMLElement {
     D.errorEl = this._decRow(body, this._t("dec_error"));
     D.trendEl = this._decRow(body, this._t("dec_trend"));
     D.dewEl = this._decRow(body, this._t("dec_dew"));
+    D.dewReasonEl = this._decRow(body, this._t("dec_dew_reason"));
 
     // Signed contribution bars for the four valve terms.
     D.terms = {};
@@ -1978,9 +3340,24 @@ class TortoiseUfhPanel extends HTMLElement {
     }
     D.title.textContent = r.name;
 
+    // Setpoint / offset stepper.
+    D.spVal.textContent = fmt(r.setpoint, 1, " °C");
+    if (r.offset) {
+      D.spOffset.textContent = fmtStr(this._t("card_offset"), {
+        v: signed(r.offset, 1),
+      });
+      D.spOffset.style.display = "";
+    } else {
+      D.spOffset.textContent = "";
+      D.spOffset.style.display = "none";
+    }
+    D.spMinus.disabled = r.offset <= OFFSET_MIN;
+    D.spPlus.disabled = r.offset >= OFFSET_MAX;
+
     D.errorEl.textContent = fmt(r.errorC, 2, " K");
     D.trendEl.textContent = trendArrow(r.trend) + " " + fmt(r.trend, 2, " K/h");
     D.dewEl.textContent = fmt(r.dew, 1, " °C");
+    D.dewReasonEl.textContent = r.dewReason ? this._dewReasonText(r.dewReason) : "—";
 
     const terms = {
       pTerm: r.pTerm,
@@ -2017,12 +3394,7 @@ class TortoiseUfhPanel extends HTMLElement {
       : this._t("integ_active");
     D.saturatedEl.textContent = r.saturated ? this._t("yes") : this._t("no");
     D.floorEl.textContent = r.valveFloor ? this._t("yes") : this._t("no");
-    D.fastEl.textContent = r.fastOn
-      ? this._t("fast_on") +
-        " · " +
-        this._t("fmode_" + r.fastMode) +
-        (r.fastTarget !== null ? " · " + fmt(r.fastTarget, 1, "°") : "")
-      : this._t("fast_off");
+    D.fastEl.textContent = this._assistLabel(r).text;
 
     D.explanationEl.textContent = r.explanation || "—";
 
@@ -2784,12 +4156,11 @@ const STYLE = `
 }
 :host *, :host *::before, :host *::after { box-sizing: border-box; }
 .wrap { max-width: 1400px; margin: 0 auto; padding: 16px; }
-.wrap.killed {
-  outline: 3px solid var(--t-error);
-  outline-offset: -3px;
-  border-radius: var(--t-radius);
-}
 .hicon { --mdc-icon-size: 18px; color: var(--t-icon); }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 .hicon-fallback { color: var(--t-icon); font-size: 14px; }
 .spacer { flex: 1 1 auto; }
 .muted { color: var(--t-muted); }
@@ -2868,19 +4239,78 @@ button { font-family: inherit; cursor: pointer; }
 .seg-btn:last-child { border-right: 0; }
 .seg-btn:hover { background: var(--t-chip); }
 .seg-btn.active { background: var(--t-primary); color: var(--t-on-primary); }
-.ctl-kill { margin-left: auto; }
-.kill-btn {
+
+/* Tab bar */
+.tabbar {
+  display: flex; gap: 2px; overflow-x: auto;
+  border-bottom: 1px solid var(--t-line); margin-bottom: 16px;
+}
+.tab {
+  border: 0; background: transparent; color: var(--t-muted);
+  padding: 10px 16px; font-size: 14px; font-weight: 600; white-space: nowrap;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab:hover { color: var(--t-fg); }
+.tab.active { color: var(--t-primary); border-bottom-color: var(--t-primary); }
+.tab:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; border-radius: 6px; }
+.tab-section { min-width: 0; }
+.placeholder { padding: 56px 16px; text-align: center; display: flex; flex-direction: column; gap: 6px; }
+.placeholder h2 { font-size: 16px; margin: 0 0 4px; color: var(--t-fg); }
+
+/* Tuning tab */
+.tune { display: flex; flex-direction: column; gap: 14px; }
+.tune-intro { font-size: 12px; color: var(--t-muted); line-height: 1.4; }
+.tune-scopes { display: flex; flex-wrap: wrap; gap: 8px; }
+.tune-scope {
   border: 1px solid var(--t-line); background: var(--t-card); color: var(--t-fg);
-  border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 600;
+  border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 600;
 }
-.kill-btn.engaged {
-  background: var(--t-error); color: var(--t-on-primary); border-color: var(--t-error);
+.tune-scope:hover { border-color: var(--t-primary); }
+.tune-scope.active { background: var(--t-primary); color: var(--t-on-primary); border-color: var(--t-primary); }
+.tune-scope:focus-visible { outline: 2px solid var(--t-primary); outline-offset: 2px; }
+.tune-body {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
 }
+.tune-card {
+  border: 1px solid var(--t-line); border-radius: var(--t-radius);
+  background: var(--t-card); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.tune-card.inherited { opacity: .62; }
+.tune-card-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.tune-label { font-size: 13px; font-weight: 600; color: var(--t-fg); }
+.tune-unit { font-size: 11px; color: var(--t-muted); }
+.tune-badge {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--t-primary);
+  background: color-mix(in srgb, var(--t-primary) 16%, transparent);
+  border-radius: 999px; padding: 2px 8px;
+}
+.tune-revert {
+  margin-left: auto; border: 1px solid var(--t-line); background: var(--t-card);
+  color: var(--t-muted); border-radius: 8px; width: 28px; height: 28px;
+  font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center;
+}
+.tune-revert:hover { border-color: var(--t-primary); color: var(--t-primary); }
+.tune-toggle {
+  align-self: flex-start; border: 1px solid var(--t-line); background: var(--t-card);
+  color: var(--t-fg); border-radius: 999px; padding: 6px 16px; font-size: 13px; font-weight: 600;
+  min-width: 68px;
+}
+.tune-toggle.on { background: var(--t-primary); color: var(--t-on-primary); border-color: var(--t-primary); }
+.tune-footer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tune-save {
+  border: 1px solid var(--t-primary); background: var(--t-primary); color: var(--t-on-primary);
+  border-radius: 8px; padding: 8px 20px; font-size: 14px; font-weight: 600;
+}
+.tune-save:hover:not(:disabled) { filter: brightness(1.05); }
+.tune-save:disabled { opacity: .5; cursor: default; }
+.tune-note { font-size: 12px; color: var(--t-muted); }
 
 /* Layout */
 .layout { display: grid; gap: 16px; grid-template-columns: 1fr; align-items: start; }
 .col-main { min-width: 0; }
-.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 .empty { padding: 40px 16px; text-align: center; color: var(--t-muted); }
 @media (min-width: 1100px) {
   .layout.has-detail { grid-template-columns: minmax(0, 1fr) minmax(380px, 460px); }
@@ -2890,49 +4320,111 @@ button { font-family: inherit; cursor: pointer; }
   }
 }
 
-/* Room card */
-.card {
-  background: var(--t-card); border: 1px solid var(--t-line);
-  border-radius: var(--t-radius); padding: 12px 14px;
-  display: flex; flex-direction: column; gap: 10px; cursor: pointer;
-  transition: border-color .12s ease;
+/* Room table */
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--t-line); border-radius: var(--t-radius);
+  background: var(--t-card);
 }
-.card:hover { border-color: var(--t-primary); }
-.card:focus-visible { outline: 2px solid var(--t-primary); outline-offset: 1px; }
-.card.selected { border-color: var(--t-primary); box-shadow: 0 0 0 1px var(--t-primary) inset; }
-.card.dim { opacity: .6; }
-.card-head { display: flex; align-items: center; gap: 8px; }
+.rooms-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.rooms-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--t-card); text-align: left; white-space: nowrap;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--t-muted); padding: 8px 10px; border-bottom: 1px solid var(--t-line);
+}
+.rooms-table tbody td {
+  padding: 8px 10px; border-bottom: 1px solid var(--t-line); vertical-align: middle;
+}
+.rooms-table tbody tr:last-child td { border-bottom: 0; }
+.rooms-table tbody tr { cursor: pointer; transition: background-color .1s ease; }
+.rooms-table tbody tr:hover { background: var(--t-chip); }
+.rooms-table tbody tr:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; }
+.rooms-table tbody tr.selected { box-shadow: inset 3px 0 0 var(--t-primary); }
+.rooms-table tbody tr.off { opacity: .55; }
+
+/* Three-state segment control (column 1) */
+.col-state { width: 1%; }
+.seg3 {
+  display: inline-flex; border: 1px solid var(--t-line);
+  border-radius: 8px; overflow: hidden; background: var(--t-card);
+}
+.seg3-btn {
+  border: 0; background: transparent; color: var(--t-muted);
+  padding: 4px 7px; display: inline-flex; align-items: center; justify-content: center;
+  border-right: 1px solid var(--t-line);
+}
+.seg3-btn:last-child { border-right: 0; }
+.seg3-btn:hover { background: var(--t-chip); color: var(--t-fg); }
+.seg3-btn.active { background: var(--t-primary); color: var(--t-on-primary); }
+.seg3-btn .hicon { --mdc-icon-size: 16px; color: inherit; }
+.seg3-btn .hicon-fallback { color: inherit; font-size: 13px; }
+
 .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; background: var(--t-muted); }
 .dot.sev-ok { background: var(--t-ok); }
 .dot.sev-warn { background: var(--t-warn); }
 .dot.sev-problem { background: var(--t-error); }
-.card-name { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.badge {
-  font-size: 11px; padding: 3px 9px; border-radius: 999px;
-  border: 1px solid var(--t-line); background: var(--t-chip); color: var(--t-fg);
-}
-.live-badge.on { background: var(--t-primary); color: var(--t-on-primary); border-color: var(--t-primary); }
-.live-badge.off { background: transparent; color: var(--t-muted); }
-.card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.cell-cap { font-size: 11px; color: var(--t-muted); text-transform: uppercase; letter-spacing: .04em; }
+.name-cell { display: flex; align-items: center; gap: 8px; }
+.card-name { font-weight: 600; font-size: 14px; }
 .cell-sub { font-size: 11px; color: var(--t-muted); }
-.big-row { display: flex; align-items: baseline; gap: 8px; }
-.big-val { font-size: 24px; font-weight: 600; }
+.meas-cell { display: flex; align-items: baseline; gap: 6px; }
+.meas-val { font-size: 15px; font-weight: 600; }
+.sp-cell { display: flex; flex-direction: column; gap: 1px; }
+.sp-val { font-weight: 600; }
+.err-val { font-weight: 600; white-space: nowrap; }
 .trend { font-size: 12px; color: var(--t-muted); white-space: nowrap; }
-.valve-block { display: flex; flex-direction: column; gap: 4px; }
-.valve-line { display: flex; justify-content: space-between; align-items: baseline; }
+.valve-mini { display: flex; flex-direction: column; gap: 3px; min-width: 64px; }
 .valve-val { font-size: 13px; font-weight: 600; }
-.valve-track { height: 8px; border-radius: 999px; background: var(--t-chip); overflow: hidden; }
+.valve-track { height: 6px; border-radius: 999px; background: var(--t-chip); overflow: hidden; }
 .valve-fill { display: block; height: 100%; width: 0%; background: var(--t-primary); border-radius: 999px; transition: width .3s ease; }
-.fast-badge { font-size: 12px; padding: 4px 10px; border-radius: 8px; align-self: flex-start; }
+.fast-badge { font-size: 12px; padding: 4px 10px; border-radius: 8px; display: inline-block; white-space: nowrap; }
 .fast-badge.on { background: color-mix(in srgb, var(--t-accent) 16%, transparent); color: var(--t-accent); border: 1px solid var(--t-accent); }
 .fast-badge.off { color: var(--t-muted); border: 1px solid var(--t-line); }
+.fast-badge.none { color: var(--t-muted); border: 0; padding-left: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.card-chips { margin-top: 2px; }
 .chip { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: var(--t-chip); color: var(--t-fg); }
 .chip-warn { background: color-mix(in srgb, var(--t-warn) 20%, transparent); color: var(--t-warn); }
 .chip-problem { background: color-mix(in srgb, var(--t-error) 18%, transparent); color: var(--t-error); }
+
+/* Valves + Assist tables (share the room-table look) */
+.valves-table, .assist-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.valves-table thead th, .assist-table thead th {
+  position: sticky; top: 0; z-index: 1; background: var(--t-card); text-align: left; white-space: nowrap;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--t-muted); padding: 8px 10px; border-bottom: 1px solid var(--t-line);
+}
+.valves-table tbody td, .assist-table tbody td {
+  padding: 8px 10px; border-bottom: 1px solid var(--t-line); vertical-align: middle;
+}
+.valve-row, .assist-row { cursor: pointer; transition: background-color .1s ease; }
+.valve-row:hover, .assist-row:hover { background: var(--t-chip); }
+.valve-row:focus-visible, .assist-row:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; }
+.valve-row.selected, .assist-row.selected { box-shadow: inset 3px 0 0 var(--t-primary); }
+.mono { font-family: ui-monospace, "Roboto Mono", monospace; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.mono.mismatch { color: var(--t-warn); }
+.loop-caret { border: 0; background: transparent; color: var(--t-muted); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 6px; transition: transform .15s ease; }
+.loop-caret:hover { color: var(--t-fg); background: var(--t-chip); }
+.loop-caret.open { transform: rotate(90deg); }
+.loop-caret .hicon { --mdc-icon-size: 16px; }
+.loop-detail td { background: color-mix(in srgb, var(--t-chip) 45%, transparent); }
+.loop-list { display: flex; flex-direction: column; gap: 4px; }
+.loop-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; padding: 2px 0; }
+.loop-label { font-weight: 600; color: var(--t-muted); min-width: 60px; }
+.loop-metric { display: inline-flex; align-items: baseline; gap: 4px; }
+.loop-cap { font-size: 11px; color: var(--t-muted); text-transform: uppercase; letter-spacing: .03em; }
+.loop-link { border: 0; background: transparent; color: var(--t-primary); cursor: pointer; display: inline-flex; align-items: center; gap: 3px; padding: 0; font: inherit; }
+.loop-link:hover { text-decoration: underline; }
+.loop-link .hicon, .loop-link .hicon-fallback { --mdc-icon-size: 14px; opacity: .6; }
+.assist-actions { display: inline-flex; align-items: center; gap: 10px; }
+.link-btn { border: 0; background: transparent; color: var(--t-primary); cursor: pointer; font: inherit; font-size: 12px; padding: 0; text-decoration: underline; }
+.assist-none { font-size: 12px; margin-top: 10px; }
+.chip-dew .chip-main { display: inline-flex; align-items: baseline; gap: 6px; }
+.chip-dew .chip-sub { font-size: 11px; color: var(--t-muted); line-height: 1.3; max-width: 260px; }
+
+/* Narrow sidebar: drop the Error and Assist columns (data stays in the detail). */
+@media (max-width: ${NARROW_MAX_PX}px) {
+  .rooms-table .col-error, .rooms-table .col-assist { display: none; }
+}
 
 /* Detail */
 .detail {
@@ -2942,6 +4434,8 @@ button { font-family: inherit; cursor: pointer; }
 }
 .detail-head { display: flex; align-items: center; gap: 8px; }
 .detail-title { font-size: 17px; font-weight: 700; }
+.detail-sp { display: flex; flex-direction: column; gap: 4px; }
+.detail-sp-row { display: flex; align-items: center; gap: 10px; }
 .sub { display: flex; flex-direction: column; gap: 8px; }
 .sub-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--t-muted); border-bottom: 1px solid var(--t-line); padding-bottom: 4px; }
 
@@ -2981,15 +4475,6 @@ button { font-family: inherit; cursor: pointer; }
 .raw-pre { margin: 8px 0 0; padding: 10px; background: var(--t-chip); border-radius: 8px; font-family: ui-monospace, "Roboto Mono", monospace; font-size: 11px; line-height: 1.5; overflow-x: auto; white-space: pre; }
 .history-mount { display: flex; flex-direction: column; gap: 8px; }
 .history-soon { font-size: 13px; }
-
-/* Sparkline (room card) */
-.spark { height: 40px; margin-top: 2px; }
-.spark:empty { display: none; }
-.spark-svg { width: 100%; height: 40px; display: block; }
-.spark-line { fill: none; stroke: var(--t-primary); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-.spark-area { fill: var(--t-primary); opacity: .1; stroke: none; }
-.spark-setpoint { stroke: var(--t-muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; vector-effect: non-scaling-stroke; }
-.spark-dot { fill: var(--t-primary); }
 
 /* Detail history chart */
 .chart-head { display: flex; align-items: center; gap: 8px; }
