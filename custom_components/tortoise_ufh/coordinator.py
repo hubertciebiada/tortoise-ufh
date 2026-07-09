@@ -33,7 +33,7 @@ import logging
 import math
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -113,6 +113,61 @@ _MIN_DT_SECONDS: float = 1.0
 
 _MAX_DT_SECONDS: float = 900.0
 """Upper clamp for the measured control step interval [s]."""
+
+_STORE_KEY_MODE: str = "mode"
+"""Key of the persisted global mode in the private setpoint Store."""
+
+# -- Input plausibility (fixed constants, deliberately NOT config knobs) ------
+# Tailored to the owner's house: 1-wire/Zigbee room sensors in a high-mass UFH
+# building. A real room cannot leave -10..50 degC, and its air temperature
+# cannot move more than ~4 K between two 5-minute cycles — a bigger jump is a
+# sensor fault (e.g. the DS18B20 85 degC power-on-reset), not physics.
+
+_TEMP_PLAUSIBLE_MIN_C: float = -10.0
+"""Lowest plausible room-air temperature [degC]; below -> reject the sample."""
+
+_TEMP_PLAUSIBLE_MAX_C: float = 50.0
+"""Highest plausible room-air temperature [degC]; above -> reject the sample."""
+
+_TEMP_MAX_JUMP_K: float = 4.0
+"""Max plausible room-temperature change between control cycles [K].
+
+A sample jumping further than this from the last accepted value is rejected
+(treated as a missing reading); two consecutive mutually consistent samples
+accept the new level, so a real fast change is adopted within two cycles.
+"""
+
+_ROOM_TEMP_MAX_AGE_S: float = 45.0 * 60.0
+"""Max age of a room-temperature state before it is treated as unavailable [s].
+
+Guards against a present-but-frozen sensor (dead battery, stuck bridge): a
+reading not re-reported for this long can no longer be trusted to control heat,
+let alone chilled water.
+"""
+
+_HUMIDITY_MAX_AGE_S: float = 60.0 * 60.0
+"""Max age of a humidity state before it is treated as unavailable [s].
+
+The most dangerous stale input: a frozen winter RH makes BOTH condensation
+defences (global safe dew point and local S2 throttle) agree to pass water
+below the real dew point. Stale RH -> None -> the core cools nothing blindly.
+"""
+
+_VALVE_MISMATCH_TOLERANCE_PCT: float = 10.0
+"""Command-vs-feedback divergence beyond which a valve counts as mismatched [%]."""
+
+_VALVE_MISMATCH_CYCLES: int = 3
+"""Consecutive mismatched cycles before the ``valve_mismatch`` flag is raised."""
+
+_FAST_REASSERT_SECONDS: float = 45.0 * 60.0
+"""Age after which an unchanged fast-source command is re-written anyway [s].
+
+The splits are local (ESPHome), so this is hygiene, not an API budget: an
+unchanged (hvac_mode, target) pair is normally NOT re-sent every cycle (no IR
+beeps / stomping on manual tweaks), but a periodic re-assert self-heals the
+hardware after a missed write or a manual override — the machine stays the
+owner (S3, 2026-07-09).
+"""
 
 # Per-room config key for an optional heat-pump-status source entity. Defined
 # here (not in const.py) because this file is the only adapter surface allowed
@@ -227,10 +282,13 @@ class CoordinatorData:
         last_update_timestamp: ISO-8601 UTC timestamp of this cycle, or ``None``.
         mode: The active global :class:`~tortoise_ufh.models.Mode` value string
             (``"heating"`` / ``"transitional"`` / ``"cooling"`` / ``"off"``).
+        sensor_lost_rooms: Number of rooms currently degraded with the
+            ``sensor_lost`` flag (building-level staleness counter,
+            safety-F13 2026-07-09; surfaced via websocket, no new entity).
 
     Raises:
         ValueError: If ``algorithm_status``, ``watchdog_state`` or ``mode`` is
-            not a recognised value.
+            not a recognised value, or ``sensor_lost_rooms`` is negative.
     """
 
     rooms: dict[str, RoomRuntime]
@@ -239,9 +297,13 @@ class CoordinatorData:
     watchdog_state: str
     last_update_timestamp: str | None
     mode: str
+    sensor_lost_rooms: int = 0
 
     def __post_init__(self) -> None:
         """Validate the enumerated status/mode fields."""
+        if self.sensor_lost_rooms < 0:
+            msg = f"sensor_lost_rooms must be >= 0, got {self.sensor_lost_rooms}"
+            raise ValueError(msg)
         if self.algorithm_status not in _ALGORITHM_STATES:
             msg = (
                 "algorithm_status must be one of "
@@ -398,8 +460,26 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # Fallback cache for entity reads: entity_id -> (value, timestamp).
         self._entity_cache: dict[str, tuple[float, datetime]] = {}
 
+        # Room-temperature plausibility state (C3): per-entity last accepted
+        # value and the pending candidate awaiting a second consistent sample.
+        self._temp_last_accepted: dict[str, float] = {}
+        self._temp_pending: dict[str, float] = {}
+
+        # Per-room last-fresh-data timestamp (S6): feeds the core S5 watchdog
+        # via RoomInputs.last_update_age_minutes. Seeded on first sight so a
+        # room that never delivers data ages from integration startup.
+        self._room_last_fresh: dict[str, datetime] = {}
+
+        # Consecutive command-vs-feedback divergence cycles per room (S8).
+        self._valve_mismatch_cycles: dict[str, int] = {}
+
         # Last value written to each valve entity (for the write threshold).
         self._last_written_valve: dict[str, float] = {}
+
+        # Last fast-source command written per climate entity (S3):
+        # entity_id -> (hvac_mode, target_temp_c or None, monotonic timestamp).
+        # An unchanged command younger than _FAST_REASSERT_SECONDS is skipped.
+        self._last_written_fast: dict[str, tuple[str, float | None, float]] = {}
 
         # Watchdog heartbeat: last time at least one room had fresh data.
         self._last_heartbeat: datetime = datetime.now(UTC)
@@ -483,12 +563,16 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
     @callback
     def set_mode(self, mode: Mode) -> None:
-        """Override the global operating mode and rebroadcast.
+        """Override the global operating mode, persist it and rebroadcast.
+
+        The mode is persisted to the private setpoint Store (S9) so a restart
+        in July does not silently fall back to heating logic.
 
         Args:
             mode: New global :class:`~tortoise_ufh.models.Mode`.
         """
         self._mode = mode
+        self._persist_setpoints()
         if self.data is not None:
             self.async_set_updated_data(
                 CoordinatorData(
@@ -498,6 +582,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     watchdog_state=self.data.watchdog_state,
                     last_update_timestamp=self.data.last_update_timestamp,
                     mode=mode.value,
+                    sensor_lost_rooms=self.data.sensor_lost_rooms,
                 )
             )
 
@@ -536,7 +621,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             raise ValueError(msg)
         if room_name not in self._room_states:
             return
+        previous = self._room_states[room_name]
         self._room_states[room_name] = state
+        if previous == ROOM_STATE_LIVE and state != ROOM_STATE_LIVE:
+            # Farewell command (C5): leaving live orphans the physical
+            # actuators — park them safely once before releasing ownership.
+            self._schedule_farewell(room_name)
         state_map: dict[str, Any] = dict(
             self.config_entry.options.get(CONF_ROOM_STATE, {})
         )
@@ -559,6 +649,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     watchdog_state=self.data.watchdog_state,
                     last_update_timestamp=self.data.last_update_timestamp,
                     mode=self.data.mode,
+                    sensor_lost_rooms=self.data.sensor_lost_rooms,
                 )
             )
 
@@ -611,10 +702,15 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
     @callback
     def _setpoint_snapshot(self) -> dict[str, Any]:
-        """Return the current setpoint state to persist to the Store."""
+        """Return the current setpoint state to persist to the Store.
+
+        Includes the global operating mode (S9): a restart must not silently
+        fall back to heating logic in the cooling season.
+        """
         return {
             CONF_HOME_SETPOINT: self._home_temperature_c,
             CONF_ROOM_OFFSET: dict(self._room_offsets),
+            _STORE_KEY_MODE: self._mode.value,
         }
 
     async def _ensure_setpoints_loaded(self) -> None:
@@ -640,6 +736,15 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 value = offsets.get(name)
                 if isinstance(value, int | float) and math.isfinite(float(value)):
                     self._room_offsets[name] = float(value)
+        # Restore the persisted global mode (S9). A configured, available mode
+        # entity still wins on the very first refresh (_read_mode); the stored
+        # value is the fallback that keeps a July restart in cooling logic.
+        raw_mode = stored.get(_STORE_KEY_MODE)
+        if isinstance(raw_mode, str):
+            try:
+                self._mode = Mode(raw_mode)
+            except ValueError:
+                _LOGGER.warning("Ignoring invalid persisted mode %r", raw_mode)
 
     @callback
     def _persist_options(self, changes: dict[str, Any]) -> None:
@@ -687,6 +792,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 watchdog_state=self.data.watchdog_state,
                 last_update_timestamp=self.data.last_update_timestamp,
                 mode=self.data.mode,
+                sensor_lost_rooms=self.data.sensor_lost_rooms,
             )
         )
 
@@ -720,7 +826,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             The freshly computed :class:`CoordinatorData`.
         """
         await self._ensure_setpoints_loaded()
-        self._mode = self._read_mode()
+        new_mode = self._read_mode()
+        if new_mode is not self._mode:
+            self._mode = new_mode
+            # Persist a mode change sourced from the mode entity too (S9).
+            self._persist_setpoints()
 
         # Assemble one RoomInputs per room from the configured entities.
         inputs: dict[str, RoomInputs] = {}
@@ -736,6 +846,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         algorithm_status = "running"
         outputs_by_room: dict[str, RoomOutputs] = {}
         global_dew: float | None = None
+        sensor_lost_rooms = 0
         if self._building is not None and inputs:
             # Feed the core the REAL elapsed time since the previous step
             # (clamped), so an off-cycle debounced recompute integrates honestly
@@ -758,6 +869,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             else:
                 outputs_by_room = building_outputs.rooms
                 global_dew = building_outputs.global_safe_dew_point_c
+                sensor_lost_rooms = building_outputs.sensor_lost_rooms
 
         now = datetime.now(UTC)
         if any_fresh:
@@ -773,10 +885,20 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         # Build the typed payload.
         rooms: dict[str, RoomRuntime] = {}
-        for name in self._room_names:
+        for room_cfg, name in zip(self._room_configs, self._room_names, strict=True):
             room_outputs = outputs_by_room.get(name)
             if room_outputs is None:
                 continue
+            # S8: flag a live room whose valve feedback keeps disagreeing with
+            # the commanded position ("the valve does not listen").
+            if self._track_valve_mismatch(room_cfg, name, inputs[name]):
+                report = replace(
+                    room_outputs.report,
+                    flags=tuple(
+                        dict.fromkeys((*room_outputs.report.flags, "valve_mismatch"))
+                    ),
+                )
+                room_outputs = replace(room_outputs, report=report)
             rooms[name] = RoomRuntime(
                 outputs=room_outputs,
                 report=room_outputs.report,
@@ -800,6 +922,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             watchdog_state=watchdog_state,
             last_update_timestamp=now.isoformat(),
             mode=self._mode.value,
+            sensor_lost_rooms=sensor_lost_rooms,
         )
 
     # -- Internal: input assembly -------------------------------------------
@@ -827,18 +950,31 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         participates = self.get_room_state(name) != ROOM_STATE_OFF
         mode = self._mode if participates else Mode.OFF
         # Validate humidity independently: an out-of-range reading only nulls
-        # the dew-point input rather than degrading the whole room.
-        humidity = self._read_float_state(room_cfg.get(CONF_ENTITY_HUMIDITY))
+        # the dew-point input rather than degrading the whole room. A stale
+        # (frozen-but-present) humidity is the single most dangerous input in
+        # cooling — both condensation defences trust it — so it also carries a
+        # max state age (C4).
+        humidity = self._read_float_state(
+            room_cfg.get(CONF_ENTITY_HUMIDITY),
+            max_age_seconds=_HUMIDITY_MAX_AGE_S,
+        )
         if humidity is not None and not 0.0 <= humidity <= 100.0:
             humidity = None
+        # S6: per-room data age for the core S5 watchdog. A fresh temperature
+        # resets the clock; otherwise the age grows from the last fresh sample
+        # (or from the first time the room was ever seen).
+        room_temp = self._read_room_temperature(room_cfg.get(CONF_ENTITY_TEMP_ROOM))
+        now = datetime.now(UTC)
+        if room_temp is not None:
+            self._room_last_fresh[name] = now
+        last_fresh = self._room_last_fresh.setdefault(name, now)
+        age_minutes = max(0.0, (now - last_fresh).total_seconds() / 60.0)
         try:
             loops = self._build_loops(room_cfg)
             return RoomInputs(
                 mode=mode,
                 setpoint_c=setpoint,
-                room_temperature_c=self._read_float_state(
-                    room_cfg.get(CONF_ENTITY_TEMP_ROOM)
-                ),
+                room_temperature_c=room_temp,
                 humidity_pct=humidity,
                 outdoor_temperature_c=self._read_float_state(
                     room_cfg.get(CONF_ENTITY_TEMP_OUTDOOR)
@@ -848,6 +984,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 fast_source_on=self._read_fast_source_on(room_cfg),
                 hp_active_for_ufh=self._read_hp_active_for_ufh(room_cfg),
                 cooling_enabled=cooling_enabled,
+                last_update_age_minutes=age_minutes,
             )
         except ValueError:
             _LOGGER.warning(
@@ -860,6 +997,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 setpoint_c=setpoint,
                 room_temperature_c=None,
                 cooling_enabled=cooling_enabled,
+                last_update_age_minutes=age_minutes,
             )
 
     def _build_loops(self, room_cfg: dict[str, Any]) -> tuple[LoopInput, ...]:
@@ -894,6 +1032,58 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 )
             )
         return tuple(loops)
+
+    def _track_valve_mismatch(
+        self, room_cfg: dict[str, Any], name: str, room_inputs: RoomInputs
+    ) -> bool:
+        """Track command-vs-feedback valve divergence for a live room (S8).
+
+        Compares each loop's valve feedback (read this cycle, i.e. the response
+        to the PREVIOUS cycle's command) with the last value actually written to
+        that entity. Any loop diverging by more than
+        :data:`_VALVE_MISMATCH_TOLERANCE_PCT` counts the whole room as
+        mismatched this cycle; :data:`_VALVE_MISMATCH_CYCLES` consecutive
+        mismatched cycles raise the ``valve_mismatch`` report flag. Non-live
+        rooms (nothing is written, so feedback legitimately disagrees) and
+        cycles without comparable data reset / hold the counter respectively.
+
+        Args:
+            room_cfg: The room's configuration dict.
+            name: The room name.
+            room_inputs: The room's inputs assembled this cycle.
+
+        Returns:
+            ``True`` when the ``valve_mismatch`` flag should be raised.
+        """
+        if self.get_room_state(name) != ROOM_STATE_LIVE:
+            self._valve_mismatch_cycles[name] = 0
+            return False
+        valves: list[str] = list(room_cfg.get(CONF_ENTITY_VALVES) or [])
+        compared = False
+        mismatch = False
+        for i, valve_entity in enumerate(valves):
+            written = self._last_written_valve.get(valve_entity)
+            if written is None or i >= len(room_inputs.loops):
+                continue
+            feedback = room_inputs.loops[i].valve_position_pct
+            if feedback is None:
+                continue
+            compared = True
+            if abs(feedback - written) > _VALVE_MISMATCH_TOLERANCE_PCT:
+                mismatch = True
+        if not compared:
+            # No evidence either way: hold the current verdict.
+            return self._valve_mismatch_cycles.get(name, 0) >= _VALVE_MISMATCH_CYCLES
+        count = self._valve_mismatch_cycles.get(name, 0) + 1 if mismatch else 0
+        self._valve_mismatch_cycles[name] = count
+        if count == _VALVE_MISMATCH_CYCLES:
+            _LOGGER.warning(
+                "Room %s valve feedback has disagreed with the command for %d "
+                "cycles; flagging valve_mismatch",
+                name,
+                count,
+            )
+        return count >= _VALVE_MISMATCH_CYCLES
 
     def _read_fast_source_kind(self, room_cfg: dict[str, Any]) -> FastSourceKind:
         """Map the configured fast-source kind string to the core enum.
@@ -1064,6 +1254,13 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         Issues ``set_hvac_mode`` and, when the split is on, ``set_temperature``.
         All calls are non-blocking.
 
+        Command cache (S3, 2026-07-09): an unchanged ``(hvac_mode, target)``
+        pair is NOT re-sent every cycle — mirroring ``_last_written_valve`` —
+        so the split is not spammed with identical commands (IR beeps, stomping
+        on manual louvre/fan tweaks). The command is still re-asserted after
+        :data:`_FAST_REASSERT_SECONDS` so a missed write or a manual override
+        self-heals: the machine stays the owner.
+
         Args:
             room_cfg: The room's configuration dict.
             name: The room name.
@@ -1076,6 +1273,16 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         hvac_mode = (
             _HVAC_MODE_BY_FAST_SOURCE.get(command.mode, "off") if command.on else "off"
         )
+        target = command.target_temperature_c if command.on else None
+        cached = self._last_written_fast.get(entity_id)
+        now_monotonic = time.monotonic()
+        if (
+            cached is not None
+            and cached[0] == hvac_mode
+            and cached[1] == target
+            and now_monotonic - cached[2] < _FAST_REASSERT_SECONDS
+        ):
+            return
         try:
             await self.hass.services.async_call(
                 "climate",
@@ -1097,6 +1304,93 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             _LOGGER.exception(
                 "Failed to control fast source %s for room %s", entity_id, name
             )
+        else:
+            self._last_written_fast[entity_id] = (hvac_mode, target, now_monotonic)
+
+    # -- Internal: farewell command (live -> shadow/off, unload) -------------
+
+    @callback
+    def _schedule_farewell(self, room_name: str) -> None:
+        """Schedule the one-shot farewell write for a room leaving live.
+
+        Args:
+            room_name: The room being released from live control.
+        """
+        for room_cfg, name in zip(self._room_configs, self._room_names, strict=True):
+            if name == room_name:
+                self.hass.async_create_task(
+                    self._async_farewell_room(room_cfg, name),
+                    name=f"{DOMAIN}_farewell_{self.config_entry.entry_id}_{name}",
+                )
+                return
+
+    async def _async_farewell_room(self, room_cfg: dict[str, Any], name: str) -> None:
+        """Park a room's actuators safely when releasing live ownership (C5).
+
+        Emitted exactly once on a live -> shadow/off transition and on entry
+        unload. The split is always commanded OFF (nobody regulates it any
+        more). The valve is mode-dependent: in COOLING it is driven to 0 —
+        an orphaned open valve would keep passing chilled water while the room
+        silently drops out of BOTH condensation defences (the global dew
+        maximum and the local S2 throttle). In HEATING the position is left
+        untouched: warm supply water is bounded by the heat pump's own curve,
+        so holding the last position keeps the house warm and is strictly
+        safer than cold-parking it in winter.
+
+        Args:
+            room_cfg: The room's configuration dict.
+            name: The room name.
+        """
+        entity_id = room_cfg.get(CONF_ENTITY_FAST_SOURCE)
+        if entity_id:
+            try:
+                await self.hass.services.async_call(
+                    "climate",
+                    "set_hvac_mode",
+                    {"entity_id": entity_id, "hvac_mode": "off"},
+                    blocking=False,
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Farewell: failed to turn off fast source %s for room %s",
+                    entity_id,
+                    name,
+                )
+            else:
+                self._last_written_fast[entity_id] = ("off", None, time.monotonic())
+        if self._mode is not Mode.COOLING:
+            return
+        valves: list[str] = list(room_cfg.get(CONF_ENTITY_VALVES) or [])
+        for valve_entity in valves:
+            try:
+                if self._is_valve_domain(valve_entity):
+                    await self.hass.services.async_call(
+                        "valve",
+                        "set_valve_position",
+                        {"entity_id": valve_entity, "position": 0},
+                        blocking=False,
+                    )
+                else:
+                    await self.hass.services.async_call(
+                        "number",
+                        "set_value",
+                        {"entity_id": valve_entity, "value": 0.0},
+                        blocking=False,
+                    )
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception(
+                    "Farewell: failed to close valve %s for room %s",
+                    valve_entity,
+                    name,
+                )
+            else:
+                self._last_written_valve[valve_entity] = 0.0
+
+    async def async_farewell_all(self) -> None:
+        """Park every live room's actuators (called on config-entry unload)."""
+        for room_cfg, name in zip(self._room_configs, self._room_names, strict=True):
+            if self.get_room_state(name) == ROOM_STATE_LIVE:
+                await self._async_farewell_room(room_cfg, name)
 
     # -- Internal: entity reads ---------------------------------------------
 
@@ -1138,29 +1432,106 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         if not entity_id:
             return None
         if not self._is_valve_domain(entity_id):
-            return self._read_float_state(entity_id)
-        state = self.hass.states.get(entity_id)
-        if state is None:
+            value_or_none = self._read_float_state(entity_id)
+        else:
+            state = self.hass.states.get(entity_id)
+            if state is None:
+                return None
+            position = state.attributes.get("current_position")
+            if position is None:
+                return None
+            try:
+                value = float(position)
+            except (ValueError, TypeError):
+                return None
+            value_or_none = value if math.isfinite(value) else None
+        # Per-loop plausibility (S8): a garbage feedback (e.g. 255 from a stuck
+        # Modbus register) nulls ONLY this loop's feedback instead of tripping
+        # the LoopInput validator and degrading the whole room to sensor_lost.
+        if value_or_none is not None and not 0.0 <= value_or_none <= 100.0:
+            _LOGGER.warning(
+                "Valve %s reported implausible position %s%%; ignoring",
+                entity_id,
+                value_or_none,
+            )
             return None
-        position = state.attributes.get("current_position")
-        if position is None:
-            return None
-        try:
-            value = float(position)
-        except (ValueError, TypeError):
-            return None
-        return value if math.isfinite(value) else None
+        return value_or_none
 
-    def _read_float_state(self, entity_id: str | None) -> float | None:
+    def _read_room_temperature(self, entity_id: str | None) -> float | None:
+        """Read a room-temperature entity with plausibility gating (C3 + C4).
+
+        On top of :meth:`_read_float_state` (which already enforces the
+        :data:`_ROOM_TEMP_MAX_AGE_S` state age), a sample is rejected — treated
+        exactly like a missing reading, triggering the core's safe degrade —
+        when it is outside :data:`_TEMP_PLAUSIBLE_MIN_C` ..
+        :data:`_TEMP_PLAUSIBLE_MAX_C` (e.g. the DS18B20 85 degC power-on-reset)
+        or when it jumps more than :data:`_TEMP_MAX_JUMP_K` from the last
+        accepted value. Two consecutive mutually consistent samples accept a
+        genuinely new level, so a real fast change is adopted within two
+        cycles instead of being locked out forever.
+
+        Args:
+            entity_id: The room-temperature entity id, or ``None`` / empty.
+
+        Returns:
+            The accepted temperature [degC], or ``None`` when unavailable or
+            rejected as implausible.
+        """
+        if not entity_id:
+            return None
+        value = self._read_float_state(entity_id, max_age_seconds=_ROOM_TEMP_MAX_AGE_S)
+        if value is None:
+            self._temp_pending.pop(entity_id, None)
+            return None
+        if not _TEMP_PLAUSIBLE_MIN_C <= value <= _TEMP_PLAUSIBLE_MAX_C:
+            _LOGGER.warning(
+                "Entity %s reported implausible room temperature %.1f degC; "
+                "rejecting sample",
+                entity_id,
+                value,
+            )
+            self._temp_pending.pop(entity_id, None)
+            return None
+        last = self._temp_last_accepted.get(entity_id)
+        pending = self._temp_pending.get(entity_id)
+        jumped = last is not None and abs(value - last) > _TEMP_MAX_JUMP_K
+        confirmed = pending is not None and abs(value - pending) <= _TEMP_MAX_JUMP_K
+        if jumped and not confirmed:
+            _LOGGER.warning(
+                "Entity %s jumped %.1f -> %.1f degC in one cycle; holding "
+                "sample for confirmation",
+                entity_id,
+                last,
+                value,
+            )
+            self._temp_pending[entity_id] = value
+            return None
+        # Either plausible against the last accepted value, or the second
+        # consecutive sample consistent with the pending candidate — the new
+        # level is real (e.g. a window opened), accept it.
+        self._temp_last_accepted[entity_id] = value
+        self._temp_pending.pop(entity_id, None)
+        return value
+
+    def _read_float_state(
+        self, entity_id: str | None, *, max_age_seconds: float | None = None
+    ) -> float | None:
         """Read a numeric entity state with a short stale cache.
 
         On a successful read the value is cached with the current time. When the
         entity is unavailable/unknown the cached value is returned if it is
         younger than :data:`ENTITY_STALE_MAX_SECONDS`; otherwise ``None``.
 
+        When ``max_age_seconds`` is given, a present-but-frozen state whose last
+        report is older than that limit is treated as **no reading at all**
+        (C4) — deliberately NOT falling back to the short cache, which would
+        hold the very same stale value.
+
         Args:
             entity_id: The source entity id, or ``None`` / empty for "not
                 configured".
+            max_age_seconds: Optional maximum age of the state's last report
+                [s]; older states are rejected outright.
 
         Returns:
             The numeric value, or ``None`` when unreadable and no fresh cache
@@ -1169,6 +1540,24 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         if not entity_id:
             return None
         state = self.hass.states.get(entity_id)
+        if (
+            state is not None
+            and state.state.lower() not in _UNAVAILABLE_STATES
+            and max_age_seconds is not None
+        ):
+            # last_reported also covers same-value re-reports (HA 2024.4+);
+            # fall back to last_updated on older cores.
+            reported = getattr(state, "last_reported", None) or state.last_updated
+            age_s = (datetime.now(UTC) - reported).total_seconds()
+            if age_s > max_age_seconds:
+                _LOGGER.warning(
+                    "Entity %s state is %.0f min old (limit %.0f min); "
+                    "treating as unavailable",
+                    entity_id,
+                    age_s / 60.0,
+                    max_age_seconds / 60.0,
+                )
+                return None
         if state is None or state.state.lower() in _UNAVAILABLE_STATES:
             cached = self._entity_cache.get(entity_id)
             if cached is not None:

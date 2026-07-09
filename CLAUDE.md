@@ -65,8 +65,10 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
   (`pid.py`). The "człon trendu" (`kt * trend_toward_setpoint`) is the key inertia/overshoot
   tamer for the high-mass floor. No MPC, no Kalman, no online RC identification, no D by default.
 - **Valves are proportional, hold-position.** Output is a continuous `0..100 %` position, one
-  value per room applied to all its loops. On missing room temp: SAFE DEGRADE = **freeze/hold
-  last valve position**, fast source OFF, flag `"sensor_lost"` (never fail open/closed).
+  value per room applied to all its loops. On missing room temp: SAFE DEGRADE is mode-aware
+  (2026-07-09, DECISIONS §6): **HEATING freezes/holds the last healthy valve position**;
+  **COOLING parks the valve at 0** (freeze-open would bypass both condensation defences);
+  fast source OFF, flag `"sensor_lost"`.
 - **Floor cooling is in v1** with **two-layer dew-point protection**: (1) GLOBAL safe dew point =
   `max_over_cooled_rooms(dew_point(T_room, rh)) + 2 K`, exposed as a sensor for the heat pump's
   cooling-supply lower limit; (2) LOCAL per-room S2 valve throttle via `cooling_throttle_factor`

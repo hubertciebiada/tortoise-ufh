@@ -193,6 +193,8 @@ ROOM_OFFSET_STEP_C: float = 0.5
 
 CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     ("kp", 0.0, 50.0, 0.1),
+    # NOTE: HA's NumberSelector requires step >= 0.001; the retuned default
+    # ki=0.0015 stays representable via direct (box) input.
     ("ki", 0.0, 1.0, 0.001),
     ("kt", 0.0, 50.0, 0.1),
     ("deadband_c", 0.0, 5.0, 0.1),
@@ -202,6 +204,9 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     ("fast_min_off_minutes", 0.0, 60.0, 1.0),
     ("dew_margin_k", 0.0, 10.0, 0.1),
     ("dew_ramp_k", 0.1, 10.0, 0.1),
+    ("ff_neutral_c", -30.0, 40.0, 0.5),
+    ("ff_gain_pct_per_k", 0.0, 10.0, 0.1),
+    ("ff_max_pct", 0.0, 100.0, 1.0),
 )
 """Numeric :class:`~tortoise_ufh.config.ControllerConfig` fields exposed as
 advanced knobs, each as ``(field, min, max, step)``.
@@ -232,6 +237,9 @@ CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "fast_min_off_minutes": "min",
     "dew_margin_k": "K",
     "dew_ramp_k": "K",
+    "ff_neutral_c": "°C",
+    "ff_gain_pct_per_k": "%/K",
+    "ff_max_pct": "%",
     CONTROLLER_BOOL_KNOB: "",
 }
 """Display unit per controller knob (empty for the boolean knob). Surfaced in the

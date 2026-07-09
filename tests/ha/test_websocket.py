@@ -303,8 +303,14 @@ async def test_get_tuning_returns_fields_and_values(
     # The single boolean knob is flagged as such.
     assert by_name["outdoor_ff_enabled"]["type"] == "bool"
     # Global + defaults reflect the library defaults (no persisted override).
-    assert result["global"]["kp"] == 8.0
-    assert result["defaults"]["kp"] == 8.0
+    # Retuned 2026-07-09 (C1): kp=14 / ki=0.0015 / kt=12.
+    assert result["global"]["kp"] == 14.0
+    assert result["defaults"]["kp"] == 14.0
+    assert result["defaults"]["ki"] == 0.0015
+    assert result["defaults"]["kt"] == 12.0
+    # control-F6: the feedforward shaping constants are knobs now.
+    assert by_name["ff_neutral_c"]["unit"] == "°C"
+    assert result["defaults"]["ff_max_pct"] == 20.0
     assert result["defaults"]["outdoor_ff_enabled"] is False
     # No per-room overrides configured yet.
     assert result["rooms"] == {}
@@ -353,8 +359,8 @@ async def test_set_tuning_room_override_merges(
     assert entry.options[CONF_ROOM_TUNING]["Salon"] == {"kt": 10.0}
     coordinator = _coordinator(hass)
     assert coordinator._controller_configs["Salon"].kt == 10.0
-    # The other room keeps the global default.
-    assert coordinator._controller_configs["Lazienka"].kt == 6.0
+    # The other room keeps the global default (retuned 2026-07-09: kt=12).
+    assert coordinator._controller_configs["Lazienka"].kt == 12.0
 
 
 async def test_set_tuning_revert_room_field_prunes_override(

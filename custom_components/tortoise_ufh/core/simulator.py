@@ -43,6 +43,7 @@ from typing import Literal
 import numpy as np
 from numpy.typing import NDArray
 
+from .config import Orientation, WindowConfig
 from .models import (
     FastSourceKind,
     FastSourceMode,
@@ -104,6 +105,119 @@ _HP_MODE_TO_MODE: dict[HeatPumpMode, Mode] = {
     HeatPumpMode.OFF: Mode.OFF,
 }
 
+# -- Solar gains through windows (calibration amendment 2026-07-09) -----------
+#
+# ``q_sol = GHI * sum_over_windows(area * g_value * f_orient(time-of-day))``.
+# The orientation factor is a deliberately simple transposition model: a fixed
+# diffuse share for every glazing plus a direct share following a cosine
+# envelope around the orientation's peak hour. The synthetic GHI sinus used by
+# the scenario library peaks at t = period/4 (minute 360 of each day), so SOLAR
+# NOON is pinned to ``_SOLAR_NOON_MINUTE`` to stay consistent with those
+# profiles.
+
+_MINUTES_PER_DAY: float = 1440.0
+"""Minutes in one day, for the solar time-of-day phase."""
+
+_SOLAR_NOON_MINUTE: float = 360.0
+"""Minute-of-day treated as solar noon [min].
+
+Matches the scenario library's sinusoidal GHI profiles
+(``baseline + amp * sin(2*pi*t/1440)``), whose daily peak falls at
+t mod 1440 = 360.
+"""
+
+_SOLAR_DIFFUSE_FACTOR: float = 0.15
+"""Diffuse (sky) share of GHI transmitted regardless of orientation [-]."""
+
+_SOLAR_DIRECT_FACTOR: dict[Orientation, float] = {
+    Orientation.SOUTH: 0.65,
+    Orientation.EAST: 0.45,
+    Orientation.WEST: 0.45,
+    Orientation.NORTH: 0.0,
+}
+"""Peak direct-beam transposition factor per facade orientation [-]."""
+
+_SOLAR_PEAK_OFFSET_H: dict[Orientation, float] = {
+    Orientation.SOUTH: 0.0,
+    Orientation.EAST: -3.0,
+    Orientation.WEST: 3.0,
+    Orientation.NORTH: 0.0,
+}
+"""Hours relative to solar noon at which each facade sees peak direct sun."""
+
+
+def _window_solar_gain_w(
+    windows: tuple[WindowConfig, ...],
+    ghi_w_m2: float,
+    t_minutes: float,
+) -> float:
+    """Compute a room's through-window solar gain [W].
+
+    Args:
+        windows: The room's glazing configuration.
+        ghi_w_m2: Global Horizontal Irradiance at this instant [W/m^2].
+        t_minutes: Simulation time [min] (t=0 == midnight).
+
+    Returns:
+        Total transmitted solar power [W] (>= 0).
+    """
+    if ghi_w_m2 <= 0.0 or not windows:
+        return 0.0
+    day_phase = (t_minutes - _SOLAR_NOON_MINUTE) % _MINUTES_PER_DAY
+    hour_angle = 2.0 * math.pi * day_phase / _MINUTES_PER_DAY
+    total = 0.0
+    for window in windows:
+        offset = 2.0 * math.pi * _SOLAR_PEAK_OFFSET_H[window.orientation] / 24.0
+        direct = _SOLAR_DIRECT_FACTOR[window.orientation] * max(
+            0.0, math.cos(hour_angle - offset)
+        )
+        factor = _SOLAR_DIFFUSE_FACTOR + direct
+        total += ghi_w_m2 * window.area_m2 * window.g_value * factor
+    return total
+
+
+# -- Indoor humidity model (thermal-D2, 2026-07-09) ---------------------------
+#
+# Indoor air carries the OUTDOOR absolute humidity plus a constant vapour
+# surplus from occupancy (cooking, showers, people) diluted by ventilation.
+# ``RH_in = e_in / e_sat(T_air)`` then yields a credible per-room dew point,
+# instead of the old unphysical "indoor RH = outdoor RH" shortcut.
+
+_INDOOR_VAPOUR_SURPLUS_HPA: float = 3.3
+"""Constant indoor vapour-pressure surplus over outdoor [hPa].
+
+Equivalent to ~2 g/kg absolute-humidity rise — a typical steady-state
+occupancy moisture load at normal residential ventilation rates.
+"""
+
+
+def _saturation_vapour_pressure_hpa(t_c: float) -> float:
+    """Magnus saturation vapour pressure [hPa] over water.
+
+    Args:
+        t_c: Air temperature [degC].
+
+    Returns:
+        Saturation vapour pressure [hPa].
+    """
+    return 6.112 * math.exp(17.62 * t_c / (243.12 + t_c))
+
+
+def _indoor_humidity_pct(t_air_c: float, weather: WeatherPoint) -> float:
+    """Compute the indoor relative humidity from outdoor conditions [%].
+
+    Args:
+        t_air_c: Indoor air temperature [degC].
+        weather: Current outdoor weather (temperature + relative humidity).
+
+    Returns:
+        Indoor relative humidity [%], clamped to ``[1, 100]``.
+    """
+    e_out = weather.humidity / 100.0 * _saturation_vapour_pressure_hpa(weather.T_out)
+    e_in = e_out + _INDOOR_VAPOUR_SURPLUS_HPA
+    rh_in = 100.0 * e_in / _saturation_vapour_pressure_hpa(t_air_c)
+    return min(100.0, max(1.0, rh_in))
+
 
 # ---------------------------------------------------------------------------
 # SimulatedRoom — per-room physics + actuator bridge
@@ -139,6 +253,8 @@ class SimulatedRoom:
         fast_source_kind: FastSourceKind = FastSourceKind.NONE,
         cooling_enabled: bool = True,
         q_int_w: float = 0.0,
+        windows: tuple[WindowConfig, ...] = (),
+        initial_temperature_c: float | None = None,
         loop_geometry: LoopGeometry,
     ) -> None:
         """Initialize a simulated room.
@@ -157,6 +273,12 @@ class SimulatedRoom:
                 (mirrors ``RoomConfig.cooling_enabled``); surfaced to the
                 controller so per-room cooling opt-out is honoured in the twin.
             q_int_w: Constant internal heat gain [W] (>= 0).
+            windows: The room's glazing (orientation, area, g-value) used by
+                the through-window solar-gain model (2026-07-09). Empty means
+                no solar gain.
+            initial_temperature_c: Optional initial temperature applied to
+                every thermal node [degC]; ``None`` keeps the model's 20 degC
+                reset default (2026-07-09 — summer runs start summer-warm).
             loop_geometry: Pipe/floor geometry for the EN 1264 power model
                 (required so ``ufh_loop.loop_power`` can be evaluated).
 
@@ -192,9 +314,12 @@ class SimulatedRoom:
         self._fast_source_kind = fast_source_kind
         self._cooling_enabled = cooling_enabled
         self._q_int_w = float(q_int_w)
+        self._windows = windows
         self._loop_geometry = loop_geometry
 
         self._x: NDArray[np.float64] = model.reset()
+        if initial_temperature_c is not None:
+            self._x = np.full(model.n_states, float(initial_temperature_c))
         self._valve_position: float = 0.0
         self._applied_fast_source_power_w: float = 0.0
 
@@ -239,6 +364,11 @@ class SimulatedRoom:
     def loop_geometry(self) -> LoopGeometry:
         """Return the room's UFH loop geometry."""
         return self._loop_geometry
+
+    @property
+    def windows(self) -> tuple[WindowConfig, ...]:
+        """Return the room's glazing configuration (solar-gain model)."""
+        return self._windows
 
     @property
     def state(self) -> NDArray[np.float64]:
@@ -428,6 +558,11 @@ class BuildingSimulator:
             r.name: _DEFAULT_SETPOINT_C for r in self._rooms
         }
 
+        # Lower limit on the cooling supply temperature [degC] — normally the
+        # controller's global safe dew point, closing the third output of the
+        # contract in the twin (amendment 2026-07-09, I1). ``None`` = no limit.
+        self._cooling_supply_floor_c: float | None = None
+
         # Diagnostics populated by ``_distribute_hp_power``.
         self._last_t_supply_c: float | None = None
         self._last_q_floor_w: dict[str, float] = {}
@@ -476,6 +611,19 @@ class BuildingSimulator:
             mode: The new heat-pump operating mode.
         """
         self._hp_mode = mode
+
+    def set_cooling_supply_floor(self, floor_c: float | None) -> None:
+        """Set the lower limit for the COOLING supply temperature.
+
+        Models the heat pump honouring the controller's **global safe
+        dew-point** output (the third output of the external contract): the
+        chilled-water supply never goes below this value. Call each cycle with
+        ``BuildingOutputs.global_safe_dew_point_c`` (amendment 2026-07-09).
+
+        Args:
+            floor_c: Lower supply limit [degC], or ``None`` for no limit.
+        """
+        self._cooling_supply_floor_c = floor_c
 
     def set_setpoint(self, room_name: str, setpoint_c: float) -> None:
         """Set one room's control setpoint used when building ``RoomInputs``.
@@ -541,9 +689,14 @@ class BuildingSimulator:
                 return self._weather_comp.t_supply(t_out)
             return _FALLBACK_T_SUPPLY_HEATING_C
         if self._hp_mode == HeatPumpMode.COOLING:
-            if self._cooling_comp is not None:
-                return self._cooling_comp.t_supply(t_out)
-            return _FALLBACK_T_SUPPLY_COOLING_C
+            base = (
+                self._cooling_comp.t_supply(t_out)
+                if self._cooling_comp is not None
+                else _FALLBACK_T_SUPPLY_COOLING_C
+            )
+            if self._cooling_supply_floor_c is not None:
+                return max(base, self._cooling_supply_floor_c)
+            return base
         return 0.0
 
     def _build_loops(
@@ -601,7 +754,7 @@ class BuildingSimulator:
             mode=_HP_MODE_TO_MODE[self._hp_mode],
             setpoint_c=self._setpoints[room.name],
             room_temperature_c=self._apply_temp_noise(room.T_air),
-            humidity_pct=weather.humidity,
+            humidity_pct=_indoor_humidity_pct(room.T_air, weather),
             outdoor_temperature_c=weather.T_out,
             loops=self._build_loops(room, t_supply),
             fast_source_kind=room.fast_source_kind,
@@ -741,7 +894,8 @@ class BuildingSimulator:
         allocated = self._distribute_hp_power(actions)
         wp = self._weather.get(float(self._time_minutes))
         for r in self._rooms:
-            r.step_with_power(wp, q_floor_w=allocated[r.name], q_sol_w=0.0)
+            q_sol = _window_solar_gain_w(r.windows, wp.GHI, float(self._time_minutes))
+            r.step_with_power(wp, q_floor_w=allocated[r.name], q_sol_w=q_sol)
 
         self._time_minutes += self._dt_minutes
         return self.get_all_measurements()

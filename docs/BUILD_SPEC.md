@@ -108,8 +108,7 @@ tortoise-ufh/
       weather.py                     # WeatherPoint, WeatherSource protocol, SyntheticWeather
       sensor_noise.py                # SensorNoise (seeded Gaussian)
       safety.py                      # safety rules S1..S5 (data) + SafetyEvaluator
-      simulator.py                   # BuildingSimulator + HeatPumpMode
-      simulated_room.py              # SimulatedRoom (RCModel <-> actuator bridge)
+      simulator.py                   # BuildingSimulator + SimulatedRoom + HeatPumpMode
       simulation_log.py              # SimRecord + SimulationLog
       metrics.py                     # SimMetrics + assert_* helpers
       scenarios.py                   # scenario factories + SCENARIO_LIBRARY registry
@@ -198,6 +197,7 @@ class RoomInputs:
     fast_source_on: bool | None = None       # current state feedback
     hp_active_for_ufh: bool | None = None     # False during DHW/defrost -> freeze integrator
     cooling_enabled: bool = True             # per-room "udział w chłodzeniu"
+    last_update_age_minutes: float = 0.0     # ADDITIVE (2026-07-09, S6): per-room data age -> S5 watchdog
 
 @dataclass(frozen=True)
 class FastSourceCommand:
@@ -237,7 +237,15 @@ class RoomOutputs:
 class BuildingOutputs:
     rooms: dict[str, RoomOutputs]
     global_safe_dew_point_c: float | None    # max_over_cooled(T_dew)+2K, or None if no cooled/humidity
+    sensor_lost_rooms: int = 0               # ADDITIVE (2026-07-09, safety-F13): rooms flagged sensor_lost
 ```
+
+**`global_safe_dew_point_c = None` contract (S14, 2026-07-09):** `None` means "no eligible cooled
+room right now" (not cooling season, cooling disabled, or the temperature/humidity inputs are
+unusable) — it does NOT mean "no condensation risk". The HA sensor renders it as
+`unknown`/`unavailable`. Any consumer piping this value into the heat pump's cooling-supply lower
+limit MUST be fail-safe: on `unknown` either hold a conservative fixed lower limit (e.g. 18-19 °C)
+or stop floor cooling entirely — never "no limit". See the README for a reference automation.
 
 **Report must be JSON-serializable** (provide `to_dict()` helpers on `RoomOutputs`/`RoomReport`/
 `BuildingOutputs` returning plain dict/list/str/float/bool; enums -> their `.value`). The HA websocket
@@ -294,20 +302,48 @@ class RoomController:
 ```
 Algorithm (all knobs from `ControllerConfig`, §6.3):
 
-1. **Missing room temp** (`room_temperature_c is None`): SAFE DEGRADE — hold last valve position
-   (freeze; `RoomController` remembers `_last_valve_pct`; the cold-start hold — before any live
-   step — is mode-aware: `config.valve_floor_pct` for heating, 0 for cooling/transitional/off),
-   fast source **OFF**, flag `"sensor_lost"`, explanation says so. Do not run PID.
+1. **Missing room temp** (`room_temperature_c is None`): SAFE DEGRADE — mode-dependent
+   *(amendment 2026-07-09, supersedes the unconditional freeze; see PRD §8.7 note +
+   DECISIONS §6)*:
+   - **HEATING:** hold last valve position (freeze; `RoomController` remembers
+     `_last_valve_pct` — the last position of *healthy* regulation, never a safety-override
+     extreme; the cold-start hold before any live step is `config.valve_floor_pct`).
+   - **COOLING (and TRANSITIONAL/OFF):** valve **0**, never freeze-open. A lost temperature
+     breaks BOTH condensation defences at once (the room drops out of the global dew maximum
+     as `no_temperature` AND the local S2 throttle cannot run without `T_room`), so a
+     frozen-open valve would pass unprotected chilled water indefinitely. The heating hold
+     memory is left untouched by this branch.
+   In both branches: fast source **OFF**, flag `"sensor_lost"`, explanation says so. Do not
+   run PID.
 2. **Mode == OFF**: valve 0, fast source OFF, report explains "off".
-3. **Mode == TRANSITIONAL**: valve parked (0), only fast source, bidirectional on sign of error
-   (heating if room below setpoint-deadband beyond boost offset, cooling if above). No PID on valve.
-4. **Trend**: `trend_c_per_h = (T_room - _prev_T_room)/dt_hours` (0 on first call). Store prev.
+3. **Mode == TRANSITIONAL**: valve parked (0), only fast source, bidirectional. *(Amendment
+   2026-07-09, C6+S12 — see DECISIONS §7.)* An idle machine engages in the direction whose demand
+   exceeds `boost_offset_c`; a running machine keeps its REMEMBERED direction with
+   `target = setpoint` (the split's own regulation holds the room AT the setpoint — the old
+   `[setpoint-1.0, setpoint-0.3]` hysteresis band's ~-0.65 K seasonal bias is gone) and releases
+   only once the room crosses the FAR edge of the comfort band (`demand < -deadband_c`, i.e. free
+   gains carry the room), through the min-ON dwell. No PID on valve.
+4. **Trend** *(amendment 2026-07-09, S10 — see DECISIONS §8)*: FILTERED. Raw samples
+   `raw = (T_room - _prev_T_room)/dt_hours` are taken only once at least **60 s** has accumulated
+   since the previous sample (a 2 s debounced recompute HOLDS the previous filtered value instead
+   of dividing a sensor tick by 2 s), then smoothed by a first-order EMA with **tau = 15 min**
+   (`alpha = 1 - exp(-dt/tau)`). `trend_c_per_h` in the report is the filtered value; 0 on the
+   first call and after sensor loss (a gap invalidates the trend).
 5. **Error** (heating convention): `error = setpoint - T_room`. Cooling uses `error = T_room - setpoint`
    internally so a positive error always means "need more actuation".
-6. **Deadband**: if `|setpoint - T_room| <= deadband`, PID sees `error=0` region (no integral growth);
-   valve trends toward floor (heating) or 0 (cooling). Keep it simple: pass `error` reduced by deadband
+6. **Deadband**: if `|setpoint - T_room| <= deadband`, PID sees `error=0` region (no integral
+   growth); the valve then RESTS at the accumulated integral (plus trend/FF terms) — it does NOT
+   decay toward the floor/0 (control-F7 clarification, 2026-07-09: the resting integral IS the
+   steady heat demand). Keep it simple: pass `error` reduced by deadband
    (`error_db = sign(error)*max(0, |err|-deadband)`).
-7. **Integrator freeze**: `freeze = (inputs.hp_active_for_ufh is False)`. Pass to `pid.compute`.
+7. **Integrator freeze** *(extended 2026-07-09, S1/S2 — see DECISIONS §8)*:
+   `freeze = (inputs.hp_active_for_ufh is False) or (COOLING and dew_factor < 1.0)` — the S2 dew
+   throttle multiplies the valve AFTER the PID, invisibly to the back-calculation, so integrating
+   under an active throttle banks a windup that slams the valve open when the humidity clears; the
+   throttle factor is computed here (it depends only on inputs) and applied in step 12.
+   Additionally: a HEATING<->COOLING transition RESETS the integrator (the error convention flips),
+   and >12 h of accumulated inactivity (OFF / TRANSITIONAL / cooling opt-out / sensor lost) clears
+   it (one season's integral must not become the first command of the next).
 8. **PID**: `pid_out = pid.compute(error_db, dt_seconds=dt_seconds, freeze_integrator=freeze)`
    -> 0..100 (the integral accumulates the step's REAL `dt_seconds`).
 9. **Trend damping** (anti-overshoot, the "człon trendu"): subtract `kt * trend_toward_setpoint`.
@@ -315,7 +351,9 @@ Algorithm (all knobs from `ControllerConfig`, §6.3):
    (clamped >=0 contribution). In cooling mirror. This is the key inertia/overshoot tamer.
 10. **Feedforward** (optional): if `outdoor_temperature_c` present and `config.outdoor_ff_enabled`,
     add a small baseline term from `WeatherCompCurve`-style mapping (heating: colder outside -> higher
-    baseline valve). Keep bounded and modest; PI does the rest.
+    baseline valve). Keep bounded and modest; PI does the rest. The shaping constants are
+    `ControllerConfig` knobs since 2026-07-09 (control-F6): `ff_neutral_c` (default 15 °C),
+    `ff_gain_pct_per_k` (1 %/K), `ff_max_pct` (20 %).
 11. **Valve floor** (heating only, when calling for heat i.e. error>0 beyond deadband):
     `valve = max(valve, config.valve_floor_pct)`. Not applied in cooling/off/transitional or when
     satisfied.
@@ -327,23 +365,62 @@ Algorithm (all knobs from `ControllerConfig`, §6.3):
     A COOLING room with `cooling_enabled=False` never reaches this step: it short-circuits
     (before step 5) to valve 0, fast source OFF, flag `"cooling_disabled"` — an opted-out room
     must never receive chilled water, which would bypass both condensation defences.
-13. **Clamp** valve to [0,100]; set `saturated` if hit a bound; `raw_valve_pct` = pre-clamp/floor value.
-14. **Fast source (split) coordination** (only if `fast_source_kind != NONE`):
+13. **Clamp** valve to [0,100]; set `saturated` if hit a bound — EXCEPT a zero produced solely by
+    the S2 throttle (control-F8, 2026-07-09): `saturated` stays the "PI hit a bound" signal,
+    `dew_throttle_factor` carries the condensation story. `raw_valve_pct` = pre-clamp/floor value.
+14. **Fast source (split) coordination** (only if `fast_source_kind != NONE`). *(Amendment
+    2026-07-09, C6+S3+S4+S12 — see DECISIONS §7.)*
     - Engage when `|setpoint - T_room| > config.boost_offset_c` in the mode's needed direction.
+    - **Three-state direction machine (C6):** the machine state is `OFF | HEATING | COOLING` —
+      the direction is state, not a per-cycle computation. `OFF -> direction` requires the full
+      min-OFF dwell; `running -> OFF` (requested OFF **or the opposite direction**) requires the
+      full min-ON dwell; a HEATING<->COOLING reversal is therefore only reachable through OFF
+      with the full min-OFF. A blocked request flags `"fast_source_min_runtime"` and the machine
+      re-emits its REMEMBERED direction (never a freshly computed one) — indoor units may share a
+      multisplit outdoor unit, so mixed directions across a debounced recompute are forbidden.
+      The one exception: a hard S3/S4 safety force-ON may set the direction immediately.
     - Respect **min ON / min OFF** (`config.fast_min_on_minutes`, `config.fast_min_off_minutes`); track
-      elapsed via internal timers advanced by `dt_seconds`; flag `"fast_source_min_runtime"` when a
+      elapsed via internal timers advanced by `dt_seconds` (also on sensor-lost/OFF cycles, so a
+      long outage counts toward the min-OFF wait); flag `"fast_source_min_runtime"` when a
       change is blocked by the timer.
+    - **Physical-state sync (S4):** the first observed `fast_source_on` feedback wins over a cold
+      machine — a running unit is adopted as ON (direction from the global mode), a stopped one
+      as OFF — and the dwell timer is re-seeded to 0 (a FULL dwell before any change), so an HA
+      restart/reload (= every tuning change) can never short-cycle a compressor. Later feedback
+      that disagrees with the previous cycle's command raises the additive
+      `"fast_source_mismatch"` flag; the machine stays the owner (the adapter re-asserts).
+      Without feedback (`fast_source_on is None`) the legacy free first transition is kept.
     - **Anti priority-inversion:** the split decision NEVER reduces/holds the valve; floor stays base.
       Split only *adds* boost above the threshold and releases once inside the comfort band.
-    - Command: `on=True, mode=HEATING|COOLING (per Mode), target = setpoint`. Else `on=False, mode=OFF`.
+    - Command (S12): `on=True, mode=HEATING|COOLING (per machine state),
+      target = setpoint + 1 K (heating) / setpoint - 1 K (cooling)` — the split's ceiling-mounted
+      sensor reads warm, so a plain `target = setpoint` throttled the unit before the boost was
+      delivered; release still belongs to OUR room sensor. Else `on=False, mode=OFF`.
 15. Build `RoomReport` with every term filled and a concise Polish/English-neutral `explanation`
     (e.g. `"Grzanie, błąd -0.4 K, trend +0.3 K/h. Zawór 34%. Split ON (boost)."`).
 
 After step 15 two post-processing passes run on EVERY path (including safe degrade):
 - **Hard-safety override (S1..S5):** a stateful `SafetyEvaluator` (`safety.py`, hysteresis kept
   across cycles) is fed the governing loop supply (hottest in heating / coldest in cooling), the
-  room temperature and humidity; if any rule triggers, the highest-priority action overrides the
-  computed valve / fast-source command and the rule names are merged into the report flags.
+  room temperature and humidity; if any rule triggers, the override replaces the computed valve /
+  fast-source command and the rule names are merged into the report flags.
+  *(Amendment 2026-07-09, S5+S7 — see DECISIONS §6.)* The override decides the **water side and
+  the air side independently** across all active rules: any `CLOSE_VALVE` rule (S1/S2) parks the
+  valve at 0, but an active S3 (`EMERGENCY_HEAT`) / S4 (`EMERGENCY_COOL`) still
+  runs the fast source — S1 closing an overheated floor must not silence the only remaining
+  heat source of a freezing room. A safety force-ON goes through `_force_fast_on`, which keeps
+  the fast-source direction machine in sync (state set to the commanded direction, timer
+  restarted on any state change) so releasing the override hands a *running* machine to the
+  min-ON dwell instead of instantly stopping a fresh compressor. The override **never writes
+  `_last_valve_pct`** — the sensor-lost freeze holds the last position of healthy regulation,
+  not a safety extreme.
+  *(Amendment 2026-07-09, S6 — see DECISIONS §8.)* The S5 watchdog is LIVE: the adapter feeds the
+  per-room data age via `RoomInputs.last_update_age_minutes` (additive field) into
+  `SensorSnapshot`, and `FALLBACK_HP_CURVE` alone now commands the **neutral position** —
+  `valve_floor_pct` in HEATING (a passive baseline tempered by the heat pump's own curve), 0 in
+  COOLING (stale data never justifies chilled water) — instead of a hard close. The adapter's
+  building-level watchdog stays report-only; S5 is the per-room actuator-side escalation
+  (sensor-lost freeze at ~45 min of staleness, neutral position ~15 min later).
 - **Additive report stamping:** `dew_excluded_reason` (via `classify_dew_eligibility`, §4) and
   `fast_dwell_remaining_s` are stamped onto the final report (post-safety, so the dwell value
   reflects the final fast-source state; a safety force-off clears it).
@@ -380,21 +457,29 @@ class BuildingController:
 ```python
 @dataclass(frozen=True)
 class ControllerConfig:
-    kp: float = 8.0
-    ki: float = 0.02
+    # Defaults retuned 2026-07-09 (C1, DECISIONS §8; empirical sweep on the
+    # calibrated twin — the original kp=8/ki=0.02/kt=6 gave Ti ~ 7 min, an
+    # order of magnitude too aggressive for a tau = 3-6 h slab: +1.2 K
+    # measured overshoot and a persistent +-0.6 K limit cycle).
+    kp: float = 14.0
+    ki: float = 0.0015                   # Ti = kp/ki ~ 2.6 h
     kd: float = 0.0
-    kt: float = 6.0                      # trend-damping gain (%/(°C/h))
+    kt: float = 12.0                     # trend-damping gain (%/(°C/h)), on the FILTERED trend
     deadband_c: float = 0.3
     valve_floor_pct: float = 15.0
     outdoor_ff_enabled: bool = False
-    boost_offset_c: float = 1.0          # split engages beyond this |error|
+    ff_neutral_c: float = 15.0           # FF shaping knobs (control-F6, 2026-07-09)
+    ff_gain_pct_per_k: float = 1.0
+    ff_max_pct: float = 20.0
+    boost_offset_c: float = 1.0          # split engages beyond this |error|; must be > deadband_c (D2)
     fast_min_on_minutes: float = 10.0
     fast_min_off_minutes: float = 10.0
     dew_margin_k: float = 2.0            # local S2 margin
     dew_ramp_k: float = 2.0             # graduated throttle ramp width
     cycle_seconds: float = 300.0        # 5 min
     valve_write_threshold_pct: float = 2.0
-    # __post_init__: all gains >=0, 0<=valve_floor<=100, deadband>=0, margins>=0, cycle>0
+    # __post_init__: all gains >=0, 0<=valve_floor<=100, deadband>=0, margins>=0, cycle>0,
+    # boost_offset_c > deadband_c, ff_neutral_c in [-30,40], ff_max_pct in [0,100]
 
 @dataclass(frozen=True)
 class RoomConfig:
@@ -431,6 +516,9 @@ class SimScenario:
     sensor_noise_std: float = 0.0
     description: str = ""
     room_offsets: dict[str, float] = field(default_factory=dict)   # per-room offset from home setpoint
+    weather_comp: WeatherCompCurve | None = None    # twin heating supply curve (2026-07-09)
+    cooling_comp: CoolingCompCurve | None = None    # twin cooling supply curve
+    initial_temperature_c: float | None = None      # initial node temp (summer scenarios)
 ```
 `RCParams`, `ModelOrder`, `RCModel` are **identical in spirit to pump-ahead** (blueprint §3 model.py):
 3R3C `x=[T_air,T_slab,T_wall]`, SISO `u=[Q_floor]`, `d=[T_out,Q_sol,Q_int]`, ZOH via augmented matrix
@@ -441,50 +529,83 @@ to blueprint. Reuse those shapes verbatim; do not reinvent.
 
 ---
 
-## 7. Simulator — `simulator.py`, `simulated_room.py` (digital twin)
+## 7. Simulator — `simulator.py` (digital twin)
+
+*(`simulated_room.py` removed 2026-07-09, D1 — it was a dead, diverging duplicate; the canonical
+`SimulatedRoom` lives in `simulator.py`.)*
 
 Mirror blueprint §4 closely, adapted to our contract:
 - `class HeatPumpMode(Enum): HEATING; COOLING; OFF`.
 - `SimulatedRoom(name, model: RCModel, *, n_loops=1, fast_source_power_w=0.0, q_int_w=0.0,
-  loop_geometry: LoopGeometry)` — owns thermal state `_x=model.reset()`; `apply_actions(valve_pct,
+  windows=(), initial_temperature_c=None, loop_geometry: LoopGeometry)` — owns thermal state
+  `_x=model.reset()` (or a uniform `initial_temperature_c`); `apply_actions(valve_pct,
   fast_source_power_w=0)`; `step_with_power(weather: WeatherPoint, q_floor_w, q_sol_w=0)`; props
-  `T_air`, `T_slab`, `valve_position`, `state`.
+  `T_air`, `T_slab`, `valve_position`, `state`, `windows`.
 - `class BuildingSimulator(rooms, weather, *, hp_mode=HEATING, hp_max_power_w=None,
   sensor_noise=None, weather_comp=None, cooling_comp=None)`.
   - `get_all_measurements() -> dict[str, RoomInputs]` — **produces the SAME `RoomInputs` the HA
     coordinator builds**, so `BuildingController.step` is called identically in tests and in HA. Fill
-    `room_temperature_c` (noised), `humidity_pct` (from weather), `outdoor_temperature_c`,
-    `loops` with realistic `supply/return/valve` (supply from weather-comp curve, return = supply -
-    ΔT estimate, valve = last applied), `mode`, `hp_active_for_ufh=not is_cwu` (no CWU here -> True).
-  - `step_all(actions: dict[str, RoomOutputs]) -> dict[str, RoomInputs]` — apply valve %, distribute
-    finite HP power via `loop_power`, integrate each room's `RCModel.step` one tick, advance clock.
+    `room_temperature_c` (noised), `humidity_pct` (INDOOR humidity model, 2026-07-09: outdoor
+    vapour pressure + a constant occupancy surplus of ~2 g/kg, evaluated against the room air —
+    a credible per-room dew point instead of the old "indoor RH = outdoor RH" shortcut),
+    `outdoor_temperature_c`, `loops` with realistic `supply/return/valve` (supply from
+    weather-comp curve, return = supply - ΔT estimate, valve = last applied), `mode`,
+    `hp_active_for_ufh=not is_cwu` (no CWU here -> True).
+  - `step_all(actions: dict[str, RoomOutputs]) -> dict[str, RoomInputs]` — apply valve %, compute
+    each room's **through-window solar gain** (2026-07-09, C7a: `q_sol = GHI * sum(area * g_value
+    * f_orient(time-of-day))`, a diffuse share plus a cosine direct envelope per facade; the RC
+    model splits it `f_slab/f_conv/f_rad = 0.5/0.3/0.2` — sun lands mostly on a UFH FLOOR),
+    distribute finite HP power via `loop_power`, integrate each room's `RCModel.step` one tick,
+    advance clock.
+  - `set_cooling_supply_floor(floor_c)` (2026-07-09, I1) — the twin heat pump honours the
+    controller's **global safe dew point** as its chilled-supply lower limit
+    (`t_supply_cooling = max(curve/fallback, floor)`), closing the contract's third output in
+    the simulated loop; the test harness feeds it back every cycle.
   - Provide single-room convenience `get_measurements()/step()` too.
 - Noise corrupts only the measurement snapshot (`T_room`, and optionally supply), never physics.
 - `T_slab` is ground-truth inside the sim and is **NOT** placed into `RoomInputs` (the controller must
   not see it) — but the log records it for metrics/plots.
+- Plant calibration 2026-07-09 (S11, report-algo-thermal): `loop_power` uses the EN 1264
+  characteristic `Q = K_H * A * dT_log^1.1` with the screed spreading resistance in series
+  (`K_H` lands in the 4-7 W/m²K band); `building_profiles` reference values give
+  h_floor ~ 10 W/m²K (`R_sf_ref=0.005`), sub-slab U ~ 0.18 W/m²K (`R_ins_ref=0.28`) with a
+  SEASONAL ground temperature (winter ~14 °C, summer ~17 °C via the `t_ground` factory
+  parameter), slab eigenmode tau ~ 4.4 h, and `C_air_ref = 300 kJ/K` (air + furnishings).
 
 ---
 
 ## 8. Metrics, log, scenarios, profiles
 
 - `simulation_log.py`: `SimRecord(t, inputs: RoomInputs, outputs: RoomOutputs, weather: WeatherPoint,
-  t_slab: float, room_name="")` frozen with flat props (`T_room`, `T_slab`, `valve_pct`, `T_out`, ...);
+  t_slab: float, room_name="", q_floor_w=None)` frozen with flat props (`T_room`, `T_slab`,
+  `valve_pct`, `T_out`, ...); `q_floor_w` records the ALLOCATED floor power for the energy metric
+  (D6, 2026-07-09).
   `SimulationLog` with append/append_from_step/len/iter/getitem/get_room(name)/time_range/to_dataframe.
 - `metrics.py`: `SimMetrics` frozen (`comfort_pct, max_overshoot, max_undershoot, mean_deviation,
-  fast_source_runtime_pct, energy_kwh, condensation_events, max_floor_temp, min_floor_temp`) with
+  fast_source_runtime_pct, energy_kwh, condensation_events, max_floor_temp, min_floor_temp,
+  valve_travel_pct_per_h`) with
   `from_log(log, setpoint, *, comfort_band=0.5, ufh_nominal_power_w=None, dt_minutes=1)` and
-  `compare(other)`. Assertion helpers (raise AssertionError w/ diagnostic): `assert_comfort`,
+  `compare(other)`. `energy_kwh` prefers the recorded allocation over the nominal-power estimate;
+  `valve_travel_pct_per_h` is the actuator-wear proxy (D7). Assertion helpers (raise
+  AssertionError w/ diagnostic): `assert_comfort`,
   `assert_floor_temp_safe(max_temp=34.0)`, `assert_no_condensation(margin=2.0)`,
-  `assert_no_freezing(hard_min=16.0)`, `assert_no_prolonged_cold`.
+  `assert_no_freezing(hard_min=16.0)`, `assert_no_prolonged_cold`,
+  `assert_max_overshoot(max_overshoot=0.5)` (S13 — guards the primary anti-overshoot goal),
+  `assert_valve_movement_moderate(max_travel_pct_per_h=30.0)`.
 - `scenarios.py`: factory functions returning `SimScenario`, `SCENARIO_LIBRARY: dict[str, Callable]`.
-  Include: `steady_heating`, `cold_snap`, `solar_overshoot`, `spring_transition` (mode transitional),
-  `hot_july_floor_cooling` (mode cooling, high humidity -> exercises dew-point), `sensor_dropout`.
+  Include: `steady_heating`, `cold_snap` (with a realistic `WeatherCompCurve`), `solar_overshoot`,
+  `spring_transition` (mode transitional), `hot_july_floor_cooling` (mode cooling, summer ground +
+  moderate shaded GHI + realistic humidity -> the S2 throttle and the global dew limit genuinely
+  modulate the loop), `sensor_dropout`, `split_boost` (2.5 kW split boost on a single room).
+  **ALL scenarios gate the merge** in `tests/simulation/test_scenarios.py`; `steady_heating`
+  additionally runs at BOTH dt = 60 s and the production 300 s takt (2026-07-09, C7c/S11/S13).
 - `building_profiles.py`: factory functions returning `BuildingConfig`, `BUILDING_PROFILES` registry.
-  Include a `modern_bungalow()` multi-room reference (parterowy, ~13 UFH loops, HP ~4.9 kW, wylewka
-  ~7 cm, lat 50.5/lon 19.5 — from the PRD reference house) and single-room parametric variants
-  (`well_insulated`, `leaky_old_house`, `thin_screed`, `heavy_construction`), plus a
-  `_make_3r3c_params(area_m2, ...)` helper. Use physically realistic RC values (blueprint §13 table:
-  C_air~60kJ/K per 20 m², C_slab~3250 kJ/K per 80 mm, R_sf~0.01, τ_slab 4–6 h).
+  Include a `modern_bungalow(t_ground=14.0)` multi-room reference (parterowy, ~13 UFH loops, HP
+  ~4.9 kW, wylewka ~7 cm, lat 50.5/lon 19.5 — from the PRD reference house) and single-room
+  parametric variants (`well_insulated`, `well_insulated_with_split`, `leaky_old_house`,
+  `thin_screed`, `heavy_construction`), plus a `_make_3r3c_params(area_m2, ...)` helper. Use the
+  CALIBRATED reference values (2026-07-09, §7 above: C_air 300 kJ/K, C_slab 3250 kJ/K per 80 mm,
+  R_sf 0.005, R_ins 0.28, T_ground seasonal, solar split 0.5/0.3/0.2).
 
 ---
 
@@ -525,7 +646,11 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   valves, `valve.set_valve_position` with an integer `position` for `valve`-domain actuators; all
   the room's valve
   entities, but only when the new value differs from last by >= `valve_write_threshold_pct`), split via
-  `climate.set_hvac_mode` + `climate.set_temperature`. All writes `blocking=False`, try/except +
+  `climate.set_hvac_mode` + `climate.set_temperature`. **Split command cache (S3, 2026-07-09):**
+  an unchanged `(hvac_mode, target)` pair is NOT re-sent every cycle (mirror of
+  `_last_written_valve`; no IR beeps, no stomping on manual louvre/fan tweaks) but is re-asserted
+  after ~45 min so a missed write or manual override self-heals — the machine stays the owner.
+  All writes `blocking=False`, try/except +
   `_LOGGER.exception` (`# noqa: BLE001`). Watchdog + shadow-mode identical pattern to blueprint.
   Holds `_room_states: dict[str, str]` (seeded from `CONF_ROOM_STATE`); `get_room_state`/`set_room_state`
   (`@callback`, persists options WITHOUT reload — `options_require_reload` treats a state-only change as
@@ -543,6 +668,25 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   refresh) — NOT to `entry.data`, which would reload the whole entry on every nudge. Per-room an
   optional `entity_hp_active` source entity may be configured; its on/off state feeds
   `hp_active_for_ufh` (integrator freeze during DHW/defrost), absent → `None`.
+  **Input hardening (amendment 2026-07-09, C3+C4+S8 — fixed constants, deliberately NOT config
+  knobs):** the room temperature passes a plausibility gate — range −10..50 °C plus a
+  rate-of-change gate (a sample jumping > 4 K from the last accepted value is rejected like a
+  missing reading; two consecutive mutually consistent samples accept the new level). A
+  present-but-frozen state is aged out via `last_reported`/`last_updated`: room temperature
+  older than 45 min and humidity older than 60 min are treated as unavailable (WITHOUT the
+  short cache fallback — the cache would hold the same stale value; stale RH would otherwise
+  fool BOTH condensation layers). Valve feedback is validated per loop (an out-of-range reading
+  nulls only that loop, never degrading the room to `sensor_lost`), and a LIVE room whose
+  feedback diverges from the last written command by > 10 pp for 3 consecutive cycles gets a
+  `valve_mismatch` report flag.
+  **Mode persistence (S9):** the global mode is persisted in the setpoint Store and restored on
+  startup (a configured, available mode entity still wins), so a restart in July never falls
+  back to heating logic.
+  **Farewell command (C5):** on a room's `live → shadow/off` transition and on entry unload,
+  one-shot safe parking of the released actuators: split **OFF** always; valve → **0** when the
+  global mode is COOLING (an orphaned open valve would keep passing chilled water outside both
+  dew defences), position left untouched in HEATING (warm water is bounded by the HP curve;
+  holding keeps the house warm).
 - **`number.py`**: `NumberEntity` for global **home temperature** (writable; range 5..30, step 0.5) and
   one per-room **offset** (writable; range -5..+5, step 0.5). `async_set_native_value` -> coordinator
   setter -> `async_set_updated_data`. These are the setpoint source of truth (config exposure decision).

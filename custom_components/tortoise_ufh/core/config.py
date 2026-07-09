@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from .rc_model import RCParams
     from .ufh_loop import LoopGeometry
     from .weather import WeatherSource
+    from .weather_comp import CoolingCompCurve, WeatherCompCurve
 
 
 # ---------------------------------------------------------------------------
@@ -64,8 +65,16 @@ class ControllerConfig:
             (in [0, 100]).
         outdoor_ff_enabled: Whether to add an outdoor-temperature feedforward
             baseline term to the valve command.
+        ff_neutral_c: Outdoor temperature at which the feedforward term is
+            zero [degC] (in [-30, 40]; control-F6, 2026-07-09 — previously a
+            module constant).
+        ff_gain_pct_per_k: Feedforward gain [%/K] of outdoor deviation from
+            ``ff_neutral_c`` (>= 0).
+        ff_max_pct: Upper clamp on the feedforward baseline term [%]
+            (in [0, 100]).
         boost_offset_c: Absolute error beyond which the fast source engages [K]
-            (>= 0).
+            (>= 0 and > ``deadband_c``, or the engage/release hysteresis would
+            invert — D2, 2026-07-09).
         fast_min_on_minutes: Minimum fast-source ON dwell time [min] (>= 0).
         fast_min_off_minutes: Minimum fast-source OFF dwell time [min] (>= 0).
         dew_margin_k: Local per-room condensation-protection margin [K] (>= 0).
@@ -77,13 +86,22 @@ class ControllerConfig:
             written to the actuator [%] (>= 0).
     """
 
-    kp: float = 8.0
-    ki: float = 0.02
+    # Defaults retuned 2026-07-09 (C1; DECISIONS §8) on the CALIBRATED digital
+    # twin: the old ki=0.02 (Ti ~ 7 min) was an order of magnitude too
+    # aggressive for a tau = 3-6 h slab and produced a measured +1.2 K
+    # overshoot with a persistent +-0.6 K limit cycle. kp=14 / ki=0.0015
+    # (Ti ~ 2.6 h) / kt=12 on the FILTERED trend: steady_heating overshoot
+    # +0.18 K, 24-48 h tail 100 % inside +-0.3 K, ~1 pp/h valve travel.
+    kp: float = 14.0
+    ki: float = 0.0015
     kd: float = 0.0
-    kt: float = 6.0
+    kt: float = 12.0
     deadband_c: float = 0.3
     valve_floor_pct: float = 15.0
     outdoor_ff_enabled: bool = False
+    ff_neutral_c: float = 15.0
+    ff_gain_pct_per_k: float = 1.0
+    ff_max_pct: float = 20.0
     boost_offset_c: float = 1.0
     fast_min_on_minutes: float = 10.0
     fast_min_off_minutes: float = 10.0
@@ -98,7 +116,8 @@ class ControllerConfig:
         Raises:
             ValueError: If any gain is negative, ``valve_floor_pct`` is outside
                 ``[0, 100]``, a margin/threshold is negative, ``dew_ramp_k`` or
-                ``cycle_seconds`` is non-positive.
+                ``cycle_seconds`` is non-positive, or ``boost_offset_c`` does
+                not exceed ``deadband_c``.
         """
         for gain_name, gain in (
             ("kp", self.kp),
@@ -115,8 +134,25 @@ class ControllerConfig:
         if self.valve_floor_pct < 0 or self.valve_floor_pct > 100:
             msg = f"valve_floor_pct must be in [0, 100], got {self.valve_floor_pct}"
             raise ValueError(msg)
+        if self.ff_neutral_c < -30.0 or self.ff_neutral_c > 40.0:
+            msg = f"ff_neutral_c must be in [-30, 40], got {self.ff_neutral_c}"
+            raise ValueError(msg)
+        if self.ff_gain_pct_per_k < 0:
+            msg = f"ff_gain_pct_per_k must be >= 0, got {self.ff_gain_pct_per_k}"
+            raise ValueError(msg)
+        if self.ff_max_pct < 0 or self.ff_max_pct > 100:
+            msg = f"ff_max_pct must be in [0, 100], got {self.ff_max_pct}"
+            raise ValueError(msg)
         if self.boost_offset_c < 0:
             msg = f"boost_offset_c must be >= 0, got {self.boost_offset_c}"
+            raise ValueError(msg)
+        if self.boost_offset_c <= self.deadband_c:
+            msg = (
+                "boost_offset_c must be > deadband_c (the engage threshold must "
+                "lie outside the comfort band, or the fast-source hysteresis "
+                f"inverts), got boost_offset_c={self.boost_offset_c} <= "
+                f"deadband_c={self.deadband_c}"
+            )
             raise ValueError(msg)
         if self.fast_min_on_minutes < 0:
             msg = f"fast_min_on_minutes must be >= 0, got {self.fast_min_on_minutes}"
@@ -364,6 +400,15 @@ class SimScenario:
         room_offsets: Per-room setpoint offsets from ``home_setpoint_c`` [K],
             keyed by room name. Keys must match rooms in ``building``; rooms not
             listed use a zero offset. Empty by default.
+        weather_comp: Optional heating weather-compensation curve for the
+            twin's supply temperature (2026-07-09; ``None`` = the simulator's
+            constant fallback).
+        cooling_comp: Optional cooling weather-compensation curve (``None`` =
+            fallback constant).
+        initial_temperature_c: Optional initial temperature for every room's
+            thermal nodes [degC] (2026-07-09). ``None`` keeps the RC model's
+            20 degC reset default — summer scenarios pass a summer-like value
+            so the run does not start with a cold-house artifact.
     """
 
     name: str
@@ -375,6 +420,9 @@ class SimScenario:
     sensor_noise_std: float = 0.0
     description: str = ""
     room_offsets: dict[str, float] = field(default_factory=dict)
+    weather_comp: WeatherCompCurve | None = None
+    cooling_comp: CoolingCompCurve | None = None
+    initial_temperature_c: float | None = None
 
     def __post_init__(self) -> None:
         """Validate the scenario parameters.
@@ -395,6 +443,14 @@ class SimScenario:
             raise ValueError(msg)
         if self.sensor_noise_std < 0:
             msg = f"sensor_noise_std must be >= 0, got {self.sensor_noise_std}"
+            raise ValueError(msg)
+        if self.initial_temperature_c is not None and not (
+            0.0 <= self.initial_temperature_c <= 35.0
+        ):
+            msg = (
+                "initial_temperature_c must be in [0, 35] when set, got "
+                f"{self.initial_temperature_c}"
+            )
             raise ValueError(msg)
         if self.room_offsets:
             known = {r.name for r in self.building.rooms}

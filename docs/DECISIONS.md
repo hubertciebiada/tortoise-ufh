@@ -139,3 +139,230 @@ the dew-point layers (§2), and the control law (Q4).
 - **Panel (v0.3.0/v0.3.1).** Tabs: Rooms (table columns: three-state | room | measured |
   setpoint | error | valve % | supply | return | assist mode | assist temp), Tuning, Valves,
   Assist.
+
+---
+
+## 6. Revision — Phase A safety hardening (2026-07-09)
+
+> **Status: one item REVERSES part of a frozen decision** (the §3 / §8.7 sensor-loss freeze,
+> for COOLING only); the rest extends the contract. Recorded 2026-07-09 after the five-agent
+> algorithmic FMEA (`scratchpad/algo-analysis/`). Mirrored in `prd-control-brain.md` §8.7 and
+> `docs/BUILD_SPEC.md` §5.2 step 1 + §9 in the same pass. All thresholds below are **fixed
+> constants tailored to the owner's house, deliberately NOT config knobs.**
+
+- **C2 — sensor-loss safe-degrade is mode-dependent.** The §3 freeze ("valve holds the last
+  commanded position") now applies **only in HEATING**. In **COOLING** a lost room temperature
+  drives the valve to **0**: without `T_room` the room silently leaves the global safe
+  dew-point maximum (`no_temperature`) AND the local S2 throttle cannot compute, so a
+  frozen-open valve would pass unprotected chilled water indefinitely — the one scenario that
+  defeated both condensation layers at once. Split OFF and the `sensor_lost` flag are unchanged.
+- **C3 — room-temperature plausibility gate (adapter).** Range −10..50 °C (rejects e.g. the
+  DS18B20 85 °C power-on-reset that used to poison the integrator to a 100 % valve for hours)
+  plus a rate-of-change gate: a jump > 4 K between cycles is rejected like a missing reading;
+  two consecutive mutually consistent samples accept a genuinely new level within 2 cycles.
+- **C4 — state-age gate (adapter).** A present-but-frozen entity (dead battery, stuck bridge)
+  is aged out via `last_reported`/`last_updated`: room temperature > 45 min and humidity
+  > 60 min ⇒ treated as unavailable, WITHOUT the short-cache fallback (the cache would return
+  the same stale value). Stale winter RH was the most dangerous single input: both condensation
+  defences trusted it. (Docs recommendation kept for Phase E: a hardware pipe-condensation
+  sensor as an independent third layer.)
+- **C5 — farewell command.** A room leaving `live` (→ `shadow`/`off`) and an entry unload park
+  the released actuators exactly once: **split OFF** always; **valve → 0 only in COOLING**
+  (an orphaned open valve escapes both dew defences). In HEATING the valve position is left
+  untouched — warm supply water is bounded by the heat pump's own curve, so holding the last
+  position keeps the house warm and is strictly safer in winter than cold-parking. This
+  narrows the §4 statement "off ⇒ the physical actuator is left untouched" to the heating case.
+- **S5 — safety override keeps controller state honest.** A safety force-ON (S3/S4) now syncs
+  the fast-source dwell machine (`_fast_on` + timer), so releasing the override cannot stop a
+  compressor started seconds earlier; and the override no longer writes `_last_valve_pct`, so
+  the sensor-lost freeze holds the last position of *healthy* regulation, never an emergency
+  0/100 that could outlive the fault by days.
+- **S7 — water side and air side decided independently.** S1/S2 (`CLOSE_VALVE`) parks the valve
+  but no longer silences an active S3/S4 fast source: a freezing room with overheated supply
+  water keeps its air-side heat (the split) while the floor valve stays closed.
+- **S8 — valve feedback validated per loop + `valve_mismatch`.** A garbage feedback reading
+  (e.g. 255 from a stuck register) nulls only that loop instead of degrading the whole room to
+  `sensor_lost`; a LIVE room whose feedback diverges from the last written command by > 10 pp
+  for 3 consecutive cycles raises the additive `valve_mismatch` report flag.
+- **S9 — global mode persisted.** The mode joins the setpoint Store (restored on startup; a
+  configured, available mode entity still wins), so an HA restart in July can never silently
+  resume heating logic.
+
+---
+
+## 7. Revision — Phase B fast-source direction machine (2026-07-09)
+
+> **Status: extends §2/§8.5 and REVERSES two behavioural details** (transitional hysteresis
+> band; split target = setpoint). Recorded 2026-07-09 after the five-agent algorithmic FMEA
+> (`scratchpad/algo-analysis/`, algo-fast). Mirrored in `prd-control-brain.md` §8.5/§8.6 and
+> `docs/BUILD_SPEC.md` §5.2 steps 3 + 14 in the same pass. Numeric choices are **fixed
+> constants**, not config knobs.
+
+- **C6 — the split direction is machine state.** The fast source is a three-state machine
+  `OFF / HEATING / COOLING`. `OFF -> direction` needs the full min-OFF; `running -> OFF`
+  (requested OFF **or the opposite direction**) needs the full min-ON; a HEATING<->COOLING
+  reversal is therefore only reachable through OFF with the full min-OFF dwell. A min-ON hold
+  re-emits the REMEMBERED direction, never a freshly computed one (the old `_fallback_mode`
+  error-sign fallback is deleted). Rationale (hard requirement): indoor units may share a
+  multisplit outdoor unit — simultaneous heat and cool requests on one aggregate are a mode
+  conflict/lockout. The single exception: a hard S3/S4 emergency force-ON sets the direction
+  immediately (frost protection outranks compressor hygiene; opposite-season co-occurrence is
+  physically implausible).
+- **S3 — split command cache + periodic re-assert.** The adapter writes the split command only
+  when the `(hvac_mode, target)` pair changes (mirror of `_last_written_valve`), and re-asserts
+  an unchanged command after ~45 min. The splits are local (ESPHome/LAN) — this is hygiene (no
+  beeps, no stomping on manual tweaks), not an API budget — and the re-assert keeps the machine
+  the owner after a missed write or a manual override.
+- **S4 — the machine consumes the physical split state.** The first observed `fast_source_on`
+  feedback wins over a cold machine (running unit adopted as ON with the mode's direction,
+  stopped unit as OFF) and the dwell timer is re-seeded to **0** — a FULL dwell before any state
+  change — replacing the old `1e9` free-transition seed, so an HA restart/reload loop (every
+  tuning change reloads!) can never short-cycle a compressor. Later feedback disagreeing with
+  the previous cycle's command raises the additive `fast_source_mismatch` flag. Rooms without
+  feedback (`fast_source_on is None`) keep the legacy free first transition.
+- **S12 — boost target offset + transitional bias removal.** In HEATING/COOLING the split target
+  is `setpoint + 1.0 K` / `setpoint - 1.0 K` (fixed `FAST_TARGET_OFFSET_K`): the split's own
+  ceiling-mounted sensor reads warm, so `target = setpoint` throttled the unit before the boost
+  was delivered; the release still belongs to OUR room sensor (hysteresis + min-ON), so the room
+  cannot run away. In TRANSITIONAL the target stays exactly `setpoint` and the release moves to
+  the FAR edge of the comfort band (`demand < -deadband`): the split's own regulation holds the
+  room AT the setpoint while ON, eliminating the old `[setpoint-1.0, setpoint-0.3]` band's
+  ~-0.65 K seasonal bias.
+- **D2 — relational validation.** `ControllerConfig` now rejects `boost_offset_c <= deadband_c`
+  (an inverted engage/release hysteresis was previously constructible).
+- **fast-F6 — dwell accumulates on forced paths.** Sensor-lost / OFF cycles advance the dwell
+  timer too, so a recovered room does not restart its min-OFF wait from scratch.
+
+---
+
+## 8. Revision — Phases C+D+E: tuning, calibrated twin, watchdog escalation (2026-07-09)
+
+> **Status: REVERSES the frozen default gains** (§3 / BUILD_SPEC §6) and extends the
+> simulator/metrics contract. Recorded 2026-07-09 after the five-agent algorithmic FMEA
+> (`scratchpad/algo-analysis/`, reports algo-control + algo-thermal). Mirrored in
+> `prd-control-brain.md` §8.3/§8.7 and `docs/BUILD_SPEC.md` §5.2/§6/§7/§8 +
+> `docs/ALGORITHM_SPEC.md` in the same pass. The order was deliberate: the twin was FIXED
+> AND CALIBRATED FIRST (phase D), and only then were the new gains chosen empirically on it
+> (phase C).
+
+### Phase D — the digital twin becomes a real gate
+
+- **C7a — solar reaches the physics.** `step_all` now computes each room's through-window
+  gain `q_sol = GHI * sum(area * g * f_orient(time-of-day))` (fixed diffuse share + cosine
+  direct envelope per facade; solar noon pinned to the scenario GHI convention) and the RC
+  model routes it `f_slab/f_conv/f_rad = 0.5/0.3/0.2` — sun on a UFH room lands mostly on
+  the FLOOR (new `RCParams.f_slab`, new slab row in `E_c`). Previously `q_sol_w=0.0` was
+  hard-coded: the trend member was never tested against its main enemy.
+- **C7b — ground fixed, seasonal.** `R_ins_ref` 0.05 → **0.28 K/W @ 20 m²** (sub-slab
+  U ≈ 0.18 W/m²K incl. ground mass; the old value made the ground a bigger sink than the
+  whole envelope) and `T_ground` is seasonal: **14 °C winter / 17 °C summer** (`t_ground`
+  factory parameter). Result: `hot_july` genuinely needs cooling and `spring_transition`
+  drifts across the setpoint instead of falling to 12 °C.
+- **S11 — plant calibration.** `loop_power` now uses the EN 1264 characteristic
+  `Q = K_H * A * dT_log^1.1` with the screed spreading resistance in series
+  (`R_SCREED_M2K_W = 0.10`; K_H lands in the 4-7 W/m²K table band); floor film
+  h ≈ 10 W/m²K (`R_sf_ref` 0.01 → 0.005; slab eigenmode tau ≈ 4.4 h);
+  `C_air_ref` 60 → **300 kJ/K** (air + furnishings; the split response is no longer a
+  physically absurd ~7 min). `leaky_old_house` recalibrated from a ~620 W/m² absurdity to a
+  plausible ~140 W/m² design loss.
+- **I1 — the contract's third output closed in the loop.** The twin heat pump honours the
+  controller's global safe dew point: `BuildingSimulator.set_cooling_supply_floor()` lifts
+  the chilled supply to `max(curve/fallback, global_safe_dew_point)`; the harness feeds it
+  back every cycle. The gate asserts the S2 throttle is genuinely ACTIVE in `hot_july` and
+  that cooling actually flows (valves > 0) — the old assertion passed with the valves flat
+  at 0 %.
+- **C7c/S13 — the gate is real.** ALL library scenarios now gate the merge (`cold_snap` —
+  with a realistic `WeatherCompCurve` capped below the S1 trip, `solar_overshoot`,
+  `spring_transition` were dead; the "exercised elsewhere" comment was false). New
+  assertions: `assert_max_overshoot <= 0.5 K` on `steady_heating` (S13 — the primary goal;
+  the old defaults would fail it at +1.2 K), solar surplus ⇒ valves fully closed,
+  transitional ⇒ valves parked while the house drifts, `split_boost` (new scenario, 2.5 kW
+  split) ⇒ boost engages AND releases with anti-priority-inversion held.
+  `steady_heating` runs at BOTH dt = 60 s and the production 300 s takt.
+- **thermal-D2 — indoor humidity model.** Indoor RH = outdoor vapour pressure + constant
+  occupancy surplus (~2 g/kg) evaluated at the room temperature — a credible per-room dew
+  point (the old twin used outdoor RH verbatim). Summer scenarios start at a summer state
+  (`SimScenario.initial_temperature_c = 24`), because a 20 °C winter-reset house under July
+  vapour pressure spends hours at RH ≈ 100 % — an artifact no controller can influence.
+- **D1/D6/D7 — hygiene.** Dead `simulated_room.py` deleted (canonical `SimulatedRoom` is in
+  `simulator.py`); `energy_kwh` integrates the recorded ALLOCATED floor power
+  (`SimRecord.q_floor_w`) instead of nominal x valve; new `valve_travel_pct_per_h` metric +
+  `assert_valve_movement_moderate` (actuator wear <= 30 pp/h in the gate).
+- **Gate grading note:** `assert_no_condensation` is graded at margin **1.0 K** (not the
+  2.0 K control target): with valves closed on a muggy afternoon the slab temperature is
+  weather-driven and sits exactly AT `dew+2` — equality at the control margin measures the
+  weather, not the loop. `assert_no_freezing` skips TRANSITIONAL (valves parked by design).
+
+### Phase C — control law and defaults (empirical, on the calibrated twin)
+
+- **S10 — the trend is filtered.** Raw `dT/dt` samples are taken only once >= 60 s has
+  accumulated (a 2 s debounced recompute HOLDS the previous value instead of dividing a
+  sensor tick by 2 s — the old code could emit a fictitious 180 K/h), then smoothed by a
+  first-order EMA with tau = 15 min. Sensor loss resets the filter (a gap invalidates the
+  trend).
+- **S1 — no windup under the dew throttle.** The S2 factor is computed BEFORE the PI and
+  the integrator is frozen whenever `factor < 1` in cooling: hours of throttled cooling no
+  longer bank an integral that slams the valve open the moment the humidity clears.
+- **S2 — integrator seasonal hygiene.** A HEATING↔COOLING transition resets the
+  integrator (the error convention flips — one season's integral is anti-knowledge for the
+  other), and more than 12 h of accumulated inactivity (OFF/TRANSITIONAL/opt-out/
+  sensor-lost) clears it.
+- **control-F8 — `saturated` semantics.** A zero produced solely by the S2 throttle no
+  longer reports `saturated`; `dew_throttle_factor` carries the condensation story.
+- **C1 — new default gains (REVERSAL of the frozen §3 defaults).**
+  `kp 8→14, ki 0.02→0.0015 (Ti ≈ 2.6 h), kt 6→12` (on the FILTERED trend). The old
+  Ti ≈ 7 min was an order of magnitude too aggressive for a tau = 3-6 h slab. Empirical
+  sweep on the calibrated twin (production 300 s takt; worst room; tail = last 24 h):
+
+  | wariant | steady_heating: max_over / ogon ±0,3 K / ruch zaworu | steady + szum 0,1 K: ruch | cold_snap: max_over / ogon od dnia 3 / ruch |
+  |---|---|---|---|
+  | kp=8 ki=0.02 kt=6 (STARE) | +0,42 K / 68,9 % / 5,8 pp/h | 25,2 pp/h | +0,57 K / 44,2 % / 5,3 pp/h |
+  | kp=8 ki=0.0011 kt=6 | +0,18 K / 100 % / 0,6 pp/h | 19,7 pp/h | +0,13 K / 81,5 % / 1,2 pp/h |
+  | kp=12 ki=0.0011 kt=12 | +0,03 K / 100 % / 0,6 pp/h | 37,4 pp/h | −0,16 K / 69,7 % / 1,0 pp/h |
+  | kp=14 ki=0.0011 kt=12 | −0,05 K / 100 % / 0,6 pp/h | 38,7 pp/h | −0,23 K / 60,2 % / 1,0 pp/h |
+  | kp=12 ki=0.0015 kt=12 | +0,26 K / 100 % / 0,7 pp/h | 37,7 pp/h | +0,06 K / 96,6 % / 1,1 pp/h |
+  | **kp=14 ki=0.0015 kt=12 (NOWE)** | **+0,18 K / 100 % / 0,6 pp/h** | 37,8 pp/h | **−0,06 K / 92,9 % / 1,1 pp/h** |
+  | kp=16 ki=0.0015 kt=12 | +0,10 K / 100 % / 0,6 pp/h | 38,5 pp/h | −0,15 K / 88,2 % / 1,0 pp/h |
+  | kp=14 ki=0.002 kt=12 | +0,35 K / 26 % / 0,8 pp/h | 41,0 pp/h | +0,18 K / 100 % / 1,2 pp/h |
+  | kp=14 ki=0.0015 kt=0 | +0,13 K / 100 % / 0,6 pp/h | 5,4 pp/h | −0,08 K / 94,9 % / 1,1 pp/h |
+
+  `ki = 0.002` already limit-cycles (steady tail 26 %); `ki = 0.0011` undershoots the
+  cold-snap tail. `kp=14/ki=0.0015/kt=12` is the best compromise: <= +0.2 K overshoot,
+  100 % steady tail, ~93 % worst-room cold-snap tail (plant-authority-limited), ~1 pp/h
+  valve travel. Measurement-window note: the table's overshoot figures are measured
+  post-settle (steady-state window); the whole-run figure from t=0 for the OLD defaults
+  is +0.75 K on the calibrated twin, and the often-quoted "+1.2 K" comes from the
+  original analysis run on the pre-calibration plant — all three windows agree on the
+  conclusion (the old defaults fail the 0.5 K gate; the new ones pass with margin). The report's provisional `ki ≈ 0.0011` was measured on the UNCALIBRATED
+  plant; the calibrated twin (weaker plant, EN 1264^1.1) needs the slightly faster
+  integral. Note: kt's noise cost (sigma = 0.1 K → ~38 pp/h commanded travel vs 5.4 at
+  kt=0) is bounded in practice by the 2 % valve-write threshold and by real sensor noise
+  being ~2x lower; kt stays per the frozen trend-member decision (its value is anticipatory
+  damping on approach, e.g. after setpoint changes and under morning sun).
+- **control-F6 — FF constants are knobs.** `ff_neutral_c` / `ff_gain_pct_per_k` /
+  `ff_max_pct` moved from module constants into `ControllerConfig` (validated), exposed in
+  `CONTROLLER_NUMBER_KNOBS` → config flow, `get_tuning`/`set_tuning` and the panel.
+
+### Phase E — watchdog escalation, contracts, docs
+
+- **S6 — S5 watchdog is live, action = NEUTRAL.** The adapter tracks each room's last
+  fresh-data timestamp and feeds the age via `RoomInputs.last_update_age_minutes` (additive
+  field) into the core `SensorSnapshot` — `FALLBACK_HP_CURVE` was dead code (age was a
+  hard-coded 0). Its action changes from "valve 0" to the **neutral position**:
+  `valve_floor_pct` in HEATING (defer to the HP curve with a tempered floor), 0 in COOLING.
+  Escalation ladder for a silent room: freeze/hold (sensor lost at ~45 min of staleness) →
+  neutral (S5, ~15 min later). The adapter's building-level watchdog stays report-only.
+- **S14 — the global dew sensor's `None` contract** documented (BUILD_SPEC §3 + README):
+  `unknown` is NOT "safe"; consumers must fail conservative. Reference automation in the
+  README (generic entity names).
+- **safety-F13 — building staleness counter.** `BuildingOutputs.sensor_lost_rooms`
+  (additive) → `CoordinatorData` → `get_live` websocket payload; deliberately NOT a new
+  entity. README documents per-room alerting.
+- **fast-F6/F7 — closed by A+B+C.** The dwell timer accumulates on sensor-lost/OFF paths
+  (F6, done in phase B), and sensor flicker no longer force-stops a running split every few
+  minutes: the C3 rate-of-change gate rejects single-sample glitches and C4 only ages out
+  genuinely stale states, so a flapping sensor becomes a *steady* sensor-lost (split OFF
+  once, min-OFF accumulated) rather than a stop/start cycle (F7).
+- Installation docs: hardware pipe-condensation sensor on the manifold as the independent
+  third protection layer, manifold insulation, supply probes on the manifold beam (before
+  the valves — dew-F5), an RH sensor for every cooled room.

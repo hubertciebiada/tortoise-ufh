@@ -50,6 +50,9 @@
           "fast_min_off_minutes": "Minimalny czas wyłączenia szybkiego źródła (min)",
           "dew_margin_k": "Margines punktu rosy (K)",
           "dew_ramp_k": "Pasmo narastania punktu rosy (K)",
+          "ff_neutral_c": "Temperatura neutralna sprzężenia pogodowego (°C)",
+          "ff_gain_pct_per_k": "Wzmocnienie sprzężenia pogodowego (%/K)",
+          "ff_max_pct": "Limit sprzężenia pogodowego (%)",
           "outdoor_ff_enabled": "Sprzężenie w przód od temperatury zewnętrznej"
         }
       },
@@ -102,6 +105,9 @@
           "fast_min_off_minutes": "Minimalny czas wyłączenia szybkiego źródła (min)",
           "dew_margin_k": "Margines punktu rosy (K)",
           "dew_ramp_k": "Pasmo narastania punktu rosy (K)",
+          "ff_neutral_c": "Temperatura neutralna sprzężenia pogodowego (°C)",
+          "ff_gain_pct_per_k": "Wzmocnienie sprzężenia pogodowego (%/K)",
+          "ff_max_pct": "Limit sprzężenia pogodowego (%)",
           "outdoor_ff_enabled": "Sprzężenie w przód od temperatury zewnętrznej"
         }
       },

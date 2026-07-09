@@ -42,6 +42,7 @@ from .config import (
     RoomConfig,
     WindowConfig,
 )
+from .models import FastSourceKind
 from .rc_model import RCParams
 from .ufh_loop import LoopGeometry
 
@@ -53,6 +54,7 @@ __all__ = [
     "modern_bungalow",
     "thin_screed",
     "well_insulated",
+    "well_insulated_with_split",
 ]
 
 # ---------------------------------------------------------------------------
@@ -76,17 +78,18 @@ def _make_3r3c_params(
     area_m2: float,
     *,
     has_split: bool = False,
-    C_air_ref: float = 60_000.0,
+    C_air_ref: float = 300_000.0,
     C_slab_ref: float = 3_250_000.0,
     C_wall_ref: float = 1_500_000.0,
-    R_sf_ref: float = 0.01,
+    R_sf_ref: float = 0.005,
     R_wi_ref: float = 0.04,
     R_wo_ref: float = 0.15,
     R_ve_ref: float = 0.20,
-    R_ins_ref: float = 0.05,
-    f_conv: float = 0.6,
-    f_rad: float = 0.4,
-    T_ground: float = 10.0,
+    R_ins_ref: float = 0.28,
+    f_conv: float = 0.3,
+    f_rad: float = 0.2,
+    f_slab: float = 0.5,
+    T_ground: float = 14.0,
 ) -> RCParams:
     """Build a 3R3C :class:`RCParams` with area-based scaling.
 
@@ -95,17 +98,32 @@ def _make_3r3c_params(
     (``_REF_AREA / area_m2``: larger heat-exchange surfaces conduct more).
 
     The reference defaults describe a well-insulated modern single-storey house
-    (~30 cm mineral-wool walls, ~20 cm ceiling wool, ~7 cm wet screed): a 20 m^2
-    room has ``C_slab = 3.25 MJ/K`` (80 mm screed) and ``R_sf = 0.01 K/W``, for a
-    slab discharge time constant ``tau_slab = R_sf * C_slab ~ 9 h`` (or ~7.5 h for
-    the true slab eigenmode ``C_slab / (1/R_sf + 1/R_ins)``): a high thermal mass
-    "battery".
+    (~30 cm mineral-wool walls, ~20 cm ceiling wool, ~7 cm wet screed).
+    Calibration amendment 2026-07-09 (five-agent FMEA, report-algo-thermal
+    K2/I3 + R2/R6):
+
+    * ``R_sf_ref = 0.005`` K/W @ 20 m^2 — combined radiative+convective floor
+      film coefficient h ~ 10 W/(m^2*K) (the old 0.01 meant h ~ 5, a slab 2x
+      too slow to discharge). Slab eigenmode
+      ``tau = C_slab / (1/R_sf + 1/R_ins) ~ 4.4 h`` — inside the realistic
+      2-5 h band for a 7 cm wet screed.
+    * ``R_ins_ref = 0.28`` K/W @ 20 m^2 — effective sub-slab U ~ 0.18
+      W/(m^2*K) (WT-2021 floor-on-ground incl. ground mass; the old 0.05 made
+      the ground a bigger heat sink than the entire envelope and silently
+      cooled the house in July).
+    * ``T_ground = 14`` degC winter effective ground temperature under a
+      heated slab; summer scenarios pass ~17 degC (seasonal, see the
+      ``t_ground`` factory parameters).
+    * ``C_air_ref = 300 kJ/K`` — room air PLUS fast-responding furnishings
+      (bare air alone gave an unrealistic ~7 min split response).
+    * Solar split ``f_slab/f_conv/f_rad = 0.5/0.3/0.2`` — through-window sun
+      lands mostly on the FLOOR of a UFH room, charging the slab.
 
     Args:
         area_m2: Room floor area [m^2] (must be > 0).
         has_split: Whether the room has a fast source (sets the MIMO input flag
             on the returned :class:`RCParams`).
-        C_air_ref: Air-node capacitance at ``_REF_AREA`` [J/K].
+        C_air_ref: Air+furnishings capacitance at ``_REF_AREA`` [J/K].
         C_slab_ref: Slab-node capacitance at ``_REF_AREA`` [J/K].
         C_wall_ref: Wall-node capacitance at ``_REF_AREA`` [J/K].
         R_sf_ref: Slab-to-air (floor surface) resistance at ``_REF_AREA`` [K/W].
@@ -115,6 +133,7 @@ def _make_3r3c_params(
         R_ins_ref: Sub-slab insulation resistance at ``_REF_AREA`` [K/W].
         f_conv: Convective solar fraction to the air node [-].
         f_rad: Radiative solar fraction to the wall node [-].
+        f_slab: Solar fraction landing on the floor (slab node) [-].
         T_ground: Ground temperature beneath the slab [degC].
 
     Returns:
@@ -141,6 +160,7 @@ def _make_3r3c_params(
         R_ins=R_ins_ref * inv_scale,
         f_conv=f_conv,
         f_rad=f_rad,
+        f_slab=f_slab,
         T_ground=T_ground,
         has_split=has_split,
     )
@@ -268,6 +288,7 @@ def _bungalow_room(
     length_m: float,
     spacing_m: float,
     windows: tuple[WindowConfig, ...],
+    t_ground: float = 14.0,
 ) -> RoomConfig:
     """Build one modern-bungalow room with a single UFH loop.
 
@@ -277,6 +298,8 @@ def _bungalow_room(
         length_m: Installed pipe length for the room's loop [m].
         spacing_m: Pipe spacing for the room's loop [m].
         windows: Window configurations for solar-gain modelling.
+        t_ground: Seasonal effective ground temperature beneath the slab
+            [degC] (winter ~14, summer ~17).
 
     Returns:
         A validated :class:`RoomConfig` (one loop, no fast source).
@@ -284,7 +307,7 @@ def _bungalow_room(
     return RoomConfig(
         name=name,
         area_m2=area_m2,
-        params=_make_3r3c_params(area_m2),
+        params=_make_3r3c_params(area_m2, T_ground=t_ground),
         n_loops=1,
         windows=windows,
         loop_geometry=_loop_geometry(length_m, spacing_m, area_m2),
@@ -295,10 +318,11 @@ MODERN_BUNGALOW_ROOMS: tuple[RoomConfig, ...] = tuple(
     _bungalow_room(name, area, length, spacing, windows)
     for name, area, length, spacing, windows in _BUNGALOW_ROOM_SPECS
 )
-"""All 13 heated rooms of the reference modern bungalow (one UFH loop each)."""
+"""All 13 heated rooms of the reference modern bungalow (one UFH loop each,
+winter ground temperature)."""
 
 
-def modern_bungalow() -> BuildingConfig:
+def modern_bungalow(*, t_ground: float = 14.0) -> BuildingConfig:
     """Reference modern bungalow — 13 rooms, 13 UFH loops, no fast source.
 
     Single-storey (parterowy) house calibrated to an anonymized real-world
@@ -308,11 +332,23 @@ def modern_bungalow() -> BuildingConfig:
     room (13 loops total, PE-X 16x2 mm); loop geometries come from anonymized
     real installation data.
 
+    Args:
+        t_ground: Seasonal effective ground temperature [degC] — ~14 in the
+            heating season, ~17 in summer (cooling scenarios).
+
     Returns:
         A validated :class:`BuildingConfig` with 13 rooms.
     """
+    rooms = (
+        MODERN_BUNGALOW_ROOMS
+        if t_ground == 14.0
+        else tuple(
+            _bungalow_room(name, area, length, spacing, windows, t_ground=t_ground)
+            for name, area, length, spacing, windows in _BUNGALOW_ROOM_SPECS
+        )
+    )
     return BuildingConfig(
-        rooms=MODERN_BUNGALOW_ROOMS,
+        rooms=rooms,
         hp_max_power_w=_BUNGALOW_HP_MAX_W,
         latitude=_BUNGALOW_LAT,
         longitude=_BUNGALOW_LON,
@@ -356,11 +392,15 @@ def _single_room(
     )
 
 
-def well_insulated() -> BuildingConfig:
+def well_insulated(*, t_ground: float = 14.0) -> BuildingConfig:
     """Well-insulated modern building — low heat loss, high thermal mass.
 
     Thick walls, triple glazing and mechanical ventilation with heat recovery
     (MVHR): high wall/ventilation/insulation resistances across the board.
+
+    Args:
+        t_ground: Seasonal effective ground temperature [degC] — ~14 in the
+            heating season, ~17 in summer (cooling scenarios).
 
     Returns:
         A validated :class:`BuildingConfig` with 1 room.
@@ -370,13 +410,60 @@ def well_insulated() -> BuildingConfig:
         C_wall_ref=2_000_000.0,
         R_wo_ref=0.18,
         R_ve_ref=0.25,
-        R_ins_ref=0.06,
+        R_ins_ref=0.30,
+        T_ground=t_ground,
     )
     room = _single_room(
         params,
         windows=(
             WindowConfig(orientation=Orientation.SOUTH, area_m2=3.0, g_value=0.5),
         ),
+    )
+    return BuildingConfig(
+        rooms=(room,),
+        hp_max_power_w=6000.0,
+        latitude=50.0,
+        longitude=20.0,
+    )
+
+
+def well_insulated_with_split(*, t_ground: float = 14.0) -> BuildingConfig:
+    """The ``well_insulated`` room plus a 2.5 kW split as fast source.
+
+    Same fabric as :func:`well_insulated`, but the room carries a 2.5 kW
+    wall-split (``FastSourceKind.SPLIT``, MIMO RC input), so closed-loop
+    scenarios can exercise the boost engage/release hysteresis, the min ON/OFF
+    dwell machine and anti priority-inversion against the physics
+    (calibration amendment 2026-07-09, report-algo-thermal I7).
+
+    Args:
+        t_ground: Seasonal effective ground temperature [degC].
+
+    Returns:
+        A validated :class:`BuildingConfig` with 1 split-assisted room.
+    """
+    params = _make_3r3c_params(
+        20.0,
+        has_split=True,
+        C_wall_ref=2_000_000.0,
+        R_wo_ref=0.18,
+        R_ve_ref=0.25,
+        R_ins_ref=0.30,
+        T_ground=t_ground,
+    )
+    length_m = 20.0 / _SINGLE_ROOM_PIPE_SPACING_M * 1.1
+    room = RoomConfig(
+        name="main",
+        area_m2=20.0,
+        params=params,
+        n_loops=2,
+        has_fast_source=True,
+        fast_source_kind=FastSourceKind.SPLIT,
+        fast_source_power_w=2500.0,
+        windows=(
+            WindowConfig(orientation=Orientation.SOUTH, area_m2=3.0, g_value=0.5),
+        ),
+        loop_geometry=_loop_geometry(length_m, _SINGLE_ROOM_PIPE_SPACING_M, 20.0),
     )
     return BuildingConfig(
         rooms=(room,),
@@ -395,13 +482,16 @@ def leaky_old_house() -> BuildingConfig:
     Returns:
         A validated :class:`BuildingConfig` with 1 room.
     """
+    # Calibration 2026-07-09: the old values (R_wo 0.012 / R_ve 0.008 /
+    # R_ins 0.005 @ 20 m^2) implied a physically absurd ~620 W/m^2 design
+    # loss; these land at a plausible ~130-150 W/m^2 at -20 degC design.
     params = _make_3r3c_params(
         20.0,
         C_wall_ref=1_200_000.0,
-        R_wi_ref=0.015,
-        R_wo_ref=0.012,
-        R_ve_ref=0.008,
-        R_ins_ref=0.005,
+        R_wi_ref=0.03,
+        R_wo_ref=0.05,
+        R_ve_ref=0.04,
+        R_ins_ref=0.10,
     )
     room = _single_room(
         params,
@@ -430,7 +520,7 @@ def thin_screed() -> BuildingConfig:
     params = _make_3r3c_params(
         20.0,
         C_slab_ref=1_300_000.0,
-        R_sf_ref=0.008,
+        R_sf_ref=0.004,
     )
     room = _single_room(
         params,
@@ -460,7 +550,7 @@ def heavy_construction() -> BuildingConfig:
         20.0,
         C_slab_ref=4_875_000.0,
         C_wall_ref=3_000_000.0,
-        R_sf_ref=0.012,
+        R_sf_ref=0.006,
     )
     room = _single_room(
         params,
@@ -483,6 +573,7 @@ def heavy_construction() -> BuildingConfig:
 BUILDING_PROFILES: dict[str, Callable[[], BuildingConfig]] = {
     "modern_bungalow": modern_bungalow,
     "well_insulated": well_insulated,
+    "well_insulated_with_split": well_insulated_with_split,
     "leaky_old_house": leaky_old_house,
     "thin_screed": thin_screed,
     "heavy_construction": heavy_construction,

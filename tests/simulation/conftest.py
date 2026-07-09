@@ -52,9 +52,6 @@ if TYPE_CHECKING:
 _SIM_NOISE_SEED: int = 12345
 """Seed for the simulation tier's sensor noise (distinct from unit tier's 42)."""
 
-_DT_MINUTES: int = 1
-"""Simulation clock resolution [min]; ``BuildingSimulator`` advances 1 min/tick."""
-
 _NOMINAL_SUPPLY_C: float = 35.0
 """Representative heating supply temperature for the energy nominal [degC]."""
 
@@ -174,6 +171,10 @@ def _build_simulator(scenario: SimScenario) -> BuildingSimulator:
                 model,
                 n_loops=room_cfg.n_loops,
                 fast_source_power_w=room_cfg.fast_source_power_w,
+                fast_source_kind=room_cfg.fast_source_kind,
+                cooling_enabled=room_cfg.cooling_enabled,
+                windows=room_cfg.windows,
+                initial_temperature_c=scenario.initial_temperature_c,
                 loop_geometry=geometry,
             )
         )
@@ -190,6 +191,8 @@ def _build_simulator(scenario: SimScenario) -> BuildingSimulator:
         hp_mode=_MODE_TO_HP_MODE[scenario.mode],
         hp_max_power_w=building.hp_max_power_w,
         sensor_noise=sensor_noise,
+        weather_comp=scenario.weather_comp,
+        cooling_comp=scenario.cooling_comp,
     )
     simulator.set_setpoints(
         {
@@ -223,23 +226,27 @@ def _first_room_setpoint(scenario: SimScenario, room_cfg: RoomConfig) -> float:
 
 @pytest.fixture(scope="session")
 def run_scenario() -> _ScenarioRunner:
-    """Session-scoped closed-loop scenario harness.
+    """Session-scoped closed-loop scenario harness (cached per scenario).
 
     Returns a callable ``run(scenario, max_steps=None)`` that builds the digital
     twin and the :class:`BuildingController`, closes the control loop for the
-    scenario's duration (one tick per simulation minute), records every timestep,
-    and returns ``(SimulationLog, SimMetrics)`` where the metrics are computed for
-    the **first** room.
+    scenario's duration (one tick per ``dt_seconds``), records every timestep,
+    and returns ``(SimulationLog, SimMetrics)`` where the metrics are computed
+    for the **first** room. Runs are deterministic, so results are cached by
+    ``(scenario.name, dt_seconds, max_steps)`` — several tests grading the same
+    scenario share one closed-loop run.
 
-    Each tick performs:
-    ``get_all_measurements -> BuildingController.step -> step_all`` and logs one
-    record per room via
-    :meth:`~tortoise_ufh.simulation_log.SimulationLog.append_from_step` (capturing
-    the pre-step ground-truth slab temperature, which the controller never sees).
+    Each tick performs ``get_all_measurements -> BuildingController.step ->
+    set_cooling_supply_floor -> step_all``: the controller's global safe
+    dew-point output is fed back as the twin heat pump's chilled-supply lower
+    limit (I1, 2026-07-09), closing the contract's third output in the loop.
+    The per-room ALLOCATED floor power is recorded into each
+    :class:`~tortoise_ufh.simulation_log.SimRecord` for the energy metric.
 
     Returns:
         A :class:`_ScenarioRunner` callable.
     """
+    cache: dict[tuple[str, float, int | None], tuple[SimulationLog, SimMetrics]] = {}
 
     def run(
         scenario: SimScenario,
@@ -249,34 +256,47 @@ def run_scenario() -> _ScenarioRunner:
 
         Args:
             scenario: The fully configured scenario to run.
-            max_steps: Optional cap on the number of timesteps [min]. ``None``
+            max_steps: Optional cap on the number of control ticks. ``None``
                 runs the scenario's full ``duration_minutes``.
 
         Returns:
             A tuple ``(log, metrics)`` — the full multi-room simulation log and
             the first room's :class:`SimMetrics`.
         """
+        key = (scenario.name, scenario.dt_seconds, max_steps)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
         simulator = _build_simulator(scenario)
         configs = {
             room_cfg.name: room_cfg.controller for room_cfg in scenario.building.rooms
         }
         controller = BuildingController(configs)
 
-        n_steps = scenario.duration_minutes
+        dt_ctrl = float(scenario.dt_seconds)
+        dt_minutes = dt_ctrl / 60.0
+        n_steps = int(round(scenario.duration_minutes / dt_minutes))
         if max_steps is not None:
             n_steps = min(n_steps, max_steps)
-        dt_ctrl = float(scenario.dt_seconds)
 
         log = SimulationLog()
-        for t in range(n_steps):
+        for i in range(n_steps):
+            t_min = i * dt_minutes
+            t = int(round(t_min))
             all_inputs = _mask_sensor_dropout(
                 scenario, t, simulator.get_all_measurements()
             )
-            weather_point = scenario.weather.get(float(t))
+            weather_point = scenario.weather.get(t_min)
             slabs = {name: room.T_slab for name, room in simulator.rooms.items()}
 
             outputs = controller.step(all_inputs, dt_seconds=dt_ctrl)
+            # I1: the twin heat pump honours the controller's global safe
+            # dew point as its chilled-supply lower limit.
+            simulator.set_cooling_supply_floor(outputs.global_safe_dew_point_c)
             simulator.step_all(outputs.rooms)
+            allocated = simulator.last_step_info["q_floor_w"]
+            assert isinstance(allocated, dict)
 
             for room_cfg in scenario.building.rooms:
                 name = room_cfg.name
@@ -287,6 +307,7 @@ def run_scenario() -> _ScenarioRunner:
                     weather=weather_point,
                     t_slab=slabs[name],
                     room_name=name,
+                    q_floor_w=allocated.get(name),
                 )
 
         first_room = scenario.building.rooms[0]
@@ -296,8 +317,10 @@ def run_scenario() -> _ScenarioRunner:
             ufh_nominal_power_w=_nominal_ufh_power_w(
                 LoopGeometry.from_room_config(first_room)
             ),
-            dt_minutes=_DT_MINUTES,
+            dt_minutes=max(1, int(round(dt_minutes))),
         )
-        return log, metrics
+        result = (log, metrics)
+        cache[key] = result
+        return result
 
     return run

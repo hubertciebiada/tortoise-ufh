@@ -295,6 +295,9 @@ class LiveResult:
         last_update_timestamp: ISO-8601 UTC timestamp of the last cycle, or
             ``None`` if no cycle has completed.
         mode: Active global :class:`~tortoise_ufh.models.Mode` value string.
+        sensor_lost_rooms: Number of rooms currently degraded with the
+            ``sensor_lost`` flag (building-level staleness counter,
+            safety-F13 2026-07-09).
 
     Raises:
         ValueError: If ``mode`` is not a recognised mode string or
@@ -307,6 +310,7 @@ class LiveResult:
     watchdog_state: str
     last_update_timestamp: str | None
     mode: str
+    sensor_lost_rooms: int = 0
 
     def __post_init__(self) -> None:
         """Validate the global fields of the live reply."""
@@ -331,6 +335,7 @@ class LiveResult:
             "watchdog_state": self.watchdog_state,
             "last_update_timestamp": self.last_update_timestamp,
             "mode": self.mode,
+            "sensor_lost_rooms": self.sensor_lost_rooms,
         }
 
 
@@ -756,6 +761,7 @@ def ws_get_live(
         watchdog_state=data.watchdog_state,
         last_update_timestamp=data.last_update_timestamp,
         mode=data.mode,
+        sensor_lost_rooms=data.sensor_lost_rooms,
     )
     connection.send_result(msg["id"], result.to_dict())
 

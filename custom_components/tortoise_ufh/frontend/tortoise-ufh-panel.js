@@ -252,6 +252,9 @@ const STR = {
     tune_dew_margin_k: "Margines punktu rosy",
     tune_dew_ramp_k: "Rampa dławienia rosy",
     tune_outdoor_ff_enabled: "Sprzężenie pogodowe",
+    tune_ff_neutral_c: "FF: temp. neutralna",
+    tune_ff_gain_pct_per_k: "FF: wzmocnienie",
+    tune_ff_max_pct: "FF: limit",
     val_th_command: "Komenda",
     val_th_raw: "Surowy",
     val_th_floor: "Podłoga",
@@ -410,6 +413,9 @@ const STR = {
     tune_dew_margin_k: "Dew-point margin",
     tune_dew_ramp_k: "Dew throttle ramp",
     tune_outdoor_ff_enabled: "Weather feedforward",
+    tune_ff_neutral_c: "FF: neutral temp",
+    tune_ff_gain_pct_per_k: "FF: gain",
+    tune_ff_max_pct: "FF: cap",
     val_th_command: "Command",
     val_th_raw: "Raw",
     val_th_floor: "Floor",
@@ -453,10 +459,12 @@ const STR = {
 /**
  * Localised, severity-tagged labels for controller flag codes.
  *
- * Codes mirror the exact strings the pure core emits: the room-controller
+ * Codes mirror the exact strings the report carries: the room-controller
  * flags (`sensor_lost`, `s2_condensation`, `fast_source_cannot_cool`,
  * `fast_source_min_runtime`, `cooling_disabled`, `unknown_room`,
- * `controller_error`) plus the safety-rule names merged into the report
+ * `controller_error`, `fast_source_mismatch`), the adapter-stamped
+ * `valve_mismatch` (persistent command-vs-feedback divergence), plus the
+ * safety-rule names merged into the report
  * (`s1_floor_overheat`, `s3_emergency_heat`, `s4_emergency_cool`,
  * `s5_watchdog`). `saturated` / `valve_floor` are synthetic labels for the
  * report booleans surfaced as chips in the decision view. Unknown codes fall
@@ -471,6 +479,16 @@ const FLAG_LABELS = {
   s5_watchdog: { pl: "Watchdog", en: "Watchdog", sev: "problem" },
   unknown_room: { pl: "Brak konfiguracji", en: "Unknown room", sev: "problem" },
   controller_error: { pl: "Błąd regulatora", en: "Controller error", sev: "problem" },
+  valve_mismatch: {
+    pl: "Zawór nie wykonuje komend",
+    en: "Valve not following commands",
+    sev: "problem",
+  },
+  fast_source_mismatch: {
+    pl: "Wspomaganie w innym stanie niż komenda",
+    en: "Assist state differs from command",
+    sev: "warn",
+  },
   fast_source_cannot_cool: {
     pl: "Wspomaganie nie chłodzi",
     en: "Assist can't cool",

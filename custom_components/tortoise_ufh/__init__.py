@@ -253,6 +253,13 @@ async def async_unload_entry(
     from .panel import async_unregister_panel
     from .services import async_unregister_services
 
+    # Farewell command (C5): before releasing ownership, park every LIVE
+    # room's actuators safely (split OFF; valve 0 in cooling) so an unloaded
+    # entry never leaves an orphaned open valve outside the dew-point guards.
+    runtime = getattr(entry, "runtime_data", None)
+    if runtime is not None:
+        await runtime.coordinator.async_farewell_all()
+
     unload_ok: bool = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:

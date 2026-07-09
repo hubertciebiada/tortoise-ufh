@@ -50,6 +50,9 @@
           "fast_min_off_minutes": "Fast-source minimum off time (min)",
           "dew_margin_k": "Dew-point margin (K)",
           "dew_ramp_k": "Dew-point ramp band (K)",
+          "ff_neutral_c": "Feedforward neutral outdoor temperature (°C)",
+          "ff_gain_pct_per_k": "Feedforward gain (%/K)",
+          "ff_max_pct": "Feedforward cap (%)",
           "outdoor_ff_enabled": "Outdoor feedforward enabled"
         }
       },
@@ -102,6 +105,9 @@
           "fast_min_off_minutes": "Fast-source minimum off time (min)",
           "dew_margin_k": "Dew-point margin (K)",
           "dew_ramp_k": "Dew-point ramp band (K)",
+          "ff_neutral_c": "Feedforward neutral outdoor temperature (°C)",
+          "ff_gain_pct_per_k": "Feedforward gain (%/K)",
+          "ff_max_pct": "Feedforward cap (%)",
           "outdoor_ff_enabled": "Outdoor feedforward enabled"
         }
       },

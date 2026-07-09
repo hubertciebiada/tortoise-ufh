@@ -214,6 +214,18 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 - **Regulator: pojedyncza pętla PI na błędzie `T_room` + człon trendu (`dT_room/dt`)** tłumiący
   przeregulowanie (główny wróg przy dużej bezwładności). **Bez członu D po błędzie.** Anti-windup
   (back-calculation/clamp), **deadband**, **valve-floor** (min. otwarcie w gotowości grzewczej).
+  > **Zmienione 2026-07-09 (faza C; JAWNY rewers domyślnych nastaw — patrz `docs/DECISIONS.md` §8
+  > z tabelą sweepa i BUILD_SPEC §6).** Stare domyślne `kp=8 / ki=0.02 / kt=6` dawały Ti≈7 min —
+  > o rząd za agresywnie dla wylewki o τ=3-6 h (zmierzone +1,2 K przeregulowania i cykl graniczny
+  > ±0,6 K). **Nowe domyślne, dobrane empirycznie sweepem na SKALIBROWANYM bliźniaku:
+  > `kp=14 / ki=0.0015 (Ti≈2,6 h) / kt=12`** — przeregulowanie ≤ +0,2 K, ogon 24-48 h w 100 %
+  > w ±0,3 K, ruch zaworu ~1 pp/h. **Trend jest FILTROWANY (S10):** surowa próbka dT/dt dopiero po
+  > skumulowaniu ≥ 60 s (recompute po 2 s TRZYMA poprzednią wartość), potem EMA τ=15 min — dopiero
+  > na tym sygnale działa kt=12. **Higiena integratora (S1/S2):** zamrożenie gdy dławienie rosy
+  > S2 < 1 (dławienie mnoży zawór ZA regulatorem — bez tego godziny dławienia bankują windup);
+  > reset przy zmianie GRZANIE↔CHŁODZENIE; wygaszenie po > 12 h bezczynności
+  > (OFF/przejściowy/utrata czujnika). Stałe sprzężenia pogodowego (neutral/wzmocnienie/limit)
+  > przeniesione do `ControllerConfig` jako knoby (control-F6).
 - Brak sondy wylewki (`T_slab`). Zakładamy, że woda zasilająca jest zawsze odpowiednio ciepła/zimna
   (stronę wodną reguluje PC — poza zakresem). `T_slab` można w przyszłości *oszacować* z supply/return
   (nie cieplejszy niż zasilanie) — opcja, niekrytyczna dla v1.
@@ -241,8 +253,25 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 ### 8.5 Szybkie źródło (split)
 - Komenda: **`ON + tryb (grzanie/chłodzenie) + temperatura pokoju`** (cel = global + offset). Split sam
   się wysteruje (nie dotykamy mocy sprężarki). Realizacja: `climate.set_hvac_mode` + `climate.set_temperature`.
-- **Załączenie:** gdy `|T_room − cel|` > **boost-offset** (regulowany). Ochrona sprężarki: **min. czas
-  ON i OFF** (anti-short-cycle).
+  > **Zmienione 2026-07-09 (faza B; patrz `docs/DECISIONS.md` §7 i BUILD_SPEC §5.2 kroki 3/14).**
+  > **(S12) Cel splitu w grzaniu = `cel + 1,0 K`, w chłodzeniu = `cel − 1,0 K`** (stała, nie knob):
+  > czujnik splitu przy suficie czyta cieplej, więc cel równy nastawie dławił jednostkę zanim boost
+  > dowiózł — zwolnienie (release) nadal należy do NASZEGO czujnika pokojowego (histereza + min-ON).
+  > W trybie przejściowym cel = nastawa (bez offsetu).
+- **Załączenie:** gdy `|T_room − cel|` > **boost-offset** (regulowany; walidacja **boost-offset >
+  deadband** — inaczej histereza załącz/zwolnij się odwraca, D2 2026-07-09). Ochrona sprężarki:
+  **min. czas ON i OFF** (anti-short-cycle).
+  > **Zmienione 2026-07-09 (C6, faza B):** kierunek splitu jest **stanem maszyny trójstanowej
+  > OFF/GRZANIE/CHŁODZENIE** — zmiana kierunku WYŁĄCZNIE przez OFF z pełnym min-OFF; hold min-ON
+  > re-emituje ZAPAMIĘTANY kierunek (nigdy świeżo policzony). Powód twardy: jednostki wewnętrzne
+  > mogą dzielić wspólny agregat multisplit — mieszanie kierunków to konflikt trybów na agregacie.
+  > Jedyny wyjątek: awaryjne S3/S4 może ustawić kierunek natychmiast (mróz > higiena sprężarki).
+  > **(S4)** Maszyna konsumuje fizyczny stan splitu: pierwszy odczyt `fast_source_on` wygrywa nad
+  > zimną maszyną, a timer dwell jest zasiewany konserwatywnie (pełny dwell po restarcie/reloadzie
+  > — koniec z short-cyclingiem przy pętli restartów); późniejszy rozjazd komenda↔stan daje flagę
+  > `fast_source_mismatch`. **(S3)** Adapter nie spamuje komendami: niezmieniona para
+  > (tryb, cel) nie jest wysyłana co cykl, a co ~45 min następuje re-assert (samonaprawa po
+  > ręcznej zmianie).
 - **Koordynacja (anti priority-inversion):** podłoga zawsze bazą i **nie zamyka się** tylko dlatego, że
   split dogrzał/dochłodził; split dobija ponad próg i odpuszcza po wejściu w pasmo komfortu.
 
@@ -250,10 +279,36 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
 - **Jeden globalny tryb domu**: `grzanie / przejściowy / chłodzenie / off` (encja wejściowa). Per-pokój
   tylko udział (od v0.3.0: 3-stan — §8.11) + udział-w-chłodzeniu + offset. Przejściowy: zawory
   zaparkowane, reguluje wyłącznie split dwukierunkowo. Off: pokój do spoczynku, brak komend.
+  > **Zmienione 2026-07-09 (S12, faza B):** przejściowy BEZ biasu −0,65 K. Stara histereza
+  > [cel−1,0; cel−0,3] trzymała pokój w całości poniżej nastawy. Teraz: załącz przy
+  > `|błąd| > boost-offset`, split pracuje z **celem = nastawie** (jego własna regulacja trzyma
+  > pokój NA nastawie), zwalnia dopiero gdy pokój przekroczy pasmo komfortu PO PRZECIWNEJ
+  > stronie (darmowe zyski niosą pokój dalej), z poszanowaniem min-ON.
 
 ### 8.7 Bezpieczeństwo i degradacja
 - **Utrata czujnika pokoju:** **zawór zamraża ostatnią pozycję**, **split → OFF**, flaga w raporcie.
+  > **Zmienione 2026-07-09 (faza A hardeningu; JAWNY rewers części tej decyzji — patrz
+  > `docs/DECISIONS.md` §6 i BUILD_SPEC §5.2 krok 1.** Freeze ostatniej pozycji obowiązuje
+  > **tylko w GRZANIU**. W **CHŁODZENIU** utrata temperatury pokoju ⇒ **zawór 0** (nigdy
+  > freeze-open): bez `T_room` pokój wypada z globalnego maksimum punktu rosy ORAZ lokalne S2
+  > nie może się policzyć — zamrożony otwarty zawór puszczałby niechronioną zimną wodę bez
+  > ograniczeń czasowych. Dodatkowo: hold pamięta ostatnią pozycję **zdrowej regulacji**
+  > (nigdy awaryjne 0/100 z nadpisania safety), a zamknięcie zaworu przez S1/S2 **nie gasi**
+  > źródła powietrznego, gdy aktywne jest S3/S4 (strona wodna i powietrzna decydowane
+  > niezależnie). Nowość: **komenda pożegnalna** — przejście pokoju `live → shadow/off` oraz
+  > unload wpisu parkują aktuatory jednorazowo (split OFF zawsze; zawór 0 w chłodzeniu,
+  > w grzaniu pozycja zostaje — woda grzewcza jest ograniczona krzywą PC). Wejścia adaptera są
+  > plauzybilizowane (zakres −10..50 °C, bramka skoku 4 K/cykl z potwierdzeniem 2 próbek,
+  > wiek stanu: temperatura 45 min / wilgotność 60 min ⇒ jak brak odczytu), a globalny tryb
+  > jest persystowany w Store (restart w lipcu nie wraca do logiki grzewczej).
 - **Watchdog:** brak świeżych danych > 15 min → stan awaryjny/alarm w raporcie (recovery po 5 min).
+  > **Zmienione 2026-07-09 (S6, faza E; patrz `docs/DECISIONS.md` §8).** Watchdog per-pokój (S5)
+  > jest ŻYWY: adapter podaje rdzeniowi realny wiek danych pokoju
+  > (`RoomInputs.last_update_age_minutes`), a akcja S5 to **pozycja neutralna** — `valve_floor`
+  > w grzaniu (dom trzymany krzywą PC), 0 w chłodzeniu — zamiast twardego 0. Drabinka eskalacji
+  > milczącego pokoju: freeze/hold (utrata czujnika po ~45 min stęchłego stanu) → pozycja
+  > neutralna (S5, ~15 min później). Watchdog budynkowy adaptera pozostaje report-only; dodatkowo
+  > raport budynku niesie licznik `sensor_lost_rooms` (bez nowej encji).
 - Ochrona posadzki bez sondy podłogi: temp. wody zasilającej + ostrożne zakresy pozycji.
 - Moduł jest **jedynym właścicielem** zaworów i splitów pokoi z udziałem. Na zewnątrz: globalny tryb,
   kill-switch (off = brak komend), właściciel strony wodnej (PC/CWU).

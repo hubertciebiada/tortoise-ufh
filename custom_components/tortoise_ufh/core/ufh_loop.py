@@ -1,14 +1,18 @@
 """UFH loop thermal power calculation (EN 1264 reduced formula).
 
-Implements the simplified EN 1264 formula for underfloor-heating (UFH) loop
-thermal power output::
+Implements the simplified EN 1264 characteristic for underfloor-heating (UFH)
+loop thermal power output (calibration amendment 2026-07-09)::
 
-    Q = U * A * DeltaT_log
+    Q = K_H * A * DeltaT_log ** 1.1
 
-where *U* is the overall heat-transfer coefficient through the PE-X pipe
-wall [W/(m^2*K)], *A* is the effective heated floor area [m^2] and
-*DeltaT_log* is the log-mean temperature difference [K] between the
-supply/return water and the slab.
+where *K_H* is the overall heat-transfer coefficient [W/(m^2*K)] combining the
+PE-X pipe-wall conductance (spacing-corrected) IN SERIES with the screed
+spreading resistance above the pipe plane (:data:`R_SCREED_M2K_W`), *A* is the
+effective heated floor area [m^2] and *DeltaT_log* is the log-mean temperature
+difference [K] between the supply/return water and the slab. The 1.1 exponent
+is the EN 1264 radiator-style characteristic (``q = K_H * dT_H ** 1.1``);
+without the screed resistance the pipe-wall-only U overestimated the plant by
+roughly 2x versus EN 1264 tables (five-agent FMEA, report-algo-thermal I2).
 
 The module bakes the "never oppose the mode" rule into the physics:
 ``loop_power`` returns exactly ``0.0`` when the temperature gradient would
@@ -59,6 +63,17 @@ DEFAULT_PIPE_WALL_THICKNESS_MM: float = 2.0
 
 PIPE_BEND_FACTOR: float = 1.1
 """Bend/return-margin factor applied to the estimated pipe length."""
+
+R_SCREED_M2K_W: float = 0.10
+"""Effective screed spreading resistance above the pipe plane [m^2*K/W].
+
+Roughly 45 mm of wet-screed cover at lambda ~ 1.2 W/(m*K) plus the
+pipe-to-screed contact/spreading penalty. Placed in series with the
+spacing-corrected pipe-wall conductance it lands the combined ``K_H`` in the
+4-7 W/(m^2*K) band of EN 1264 tables for 16x2 PE-X at 150-200 mm spacing."""
+
+EN1264_EXPONENT: float = 1.1
+"""EN 1264 power-characteristic exponent: ``q = K_H * dT ** 1.1``."""
 
 _EPSILON: float = 1e-6
 """Guard threshold for near-equal delta-T values in the LMTD calculation."""
@@ -193,7 +208,7 @@ def _delta_t_log(delta_t_in: float, delta_t_out: float) -> float:
 
 
 def _compute_u_effective(geometry: LoopGeometry) -> float:
-    """Compute the effective area-based U-value [W/(m^2*K)].
+    """Compute the effective area-based ``K_H`` [W/(m^2*K)].
 
     The per-metre pipe-wall conductance is::
 
@@ -203,15 +218,20 @@ def _compute_u_effective(geometry: LoopGeometry) -> float:
 
         f_spacing = 1 / (1 + spacing / (pi * d_outer))
 
-    The overall area-based coefficient is::
+    The pipe-side area coefficient is::
 
-        U = U_pipe_m * f_spacing * pipe_length / area
+        U_pipe = U_pipe_m * f_spacing * pipe_length / area
+
+    and the screed spreading resistance :data:`R_SCREED_M2K_W` is added in
+    series (calibration 2026-07-09)::
+
+        K_H = 1 / (1 / U_pipe + R_screed)
 
     Args:
         geometry: Pipe and floor geometry.
 
     Returns:
-        Effective U-value [W/(m^2*K)].
+        Effective ``K_H`` [W/(m^2*K)].
     """
     d_outer_m = geometry.pipe_diameter_outer_mm / 1000.0
     d_inner_m = (
@@ -220,9 +240,10 @@ def _compute_u_effective(geometry: LoopGeometry) -> float:
 
     u_pipe_per_m = (2.0 * math.pi * K_PEX) / math.log(d_outer_m / d_inner_m)
     f_spacing = 1.0 / (1.0 + geometry.pipe_spacing_m / (math.pi * d_outer_m))
-    return (
+    u_pipe = (
         u_pipe_per_m * f_spacing * geometry.effective_pipe_length_m / geometry.area_m2
     )
+    return 1.0 / (1.0 / u_pipe + R_SCREED_M2K_W)
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +260,8 @@ def loop_power(
 ) -> float:
     """Compute UFH loop thermal power using the EN 1264 reduced formula.
 
-    ``Q = U * A * DeltaT_log``.
+    ``Q = K_H * A * DeltaT_log ** 1.1`` (:data:`EN1264_EXPONENT`), with
+    ``K_H`` combining the pipe wall and the screed spreading resistance.
 
     In **heating** mode the function returns ``Q >= 0``; in **cooling**
     mode it returns ``Q <= 0`` (heat extracted from the slab). If the
@@ -296,7 +318,7 @@ def loop_power(
         return 0.0
 
     u_eff = _compute_u_effective(geometry)
-    q = u_eff * geometry.area_m2 * dt_log
+    q = u_eff * geometry.area_m2 * math.pow(dt_log, EN1264_EXPONENT)
 
     if mode == "cooling":
         return -q

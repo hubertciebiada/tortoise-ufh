@@ -107,9 +107,14 @@ class RoomInputs:
         hp_active_for_ufh: ``False`` while the heat pump is unavailable for UFH
             (DHW / defrost) so the integrator is frozen; ``None`` if unknown.
         cooling_enabled: Whether this room participates in cooling.
+        last_update_age_minutes: Minutes since the room last delivered fresh
+            data (adapter-supplied; additive field 2026-07-09, S6). Feeds the
+            S5 watchdog rule; ``0.0`` (the default) keeps S5 quiet for callers
+            that do not track staleness.
 
     Raises:
-        ValueError: If ``humidity_pct`` is outside the 0..100 range.
+        ValueError: If ``humidity_pct`` is outside the 0..100 range or
+            ``last_update_age_minutes`` is negative.
     """
 
     mode: Mode
@@ -122,11 +127,18 @@ class RoomInputs:
     fast_source_on: bool | None = None  # current state feedback
     hp_active_for_ufh: bool | None = None  # False during DHW/defrost -> freeze
     cooling_enabled: bool = True  # per-room "udzial w chlodzeniu"
+    last_update_age_minutes: float = 0.0  # S5 watchdog input (additive)
 
     def __post_init__(self) -> None:
-        """Validate the humidity range (percent)."""
+        """Validate the humidity range (percent) and the watchdog age."""
         if self.humidity_pct is not None and not (0.0 <= self.humidity_pct <= 100.0):
             msg = f"humidity_pct must be in [0, 100] %, got {self.humidity_pct}"
+            raise ValueError(msg)
+        if self.last_update_age_minutes < 0.0:
+            msg = (
+                "last_update_age_minutes must be >= 0, got "
+                f"{self.last_update_age_minutes}"
+            )
             raise ValueError(msg)
 
 
@@ -316,19 +328,26 @@ class BuildingOutputs:
         rooms: Per-room outputs keyed by room name.
         global_safe_dew_point_c: ``max_over_cooled(T_dew) + 2 K`` in degrees
             Celsius, or ``None`` if there is no eligible cooled/humid room.
+        sensor_lost_rooms: Number of rooms currently degraded with the
+            ``sensor_lost`` flag (additive field 2026-07-09, safety-F13) — a
+            building-level staleness counter for the panel and automations,
+            deliberately NOT a new HA entity.
     """
 
     rooms: dict[str, RoomOutputs]
     global_safe_dew_point_c: float | None  # max_over_cooled(T_dew)+2K, or None
+    sensor_lost_rooms: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable dict of the building result.
 
         Returns:
-            Plain ``dict`` with ``rooms`` (dict of room dicts) and
-            ``global_safe_dew_point_c`` (float or ``None``).
+            Plain ``dict`` with ``rooms`` (dict of room dicts),
+            ``global_safe_dew_point_c`` (float or ``None``) and
+            ``sensor_lost_rooms`` (int).
         """
         return {
             "rooms": {name: out.to_dict() for name, out in self.rooms.items()},
             "global_safe_dew_point_c": self.global_safe_dew_point_c,
+            "sensor_lost_rooms": self.sensor_lost_rooms,
         }

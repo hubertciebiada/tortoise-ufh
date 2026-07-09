@@ -193,20 +193,30 @@ knobs come from `tortoise_ufh.config.ControllerConfig` (a frozen dataclass, `__p
 
 | Knob | Default | Unit | Role |
 |------|---------|------|------|
-| `kp` | 8.0 | %/K | proportional gain |
-| `ki` | 0.02 | %/(K·s) | integral gain |
+| `kp` | 14.0 | %/K | proportional gain (retuned 2026-07-09, C1) |
+| `ki` | 0.0015 | %/(K·s) | integral gain — Ti = kp/ki ≈ 2.6 h (retuned 2026-07-09) |
 | `kd` | 0.0 | %·s/K | derivative (unused; **error D disabled**) |
-| `kt` | 6.0 | %/(K/h) | **trend-damping gain** |
+| `kt` | 12.0 | %/(K/h) | **trend-damping gain**, applied to the FILTERED trend |
 | `deadband_c` | 0.3 | K | comfort band |
 | `valve_floor_pct` | 15.0 | % | minimum open when calling for heat |
 | `outdoor_ff_enabled` | False | — | optional feedforward toggle |
-| `boost_offset_c` | 1.0 | K | split engage threshold |
+| `ff_neutral_c` | 15.0 | °C | FF neutral outdoor temperature (knob since 2026-07-09) |
+| `ff_gain_pct_per_k` | 1.0 | %/K | FF gain |
+| `ff_max_pct` | 20.0 | % | FF cap |
+| `boost_offset_c` | 1.0 | K | split engage threshold (must be > `deadband_c`) |
 | `fast_min_on_minutes` | 10.0 | min | split min ON dwell |
 | `fast_min_off_minutes` | 10.0 | min | split min OFF dwell |
 | `dew_margin_k` | 2.0 | K | local S2 dew margin |
 | `dew_ramp_k` | 2.0 | K | S2 graduated ramp width |
 | `cycle_seconds` | 300.0 | s | control cycle (= PID `dt`) |
 | `valve_write_threshold_pct` | 2.0 | % | HA write dead-zone |
+
+> **Why the 2026-07-09 retune (C1, DECISIONS §8):** the original `ki = 0.02` meant
+> Ti ≈ 7 min against a τ = 3–6 h slab — the integrator saturated during every approach and the
+> measured closed-loop result was **+1.2 K overshoot with a ±0.6 K limit cycle**. The new
+> defaults were chosen by an empirical sweep on the CALIBRATED digital twin (solar wired, EN
+> 1264^1.1 plant, realistic ground): overshoot ≤ +0.2 K, 24–48 h tail 100 % inside ±0.3 K,
+> ~1 pp/h valve travel. Full sweep table in `docs/DECISIONS.md` §8.
 
 ### 5.1 Error sign convention
 
@@ -218,18 +228,23 @@ heating:  error = setpoint − T_room ;  trend_toward = +dT_room/dt
 cooling:  error = T_room − setpoint ;  trend_toward = −dT_room/dt
 ```
 
-### 5.2 Trend estimate
+### 5.2 Trend estimate — FILTERED (S10, 2026-07-09)
 
 ```
-dt_hours = dt_seconds / 3600
-trend    = (T_room − T_room_prev) / dt_hours     # [K/h], 0 on the first call
+# accumulate elapsed time; take a raw sample only once >= 60 s has passed
+raw   = (T_room − T_room_at_last_sample) / accumulated_hours    # [K/h]
+alpha = 1 − exp(−accumulated_dt / 900 s)                         # EMA, tau = 15 min
+trend = trend + alpha · (raw − trend)                            # 0 on the first call
 ```
 
-`RoomController` stores `T_room_prev` between calls. `dt_seconds` is the *actual* elapsed time
-passed to `step`: the HA coordinator feeds the measured interval since the previous control step
-(monotonic clock, clamped to `[1, 900]` s; the nominal 300 s only on the very first step), so a
-debounced off-cycle recompute — e.g. right after a setpoint change — does not distort the trend
-or advance the fast-source dwell timers by a full cycle.
+`RoomController` stores the temperature at the last accepted sample and the filtered trend
+between calls. Two protections (S10): **(1) the 60 s floor** — a debounced recompute ~2 s after
+a setpoint change HOLDS the previous filtered value instead of dividing a 0.1 K sensor tick by
+2 s (a fictitious 180 K/h); shorter intervals accumulate until the floor is reached; **(2) the
+15 min EMA** — σ = 0.1 K of sensor noise creates raw trend noise on the order of the true
+signal, and unfiltered it converted the (deliberately one-sided) damping term into actuator
+wear and a downward bias. Sensor loss resets the filter (a gap invalidates the trend).
+`dt_seconds` is the *actual* elapsed time passed to `step` (monotonic, clamped `[1, 900]` s).
 
 ### 5.3 Deadband (sign-preserving magnitude reduction)
 
@@ -237,8 +252,10 @@ or advance the fast-source dwell timers by a full cycle.
 error_db = sign(error) · max(0, |error| − deadband_c)
 ```
 
-Inside the band `error_db = 0`, so the PI integral does not grow and the valve trends toward its
-floor (heating) or 0 (cooling).
+Inside the band `error_db = 0`, so the PI integral does not grow — and the valve **rests at the
+accumulated integral** (plus trend/FF terms). It does NOT decay toward the floor/0: the resting
+integral is the steady-state heat demand, and bleeding it off inside the band would saw-tooth
+the room (control-F7 clarification, 2026-07-09).
 
 ### 5.4 Discrete PI with back-calculation anti-windup
 
@@ -264,11 +281,22 @@ fast-source dwell timers (§8.2) all use the measured `dt_seconds` passed to
 This keeps the integral honest when steps are irregular — an immediate debounced recompute
 ~2 s after a setpoint change accumulates ~2 s of integral, not a full nominal 300 s cycle.
 
-### 5.5 Integrator freeze (water-side awareness)
+### 5.5 Integrator freeze + seasonal hygiene (extended 2026-07-09, S1/S2)
 
-`freeze = (inputs.hp_active_for_ufh is False)` — during DHW/defrost the heat pump is not serving
-UFH, so the integral must not wind up against an inactive source. P (and D) still act; anti-windup
-back-calc still applies.
+`freeze = (inputs.hp_active_for_ufh is False) or (COOLING and dew_factor < 1.0)`:
+
+* **DHW/defrost** — the heat pump is not serving UFH, so the integral must not wind up against
+  an inactive source.
+* **Active S2 dew throttle (S1/dew-F2)** — the throttle multiplies the valve AFTER the PI,
+  invisibly to the back-calculation anti-windup; without the freeze, hours of throttled cooling
+  banked an integral that slammed the valve to ~100 % the moment the humidity cleared. The
+  factor is computed before the PI (it depends only on inputs) and applied after it.
+
+P (and D) still act; anti-windup back-calc still applies. Two further hygiene rules (S2):
+a **HEATING↔COOLING transition resets the integrator** (the error convention flips — one
+season's integral is anti-knowledge for the other), and **> 12 h of accumulated inactivity**
+(OFF / TRANSITIONAL / cooling opt-out / sensor lost) clears it, so the last winter integral is
+never the first cooling command.
 
 ### 5.6 Trend damping — the inertia tamer
 
@@ -290,10 +318,11 @@ plant.
 
 If `outdoor_ff_enabled` and an outdoor temperature is present, a small bounded baseline is added
 (`RoomController._feedforward`): heating → colder outside raises the baseline; cooling → hotter
-outside raises it. Directional: `deviation = max(0, 15 °C − T_out)` in heating,
-`max(0, T_out − 15 °C)` in cooling; `ff = min(20 %, 1.0 %/K · deviation)`.
-The PI does the real work; this only shortens the transient. We never command supply temperature —
-that is the heat pump's job.
+outside raises it. Directional: `deviation = max(0, ff_neutral_c − T_out)` in heating,
+`max(0, T_out − ff_neutral_c)` in cooling; `ff = min(ff_max_pct, ff_gain_pct_per_k · deviation)`.
+The shaping constants are `ControllerConfig` knobs since 2026-07-09 (control-F6; previously
+module constants). The PI does the real work; this only shortens the transient. We never command
+supply temperature — that is the heat pump's job.
 
 ### 5.8 Valve floor (heating only)
 
@@ -329,21 +358,27 @@ before it reaches setpoint — overshoot avoided.
 `RoomController.step(inputs: RoomInputs, *, dt_seconds=300.0) -> RoomOutputs`. Order (matches the
 code exactly):
 
-1. **Missing room temp** (`room_temperature_c is None`) → safe degrade (§9): hold last valve, split
-   OFF, flag `"sensor_lost"`, no PI.
+1. **Missing room temp** (`room_temperature_c is None`) → safe degrade (§9): HEATING holds the
+   last valve; COOLING/TRANSITIONAL/OFF park the valve at 0 (2026-07-09 — freeze-open in cooling
+   would bypass both condensation defences); split OFF, flag `"sensor_lost"`, no PI.
 2. **`Mode.OFF`** → valve 0, split OFF, report "off".
 3. **`Mode.TRANSITIONAL`** → valve parked at 0; split only, bidirectional on error sign (subject to
    `boost_offset_c` and the dwell timers).
-4. **Trend** (§5.2); store `T_room_prev`.
-5. **Error** in need-more-actuation convention (§5.1).
+4. **Filtered trend** (§5.2, S10 2026-07-09): raw sample only after ≥ 60 s accumulated, then a
+   15 min EMA; a fast recompute holds the previous value.
+5. **Error** in need-more-actuation convention (§5.1); a HEATING↔COOLING transition resets the
+   integrator here (§5.5).
 6. **Deadband** (§5.3).
-7. **Integrator freeze** (§5.5).
+7. **Integrator freeze** (§5.5): DHW/defrost OR an active S2 dew throttle (`dew_factor < 1`,
+   computed here from the inputs, applied in step 12).
 8. **PI compute** → `pid_out` (§5.4).
 9. **Trend damping** (§5.6).
 10. **Optional feedforward** (§5.7).
 11. **Valve floor**, heating only (§5.8).
-12. **Cooling local dew throttle (S2)** (§7.2).
-13. **Clamp + saturation** (§5.9).
+12. **Cooling local dew throttle (S2)** (§7.2) — applies the factor computed in step 7.
+13. **Clamp + saturation** (§5.9). A zero produced solely by the S2 throttle does NOT set
+    `saturated` (control-F8, 2026-07-09): `saturated` means "the PI hit a 0/100 bound";
+    `dew_throttle_factor` carries the condensation story.
 14. **Fast-source coordination** (§8).
 15. **Build `RoomReport`** — every term filled + a concise human/AI explanation string.
 
@@ -356,9 +391,11 @@ Three refinements around the numbered list:
 - **Hard-safety override (after step 15, every path incl. safe degrade):** the stateful
   `tortoise_ufh.safety.SafetyEvaluator` (rules S1–S5, per-rule hysteresis carried across cycles)
   is fed the governing loop supply (hottest loop in heating / coldest in cooling), room
-  temperature and humidity; if any rule triggers, the highest-priority action overrides the
-  computed valve / fast-source command and the rule names are merged into the report flags. The
-  S5 watchdog age is fed as 0 — update staleness is owned by the HA adapter's watchdog (§9).
+  temperature, humidity AND the per-room data age (`RoomInputs.last_update_age_minutes`,
+  adapter-supplied — S6 2026-07-09); the water side and the air side are decided independently
+  across the active rules and merged into the report flags. `FALLBACK_HP_CURVE` (S5) alone
+  commands the NEUTRAL position — `valve_floor_pct` in heating, 0 in cooling — deferring to the
+  heat pump's own curve; the adapter's building-level watchdog stays report-only (§9).
 - **Additive report stamping (last):** `dew_excluded_reason` (from `classify_dew_eligibility`,
   §7.1) and `fast_dwell_remaining_s` (§8.2) are stamped onto the final post-safety report, so the
   dwell value reflects the final fast-source state (a safety force-off clears it).
@@ -437,26 +474,43 @@ belt-and-braces (Aneks §8.4). This is distinct from the independent hard-safety
 ## 8. Fast-source coordination and anti priority-inversion
 
 Only when `fast_source_kind != NONE`. Command shape (`FastSourceCommand`): `on` +
-`mode ∈ {HEATING, COOLING, OFF}` + `target_temperature_c = setpoint`. We set the split's own
-setpoint and mode (`climate.set_hvac_mode` + `climate.set_temperature`); we never touch compressor
-power — the split self-regulates.
+`mode ∈ {HEATING, COOLING, OFF}` + `target_temperature_c` (S12, 2026-07-09: `setpoint + 1 K`
+while HEATING / `setpoint - 1 K` while COOLING — `FAST_TARGET_OFFSET_K`; exactly `setpoint` in
+TRANSITIONAL). We set the split's own setpoint and mode (`climate.set_hvac_mode` +
+`climate.set_temperature`); we never touch compressor power — the split self-regulates. The
+adapter caches the last written `(hvac_mode, target)` per entity and re-sends only on change or
+after a ~45-min re-assert (S3).
 
-### 8.1 Engage / release (hysteresis)
+### 8.1 Engage / release (hysteresis) + the direction machine (C6, 2026-07-09)
 
-`RoomController._want_fast(demand)` where `demand` is the need-more-actuation error in the mode's
-direction:
+The direction is **machine state** (`_fast_state ∈ {OFF, HEATING, COOLING}`), never a per-cycle
+computation. `RoomController._want_fast(demand, engaged=...)` where `demand` is the
+need-more-actuation error in the requested direction:
 
 ```
-if currently ON:  stay ON while  demand > deadband_c        (release inside comfort band)
-else:             turn ON  when  demand > boost_offset_c    (engage only past the boost offset)
+if engaged in THIS direction:  stay ON while  demand > deadband_c   (release inside comfort band)
+else:                          turn ON  when  demand > boost_offset_c
 ```
 
-### 8.2 Min ON / min OFF (compressor protection)
+Transitions: `OFF → direction` requires the full min-OFF; `running → OFF` (requested OFF **or the
+opposite direction**) requires the full min-ON — a HEATING↔COOLING reversal is only reachable
+through OFF with the full min-OFF dwell (indoor units may share a multisplit outdoor unit). A
+blocked request re-emits the REMEMBERED direction. In TRANSITIONAL a running split releases only
+past the FAR edge of the comfort band (`demand < -deadband_c`) — while ON it self-regulates at
+`target = setpoint`, which removes the old below-setpoint bias band (S12).
+
+### 8.2 Min ON / min OFF (compressor protection) + physical sync (S4)
 
 `_decide_fast_source` advances an internal dwell timer by `dt_seconds` and permits a state change
 only when the relevant minimum dwell (`fast_min_on_minutes` / `fast_min_off_minutes`) has elapsed;
-otherwise the flag `"fast_source_min_runtime"` is raised and the previous state is held. Timers are
-seeded large (`_INITIAL_FAST_TIMER_S`) so the very first transition is never blocked. The seconds
+otherwise the flag `"fast_source_min_runtime"` is raised and the previous state is held. The timer
+also accumulates on sensor-lost/OFF forced paths (fast-F6), so a long outage counts toward the
+min-OFF wait. Rooms without a physical feedback (`fast_source_on is None`) seed the timer large
+(`_INITIAL_FAST_TIMER_S`) so the very first transition is never blocked; the FIRST observed
+feedback wins over the machine (running unit adopted as ON, stopped as OFF) and re-seeds the timer
+conservatively to 0 — a full dwell after every restart/reload, so a restart loop cannot
+short-cycle a compressor. Later feedback disagreeing with the previous cycle's command raises the
+additive `"fast_source_mismatch"` flag. The seconds
 left on the *current* state's lock (min ON while running, min OFF while idle) are surfaced as
 `RoomReport.fast_dwell_remaining_s` (`None` once elapsed, when there is no fast source, or after a
 safety force-off); the panel renders it as "unlocks in ~N min".
@@ -476,7 +530,7 @@ timer for safety conditions (lost sensor, OFF mode).
 
 | Condition | Behaviour | Flag |
 |-----------|-----------|------|
-| Room temp lost (`None`) | **hold last valve position** (cold-start init is mode-aware: `valve_floor_pct` in heating, 0 in cooling/transitional/off), split **OFF**, no PI | `sensor_lost` |
+| Room temp lost (`None`) | HEATING: **hold last valve position** of healthy regulation (cold-start init `valve_floor_pct`); COOLING/TRANSITIONAL/OFF: **valve 0** — never freeze-open in cooling (2026-07-09, both condensation layers need `T_room`); split **OFF**, no PI | `sensor_lost` |
 | `Mode.OFF` | valve 0, split OFF | — |
 | `COOLING` with `cooling_enabled=False` | valve 0 (never floor-cool an opted-out room), split OFF, no PI | `cooling_disabled` |
 | Missing humidity / supply in cooling | S2 `factor → 0` (conservative close) | `s2_condensation` |
@@ -484,10 +538,14 @@ timer for safety conditions (lost sensor, OFF mode).
 | HEATER-kind fast source asked to cool | fast source forced OFF (a heater never cools) | `fast_source_cannot_cool` |
 | Room has no controller (orchestrator) | valve 0, split OFF | `unknown_room` |
 | Room controller raised | hold last valve, split OFF | `controller_error` |
+| Per-room data age > 15 min (S5, 2026-07-09) | **neutral position**: `valve_floor_pct` in heating / 0 in cooling (defer to the HP curve), split OFF; clears below 5 min | `s5_watchdog` |
 
 `BuildingController.step` never raises on a single room: it catches `(ValueError, ArithmeticError)`
-per room and substitutes a degraded `RoomOutputs`. A **watchdog** (HA adapter): no fresh data
-> 15 min → emergency/alarm state in the report (recovery after 5 min). The module is the *sole
+per room and substitutes a degraded `RoomOutputs`; it also counts the currently degraded rooms
+into `BuildingOutputs.sensor_lost_rooms` (2026-07-09, safety-F13 — a building-level staleness
+counter surfaced via websocket, not a new entity). A **watchdog** (HA adapter): no fresh data
+> 15 min → emergency/alarm state in the report (recovery after 5 min); report-only — the
+per-room actuator escalation belongs to S5 above. The module is the *sole
 owner* of participating rooms' valves and splits; externally there is only the global mode, the
 per-room control state (off / shadow / live), and the water-side owner (heat pump / DHW). A room in
 **off** (core fed `Mode.OFF`, valve held) or **shadow** → compute + full report but emit **no**
@@ -559,3 +617,6 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 |------|--------|
 | 2026-07-08 | Created from BUILD_SPEC + PRD Aneks §8 + `CONTROL_ALGORITHMS_REVIEW.md`; mirrors real `controller.py` / `pid.py` / `dew_point.py` signatures. |
 | 2026-07-09 | Aligned with v0.3.x code: vendored-core paths; measured `dt_seconds` (coordinator clamp [1, 900] s) now drives ALL time-dependent terms — the PI integral included (`compute(..., dt_seconds=...)`, fixing double integration on debounced recomputes) — alongside trend and dwell; cooling opt-out early return; safety override + additive report stamping (`dew_excluded_reason` via `classify_dew_eligibility`, `fast_dwell_remaining_s`, `room_temperature_c`); directional feedforward formula; degradation-table rows (mode-aware sensor-lost hold, `cooling_disabled`, `fast_source_cannot_cool`). |
+| 2026-07-09 | Phase A safety hardening (DECISIONS §6): sensor-lost safe-degrade is mode-dependent (COOLING parks the valve at 0, never freeze-open; HEATING keeps the freeze); the safety override decides the water side and the air side independently (S1/S2 close the valve without silencing an active S3/S4 fast source), syncs the fast-source dwell machine on force-ON, and never poisons the sensor-lost hold (`_last_valve_pct` keeps the last healthy position). Adapter: room-temperature plausibility gate (−10..50 °C, > 4 K/cycle held for a 2-sample confirmation), state-age gate (temp 45 min / RH 60 min ⇒ unavailable), per-loop valve-feedback validation + `valve_mismatch` flag, farewell command on live→shadow/off + unload, persisted global mode. |
+| 2026-07-09 | Phase B fast-source direction machine (DECISIONS §7): three-state `OFF/HEATING/COOLING` machine — direction change only through OFF with the full min-OFF, min-ON hold re-emits the REMEMBERED direction (`_fallback_mode` deleted); physical `fast_source_on` consumed (first feedback wins, conservative 0-seeded dwell after restart, `fast_source_mismatch` flag); split targets `setpoint ± 1 K` in active modes (S12) and exactly `setpoint` in TRANSITIONAL with far-edge release (bias removed); adapter split-command cache + ~45 min re-assert (S3); `boost_offset_c > deadband_c` validation (D2); dwell accumulates on sensor-lost/OFF paths (fast-F6). |
+| 2026-07-09 | Phases C+D+E (DECISIONS §8): retuned defaults kp=14/ki=0.0015/kt=12 (empirical sweep on the CALIBRATED twin; old ki=0.02 measured +1.2 K overshoot); FILTERED trend (>= 60 s sample floor + 15 min EMA); integrator frozen under an active S2 throttle, reset on HEATING<->COOLING, decayed after > 12 h inactivity; saturated no longer set by an S2 zero; FF constants -> ControllerConfig knobs; S5 watchdog LIVE (adapter-fed per-room data age, neutral-position action); BuildingOutputs.sensor_lost_rooms; simulator: solar wired (f_slab row), seasonal ground, EN 1264^1.1 plant with screed resistance, indoor-humidity model, cooling supply floored by the global safe dew point, split_boost scenario, ALL scenarios gate the merge with the S13 overshoot assertion. |

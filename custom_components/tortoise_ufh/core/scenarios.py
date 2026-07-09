@@ -41,11 +41,17 @@ Usage::
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
-from .building_profiles import modern_bungalow, well_insulated
+from .building_profiles import (
+    modern_bungalow,
+    well_insulated,
+    well_insulated_with_split,
+)
 from .config import SimScenario
 from .models import Mode
 from .weather import ChannelProfile, ProfileKind, SyntheticWeather
+from .weather_comp import WeatherCompCurve
 
 __all__ = [
     "SCENARIO_LIBRARY",
@@ -53,9 +59,22 @@ __all__ = [
     "hot_july_floor_cooling",
     "sensor_dropout",
     "solar_overshoot",
+    "split_boost",
     "spring_transition",
     "steady_heating",
 ]
+
+# Shared heating weather-compensation curve for the heating scenarios
+# (2026-07-09): a realistic UFH curve instead of the 35 degC constant fallback,
+# so cold_snap tests regulation rather than a saturated, over-hot plant.
+# t_supply_max stays below the S1 floor-overheat trip (40 degC).
+_HEATING_CURVE = WeatherCompCurve(
+    t_supply_base=22.0,
+    slope=0.5,
+    t_neutral=15.0,
+    t_supply_max=38.0,
+    t_supply_min=20.0,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +109,7 @@ def steady_heating() -> SimScenario:
             "Steady-state heating at T_out=0 degC, no solar. "
             "Tests temperature stabilization around the setpoint."
         ),
+        weather_comp=_HEATING_CURVE,
     )
 
 
@@ -125,6 +145,7 @@ def cold_snap() -> SimScenario:
             "Step drop from 0 degC to -15 degC after 24 h. "
             "Tests UFH heat-up and recovery under severe cold."
         ),
+        weather_comp=_HEATING_CURVE,
     )
 
 
@@ -167,6 +188,7 @@ def solar_overshoot() -> SimScenario:
             "March-like conditions with strong solar gains (GHI up to "
             "500 W/m^2). Tests trend-damping overshoot prevention."
         ),
+        weather_comp=_HEATING_CURVE,
     )
 
 
@@ -203,7 +225,7 @@ def spring_transition() -> SimScenario:
     )
     return SimScenario(
         name="spring_transition",
-        building=modern_bungalow(),
+        building=modern_bungalow(t_ground=16.0),
         weather=weather,
         duration_minutes=10080,
         mode=Mode.TRANSITIONAL,
@@ -217,46 +239,62 @@ def spring_transition() -> SimScenario:
 
 
 def hot_july_floor_cooling() -> SimScenario:
-    """Hot, humid July driving floor cooling into dew-point protection.
+    """Hot July driving floor cooling into dew-point protection.
 
-    :attr:`Mode.COOLING` with a sinusoidal ``T_out`` (mean 30 degC, amplitude
-    5 degC) and strong solar (GHI mean 400, amplitude 400 W/m^2) pushes rooms
-    above the setpoint so floor cooling engages.  Humidity is held high at
-    80 % so the room dew point is elevated (~21 degC at 25 degC air), forcing
-    the per-room S2 throttle and the building-level safe dew-point limit to
-    act.
+    :attr:`Mode.COOLING` with a sinusoidal ``T_out`` (mean 28 degC, amplitude
+    6 degC), summer ground temperature (17 degC) and strong solar (GHI mean
+    400, amplitude 400 W/m^2) push rooms above the setpoint so floor cooling
+    engages.  Outdoor humidity of 45 % plus the twin's indoor occupancy
+    vapour surplus yields an indoor dew point around 16-18 degC — close
+    enough to the ~18 degC chilled supply that the per-room S2 throttle and
+    the building-level safe dew-point limit genuinely modulate the cooling
+    (recalibrated 2026-07-09: the old 80 % RH corresponded to a tropical dew
+    point at which floor cooling is physically impossible).
 
     Returns:
         ``SimScenario`` on the ``modern_bungalow`` building, 48 h cooling.
     """
+    # GHI is deliberately moderate (mean 150, peak 300 W/m^2 effective): in the
+    # cooling season external blinds shade the south glazing, so only a
+    # fraction of the clear-sky irradiance reaches the rooms. Unshaded summer
+    # sun (~800 W/m^2 through 8 m^2 of glass) overwhelms gentle floor cooling
+    # by 3-4x regardless of the controller — physically true, but useless as a
+    # regulation gate.
     weather = SyntheticWeather(
         t_out=ChannelProfile(
             kind=ProfileKind.SINUSOIDAL,
-            baseline=30.0,
-            amplitude=5.0,
+            baseline=28.0,
+            amplitude=6.0,
             period_minutes=1440.0,
         ),
         ghi=ChannelProfile(
             kind=ProfileKind.SINUSOIDAL,
-            baseline=400.0,
-            amplitude=400.0,
+            baseline=150.0,
+            amplitude=150.0,
             period_minutes=1440.0,
         ),
         wind_speed=ChannelProfile(kind=ProfileKind.CONSTANT, baseline=1.0),
-        humidity=ChannelProfile(kind=ProfileKind.CONSTANT, baseline=80.0),
+        humidity=ChannelProfile(kind=ProfileKind.CONSTANT, baseline=45.0),
     )
     return SimScenario(
         name="hot_july_floor_cooling",
-        building=modern_bungalow(),
+        # Summer target 24 degC (a 21 degC cooling setpoint would be a heating
+        # habit, not a July reality) and summer ground temperature.
+        building=replace(modern_bungalow(t_ground=17.0), home_setpoint_c=24.0),
         weather=weather,
         duration_minutes=2880,
         mode=Mode.COOLING,
         dt_seconds=60.0,
         description=(
-            "Hot July (T_out ~25-35 degC) at 80 % humidity in cooling mode. "
-            "High dew point exercises the S2 condensation throttle and the "
-            "global safe dew-point limit."
+            "Hot July (T_out ~22-34 degC) in cooling mode with summer ground. "
+            "The indoor dew point sits near the chilled-supply temperature, "
+            "exercising the S2 condensation throttle and the global safe "
+            "dew-point limit."
         ),
+        # A July house does not start at the 20 degC winter reset state — a
+        # cold start under summer vapour pressure would spend hours at
+        # RH ~100 % (an artifact, not a controllable condition).
+        initial_temperature_c=24.0,
     )
 
 
@@ -294,6 +332,42 @@ def sensor_dropout() -> SimScenario:
     )
 
 
+def split_boost() -> SimScenario:
+    """Cold day with a split-assisted room exercising the boost machinery.
+
+    A single ``well_insulated_with_split`` room (2.5 kW split, MIMO RC input)
+    at constant ``T_out=-5`` degC with a +2 K room offset: the initial error
+    of ~3 K exceeds ``boost_offset_c`` so the split engages, the floor stays
+    the base source (anti priority-inversion), and once the room enters the
+    comfort band the split must release through the min-ON dwell.  Closes the
+    "zero split scenarios in the gate" gap (2026-07-09).
+
+    Returns:
+        ``SimScenario`` on ``well_insulated_with_split``, 24 h heating.
+    """
+    weather = SyntheticWeather.constant(
+        T_out=-5.0,
+        GHI=0.0,
+        wind_speed=1.0,
+        humidity=50.0,
+    )
+    return SimScenario(
+        name="split_boost",
+        building=well_insulated_with_split(),
+        weather=weather,
+        duration_minutes=1440,
+        mode=Mode.HEATING,
+        dt_seconds=60.0,
+        description=(
+            "Cold day (T_out=-5 degC) with a 2.5 kW split boost: engage past "
+            "boost_offset_c, floor stays base, release inside the comfort "
+            "band through the min-ON dwell."
+        ),
+        room_offsets={"main": 2.0},
+        weather_comp=_HEATING_CURVE,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -305,5 +379,6 @@ SCENARIO_LIBRARY: dict[str, Callable[[], SimScenario]] = {
     "spring_transition": spring_transition,
     "hot_july_floor_cooling": hot_july_floor_cooling,
     "sensor_dropout": sensor_dropout,
+    "split_boost": split_boost,
 }
 """Mapping of scenario name to factory function."""

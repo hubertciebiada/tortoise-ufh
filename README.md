@@ -63,6 +63,39 @@ command:
    reports `unknown` when no room is cooling or no humidity is available — the sidebar
    panel additionally explains per room *why* no value is produced.
 
+   **The `unknown` contract — the consumer must be fail-safe.** `unknown` means "no room is
+   eligible for the calculation right now"; it does **not** mean "no condensation risk". Any
+   automation piping this sensor into the heat pump must treat `unknown` conservatively:
+   hold a fixed safe lower limit (e.g. 18–19 °C) or stop floor cooling — never "no limit".
+   A reference automation (generic entity names):
+
+   ```yaml
+   alias: "UFH cooling: safe supply lower limit"
+   triggers:
+     - trigger: state
+       entity_id: sensor.tortoise_ufh_global_safe_dew_point
+   actions:
+     - choose:
+         - conditions:
+             - condition: template
+               value_template: >-
+                 {{ states('sensor.tortoise_ufh_global_safe_dew_point')
+                    not in ['unknown', 'unavailable'] }}
+           sequence:
+             - action: number.set_value
+               target:
+                 entity_id: number.heat_pump_cool_supply_min
+               data:
+                 value: "{{ states('sensor.tortoise_ufh_global_safe_dew_point') }}"
+       default:
+         # Fail-safe: no eligible room -> conservative fixed limit.
+         - action: number.set_value
+           target:
+             entity_id: number.heat_pump_cool_supply_min
+           data:
+             value: 19
+   ```
+
 Alongside the commands, each room emits a rich **report** ("a window into the black box"):
 error, measured trend (°C/h), the individual PID / trend / feedforward terms, the raw valve
 value before clamps, saturation and dew-throttle flags, and a short human- and AI-readable
@@ -79,8 +112,11 @@ explanation of what it did and why.
   (no priority inversion) and never short-cycles (min on/off timers).
 - **Heating and floor cooling** — with per-room Magnus dew-point calculation and a graduated
   supply-vs-dew-point valve throttle, plus the global safe dew-point limit for the pump.
-- **Safe degradation** — a missing room-temperature sensor holds the last valve position and
-  turns the fast source off, flagged in the report rather than failing.
+- **Safe degradation** — a missing room-temperature sensor holds the last healthy valve
+  position while heating (and parks the valve at 0 while cooling, where a frozen-open valve
+  would bypass both condensation defences), turns the fast source off, and flags the room in
+  the report rather than failing. Inputs are plausibility-checked (range, rate-of-change,
+  state age) before the controller ever sees them.
 - **Integrator freeze** — when the heat pump is unavailable for UFH (e.g. defrost), the
   integral term is frozen so it does not wind up against a dead actuator.
 - **Optional weather feedforward** — a modest baseline valve term from outdoor temperature;
@@ -121,6 +157,34 @@ explanation of what it did and why.
 
 Requires Home Assistant 2024.1.0 or newer and Python 3.12+. The core runtime dependencies
 (`numpy`, `scipy`) are installed automatically by Home Assistant.
+
+### Floor-cooling hardware recommendations
+
+Both software condensation layers (the global safe dew point and the per-room throttle)
+ultimately trust your **humidity sensors** — a stale or drifting RH reading is their shared
+failure mode. Before enabling floor cooling:
+
+- **Fit a hardware condensation (pipe dew) sensor on the manifold** — a cheap
+  normally-closed sensor strapped to the coldest supply pipe, wired to stop the cooling
+  circulation directly. It is an independent third protection layer that works even when
+  every software layer is fed bad data.
+- **Insulate the manifold and any exposed chilled-water pipework.** Low-thermal-mass parts
+  (manifold beam, fittings) reach water temperature in minutes and are the first place dew
+  forms during a humidity spike — long before the slab is at risk.
+- **Mount loop supply probes on the manifold beam** (before the loop valves), not after
+  them: a probe downstream of a closed valve reads stagnant, room-warmed water, which can
+  make the dew throttle oscillate open/closed against its own measurement.
+- Give every cooled room a real humidity sensor. A room without RH is cooled **blind** and
+  the controller will conservatively refuse to open its valve (throttle 0).
+
+### Alerting on degraded rooms
+
+The building payload carries `sensor_lost_rooms` — the number of rooms currently running in
+the degraded `sensor_lost` state (visible in the panel and via the `tortoise_ufh/get_live`
+websocket, deliberately not another entity). For per-room alerting, watch each room's
+report `flags` (websocket/panel) or simply alert on your source temperature sensors going
+`unavailable`/stale — the controller degrades a room whenever its temperature stops being
+trustworthy (out-of-range, jumping, or older than ~45 min).
 
 ---
 

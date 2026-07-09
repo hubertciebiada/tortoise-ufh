@@ -55,6 +55,10 @@ class SimRecord:
         t_slab: Ground-truth slab temperature [degC] (hidden from the
             controller; recorded here for metrics and plots).
         room_name: Room identifier (default ``""``).
+        q_floor_w: Signed floor power actually ALLOCATED to the room this step
+            [W] by the simulator's finite-heat-pump distributor, or ``None``
+            when not recorded. Preferred energy source over the nominal-power
+            estimate (D6, 2026-07-09).
 
     Raises:
         ValueError: If ``t`` is negative.
@@ -66,6 +70,7 @@ class SimRecord:
     weather: WeatherPoint
     t_slab: float
     room_name: str = ""
+    q_floor_w: float | None = None
 
     def __post_init__(self) -> None:
         """Validate the simulation time.
@@ -197,6 +202,7 @@ class SimulationLog:
         weather: WeatherPoint,
         t_slab: float,
         room_name: str = "",
+        q_floor_w: float | None = None,
     ) -> None:
         """Construct a :class:`SimRecord` from step components and append it.
 
@@ -210,6 +216,8 @@ class SimulationLog:
             weather: Weather conditions at this step.
             t_slab: Ground-truth slab temperature [degC].
             room_name: Room identifier (default ``""``).
+            q_floor_w: Signed floor power allocated to the room this step [W],
+                or ``None`` when not recorded.
         """
         self._records.append(
             SimRecord(
@@ -219,6 +227,7 @@ class SimulationLog:
                 weather=weather,
                 t_slab=t_slab,
                 room_name=room_name,
+                q_floor_w=q_floor_w,
             )
         )
 
@@ -287,7 +296,7 @@ class SimulationLog:
 
         Columns: ``t``, ``room_name``, ``mode``, ``setpoint_c``, ``T_room``,
         ``T_slab``, ``valve_pct``, ``fast_source_on``, ``fast_source_mode``,
-        ``T_out``, ``GHI``, ``wind_speed``, ``humidity``.
+        ``T_out``, ``GHI``, ``wind_speed``, ``humidity``, ``q_floor_w``.
 
         Enum fields (``mode``, ``fast_source_mode``) are stored as their string
         ``.value`` representation.  ``T_room`` may be ``None`` (missing sensor).
@@ -322,6 +331,7 @@ class SimulationLog:
                 "GHI": r.GHI,
                 "wind_speed": r.wind_speed,
                 "humidity": r.humidity,
+                "q_floor_w": r.q_floor_w,
             }
             for r in self._records
         ]

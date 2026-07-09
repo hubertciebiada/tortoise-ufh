@@ -7,8 +7,8 @@ energy, and floor safety. Metrics are computed by the deterministic
 :meth:`SimMetrics.from_log` classmethod in a single pass over the log, so the
 same log and parameters always produce the same result.
 
-Also provides five assertion helpers that grade a log for correctness. Each
-raises :class:`AssertionError` with a diagnostic message when a constraint is
+Also provides assertion helpers that grade a log for correctness. Each raises
+:class:`AssertionError` with a diagnostic message when a constraint is
 violated (they are meant to be called directly inside simulation tests):
 
     - :func:`assert_comfort` -- comfort percentage above a threshold.
@@ -17,6 +17,8 @@ violated (they are meant to be called directly inside simulation tests):
       plus a safety margin.
     - :func:`assert_no_freezing` -- no room ever drops below a hard minimum.
     - :func:`assert_no_prolonged_cold` -- no room stays cold for too long.
+    - :func:`assert_max_overshoot` -- peak overshoot below a hard limit.
+    - :func:`assert_valve_movement_moderate` -- actuator wear below a limit.
 
 Units follow the simulation convention:
     Temperatures: degC
@@ -114,13 +116,16 @@ class SimMetrics:
             records with a valid room temperature [degC].
         fast_source_runtime_pct: Percentage of timesteps where the fast source
             (split) command is ON [0-100 %].
-        energy_kwh: Total UFH energy delivered [kWh], integrated from valve
-            position and ``ufh_nominal_power_w``. ``None`` when the nominal
-            power is not supplied.
+        energy_kwh: Total UFH energy delivered [kWh]. Integrated from the
+            recorded per-step allocated floor power (``SimRecord.q_floor_w``)
+            when available (D6, 2026-07-09); otherwise from valve position and
+            ``ufh_nominal_power_w``. ``None`` when neither source is supplied.
         condensation_events: Number of timesteps where
             ``T_slab < T_dew + 2`` (floor-cooling condensation risk).
         max_floor_temp: Maximum slab/floor temperature over the log [degC].
         min_floor_temp: Minimum slab/floor temperature over the log [degC].
+        valve_travel_pct_per_h: Mean absolute commanded-valve movement per
+            hour [pp/h] — the actuator-wear proxy (D7, 2026-07-09).
     """
 
     # -- Comfort --------------------------------------------------------------
@@ -139,6 +144,9 @@ class SimMetrics:
     condensation_events: int
     max_floor_temp: float
     min_floor_temp: float
+
+    # -- Actuator wear (additive, 2026-07-09) ----------------------------------
+    valve_travel_pct_per_h: float = 0.0
 
     def __post_init__(self) -> None:
         """Validate metric ranges.
@@ -176,6 +184,12 @@ class SimMetrics:
             msg = (
                 f"min_floor_temp ({self.min_floor_temp}) must be <= "
                 f"max_floor_temp ({self.max_floor_temp})"
+            )
+            raise ValueError(msg)
+        if self.valve_travel_pct_per_h < 0.0:
+            msg = (
+                "valve_travel_pct_per_h must be >= 0, "
+                f"got {self.valve_travel_pct_per_h}"
             )
             raise ValueError(msg)
 
@@ -235,6 +249,7 @@ class SimMetrics:
                 condensation_events=0,
                 max_floor_temp=0.0,
                 min_floor_temp=0.0,
+                valve_travel_pct_per_h=0.0,
             )
 
         # -- Accumulators -----------------------------------------------------
@@ -251,7 +266,12 @@ class SimMetrics:
         floor_min = float("inf")
 
         total_floor_energy_j = 0.0
+        allocated_energy_j = 0.0
+        any_allocated = False
         dt_seconds = dt_minutes * 60.0
+
+        valve_travel_pp = 0.0
+        prev_valve: float | None = None
 
         # -- Single pass ------------------------------------------------------
         for rec in log:
@@ -282,7 +302,11 @@ class SimMetrics:
             if t_dew is not None and t_slab < t_dew + _CONDENSATION_MARGIN_K:
                 condensation_count += 1
 
-            # Energy: integrate UFH power from valve fraction.
+            # Energy: prefer the recorded allocated floor power (D6); keep the
+            # nominal-power estimate as the fallback for older logs.
+            if rec.q_floor_w is not None:
+                any_allocated = True
+                allocated_energy_j += abs(rec.q_floor_w) * dt_seconds
             if compute_energy:
                 assert ufh_nominal_power_w is not None
                 floor_power = (
@@ -290,11 +314,24 @@ class SimMetrics:
                 ) * ufh_nominal_power_w
                 total_floor_energy_j += floor_power * dt_seconds
 
+            # Actuator wear: accumulate |delta valve| between records (D7).
+            valve = rec.outputs.valve_position_pct
+            if prev_valve is not None:
+                valve_travel_pp += abs(valve - prev_valve)
+            prev_valve = valve
+
         # -- Finalise ---------------------------------------------------------
         comfort_pct = (comfort_count / n) * 100.0
         fast_source_runtime_pct = (fast_on_count / n) * 100.0
         mean_deviation = total_abs_dev / valid_temp_count if valid_temp_count else 0.0
-        energy_kwh = total_floor_energy_j / 3_600_000.0 if compute_energy else None
+        if any_allocated:
+            energy_kwh: float | None = allocated_energy_j / 3_600_000.0
+        elif compute_energy:
+            energy_kwh = total_floor_energy_j / 3_600_000.0
+        else:
+            energy_kwh = None
+        duration_hours = (n * dt_minutes) / 60.0
+        travel_per_h = valve_travel_pp / duration_hours if duration_hours > 0 else 0.0
 
         return cls(
             comfort_pct=comfort_pct,
@@ -306,6 +343,7 @@ class SimMetrics:
             condensation_events=condensation_count,
             max_floor_temp=floor_max,
             min_floor_temp=floor_min,
+            valve_travel_pct_per_h=travel_per_h,
         )
 
     # -- Comparison -----------------------------------------------------------
@@ -564,3 +602,93 @@ def assert_no_prolonged_cold(
             else:
                 run_start_t = None
                 run_min_temp = float("inf")
+
+
+def assert_max_overshoot(
+    log: SimulationLog,
+    setpoint: float,
+    *,
+    max_overshoot: float = 0.5,
+    settle_from_minute: int = 0,
+) -> None:
+    """Assert the room never overshoots the setpoint by more than a limit.
+
+    Guards the project's PRIMARY goal (anti-overshoot on a high-mass floor,
+    S13 2026-07-09): the plain comfort-percentage check happily passed a
+    +1.2 K overshoot because the band is symmetric and time-averaged.
+
+    Args:
+        log: Simulation log to check (single room).
+        setpoint: Target room temperature [degC].
+        max_overshoot: Maximum allowed ``T_room - setpoint`` [K]; must be >= 0.
+        settle_from_minute: Ignore records before this simulation minute
+            (e.g. a deliberate cold-start transient), default 0.
+
+    Raises:
+        ValueError: If ``max_overshoot`` is negative.
+        AssertionError: On the first record exceeding the limit.
+    """
+    if max_overshoot < 0.0:
+        msg = f"max_overshoot must be >= 0, got {max_overshoot}"
+        raise ValueError(msg)
+    for rec in log:
+        if rec.t < settle_from_minute:
+            continue
+        t_room = rec.inputs.room_temperature_c
+        if t_room is not None and t_room - setpoint > max_overshoot:
+            msg = (
+                f"assert_max_overshoot: T_room={t_room:.2f} degC overshoots "
+                f"setpoint={setpoint:.2f} by {t_room - setpoint:.2f} K "
+                f"(> {max_overshoot:.2f} K) at t={rec.t} min"
+            )
+            raise AssertionError(msg)
+
+
+def assert_valve_movement_moderate(
+    log: SimulationLog,
+    *,
+    max_travel_pct_per_h: float = 30.0,
+    dt_minutes: int = 1,
+) -> None:
+    """Assert the mean commanded-valve travel stays below a wear limit.
+
+    Accumulates ``|delta valve|`` between consecutive records of a single
+    room's log and normalises per hour (D7, 2026-07-09): a well-damped loop
+    on a high-mass floor should reposition its actuators a few percentage
+    points per hour, not tens.
+
+    Args:
+        log: Simulation log to check (single room, chronological).
+        max_travel_pct_per_h: Maximum allowed mean travel [pp/h]; must be > 0.
+        dt_minutes: Simulation timestep length [minutes].
+
+    Raises:
+        ValueError: If ``max_travel_pct_per_h`` or ``dt_minutes`` is not
+            positive.
+        AssertionError: If the mean travel exceeds the limit.
+    """
+    if max_travel_pct_per_h <= 0.0:
+        msg = f"max_travel_pct_per_h must be > 0, got {max_travel_pct_per_h}"
+        raise ValueError(msg)
+    if dt_minutes <= 0:
+        msg = f"dt_minutes must be > 0, got {dt_minutes}"
+        raise ValueError(msg)
+    n = len(log)
+    if n < 2:
+        return
+    travel_pp = 0.0
+    prev: float | None = None
+    for rec in log:
+        valve = rec.outputs.valve_position_pct
+        if prev is not None:
+            travel_pp += abs(valve - prev)
+        prev = valve
+    hours = (n * dt_minutes) / 60.0
+    travel_per_h = travel_pp / hours
+    if travel_per_h > max_travel_pct_per_h:
+        msg = (
+            f"assert_valve_movement_moderate: mean valve travel "
+            f"{travel_per_h:.1f} pp/h exceeds {max_travel_pct_per_h:.1f} pp/h "
+            f"(total {travel_pp:.0f} pp over {hours:.1f} h)"
+        )
+        raise AssertionError(msg)

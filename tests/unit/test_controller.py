@@ -25,6 +25,8 @@ Units: temperatures / setpoints / dew points in degC; valve in percent
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from custom_components.tortoise_ufh.core.config import ControllerConfig
@@ -303,7 +305,10 @@ class TestFastSourceBoost:
         )
         assert out.fast_source.on is True
         assert out.fast_source.mode is FastSourceMode.HEATING
-        assert out.fast_source.target_temperature_c == pytest.approx(21.0)
+        # S12 (2026-07-09): the boost target is setpoint + 1 K so the split's
+        # ceiling-mounted sensor does not throttle the unit before the boost
+        # is delivered; release still belongs to OUR room sensor.
+        assert out.fast_source.target_temperature_c == pytest.approx(22.0)
 
     @pytest.mark.unit
     def test_split_respects_min_on_dwell(self) -> None:
@@ -804,3 +809,604 @@ class TestFastDwellRemaining:
         # Idle and satisfied: the min-OFF lock elapses, then clears to None.
         assert demand(21.0).report.fast_dwell_remaining_s == pytest.approx(300.0)
         assert demand(21.0).report.fast_dwell_remaining_s is None
+
+
+class TestSensorLostCooling:
+    """C2 (2026-07-09): sensor loss in COOLING closes the valve, never freezes."""
+
+    def _cooling_inputs(
+        self, temp: float | None, *, humidity: float | None = 50.0
+    ) -> RoomInputs:
+        """Cooling inputs with a supply probe far above the dew point."""
+        return make_inputs(
+            mode=Mode.COOLING,
+            setpoint_c=24.0,
+            room_temperature_c=temp,
+            humidity_pct=humidity,
+            loops=(LoopInput(None, 20.0, None),),
+        )
+
+    @pytest.mark.unit
+    def test_missing_temp_in_cooling_closes_valve(self) -> None:
+        """A seeded cooling room with an open valve parks at 0 on sensor loss."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        # Warm room (27 > 24 setpoint) opens the cooling valve.
+        open_step = controller.step(self._cooling_inputs(27.0), dt_seconds=300.0)
+        assert open_step.valve_position_pct > 0.0
+
+        lost = controller.step(self._cooling_inputs(None), dt_seconds=300.0)
+        assert lost.valve_position_pct == 0.0
+        assert lost.fast_source.on is False
+        assert "sensor_lost" in lost.report.flags
+
+    @pytest.mark.unit
+    def test_missing_temp_cooling_cold_start_is_zero(self) -> None:
+        """With no prior live step, a cooling room parks at 0 on sensor loss."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(self._cooling_inputs(None), dt_seconds=300.0)
+        assert out.valve_position_pct == 0.0
+        assert "sensor_lost" in out.report.flags
+
+    @pytest.mark.unit
+    def test_cooling_loss_does_not_poison_heating_hold(self) -> None:
+        """The cooling 0-park leaves the heating freeze memory untouched."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        # Healthy heating step establishes a hold position.
+        warm = controller.step(make_inputs(room_temperature_c=15.0), dt_seconds=300.0)
+        held = warm.valve_position_pct
+        assert held > 0.0
+        # Sensor loss in cooling parks at 0 ...
+        lost_cool = controller.step(self._cooling_inputs(None), dt_seconds=300.0)
+        assert lost_cool.valve_position_pct == 0.0
+        # ... but a later heating-mode loss still freezes the healthy position.
+        lost_heat = controller.step(
+            make_inputs(room_temperature_c=None), dt_seconds=300.0
+        )
+        assert lost_heat.valve_position_pct == pytest.approx(held)
+
+
+class TestSafetyOverrideStateSync:
+    """S5 (2026-07-09): the safety override keeps controller state honest."""
+
+    @pytest.mark.unit
+    def test_safety_close_does_not_poison_sensor_lost_hold(self) -> None:
+        """An S1 trip must not leave 0 % as the sensor-lost freeze position."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        hot_supply = (LoopInput(None, 45.0, None),)
+        ok_supply = (LoopInput(None, 30.0, None),)
+
+        # Healthy heating regulation (supply fine) establishes the hold.
+        healthy = controller.step(
+            make_inputs(room_temperature_c=15.0, loops=ok_supply), dt_seconds=300.0
+        )
+        assert healthy.valve_position_pct > 0.0
+
+        # S1 floor-overheat trips: the OUTPUT closes the valve ...
+        tripped = controller.step(
+            make_inputs(room_temperature_c=15.0, loops=hot_supply), dt_seconds=300.0
+        )
+        assert "s1_floor_overheat" in tripped.report.flags
+        assert tripped.valve_position_pct == 0.0
+        # ... but the healthy hold memory survives the override.
+        assert controller.last_valve_pct > 0.0
+        held = controller.last_valve_pct
+
+        # Supply recovers (S1 clears below 38) and the sensor is lost: the
+        # freeze holds the healthy position, not the emergency 0.
+        lost = controller.step(
+            make_inputs(room_temperature_c=None, loops=ok_supply), dt_seconds=300.0
+        )
+        assert lost.valve_position_pct == pytest.approx(held)
+        assert lost.valve_position_pct > 0.0
+
+    @pytest.mark.unit
+    def test_safety_force_on_syncs_split_machine(self) -> None:
+        """S3 force-ON registers in the dwell machine: no instant OFF later."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        # Frost trip (room 4 degC): emergency heat forces the split ON.
+        frozen = controller.step(
+            make_inputs(room_temperature_c=4.0, fast_source_kind=FastSourceKind.SPLIT),
+            dt_seconds=300.0,
+        )
+        assert "s3_emergency_heat" in frozen.report.flags
+        assert frozen.fast_source.on is True
+        assert frozen.fast_source.mode is FastSourceMode.HEATING
+        # The machine is synced: the min-ON lock is armed for the report.
+        assert frozen.report.fast_dwell_remaining_s == pytest.approx(600.0)
+
+        # The room recovers into the comfort band (S3 cleared, no demand): the
+        # min-ON dwell keeps the just-started compressor running instead of an
+        # abrupt OFF two seconds after the safety releases.
+        recovered = controller.step(
+            make_inputs(room_temperature_c=21.0, fast_source_kind=FastSourceKind.SPLIT),
+            dt_seconds=300.0,
+        )
+        assert recovered.fast_source.on is True
+        assert "fast_source_min_runtime" in recovered.report.flags
+
+
+class TestSafetyValveVsAirSource:
+    """S7 (2026-07-09): closing the valve never silences the air-side source."""
+
+    @pytest.mark.unit
+    def test_s1_with_s3_keeps_split_heating(self) -> None:
+        """Frost + overheated water: valve closed, split still heats the air."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(
+                room_temperature_c=4.0,
+                loops=(LoopInput(None, 45.0, None),),
+                fast_source_kind=FastSourceKind.SPLIT,
+            ),
+            dt_seconds=300.0,
+        )
+        assert "s1_floor_overheat" in out.report.flags
+        assert "s3_emergency_heat" in out.report.flags
+        # Water side: S1 wins, the valve is closed.
+        assert out.valve_position_pct == 0.0
+        # Air side: S3 wins, the split heats.
+        assert out.fast_source.on is True
+        assert out.fast_source.mode is FastSourceMode.HEATING
+
+    @pytest.mark.unit
+    def test_s1_alone_still_forces_split_off(self) -> None:
+        """S1 without an emergency keeps the fast source released."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(
+                room_temperature_c=20.0,
+                loops=(LoopInput(None, 45.0, None),),
+                fast_source_kind=FastSourceKind.SPLIT,
+            ),
+            dt_seconds=300.0,
+        )
+        assert "s1_floor_overheat" in out.report.flags
+        assert out.valve_position_pct == 0.0
+        assert out.fast_source.on is False
+
+    @pytest.mark.unit
+    def test_s3_alone_opens_valve_fully(self) -> None:
+        """S3 without a CLOSE_VALVE rule still opens the floor fully."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(
+                room_temperature_c=4.0,
+                loops=(LoopInput(None, 30.0, None),),
+                fast_source_kind=FastSourceKind.SPLIT,
+            ),
+            dt_seconds=300.0,
+        )
+        assert "s3_emergency_heat" in out.report.flags
+        assert out.valve_position_pct == 100.0
+        assert out.fast_source.on is True
+
+
+class TestFastDirectionMachine:
+    """C6 (2026-07-09): the split direction is machine state, never a flip.
+
+    Covers the three failure scenarios from the algo-fast FMEA: a 2-second
+    debounced recompute after a setpoint change, a global mode change during a
+    min-ON hold, and the transitional fallback inside the deadband.
+    """
+
+    def _transitional(self, setpoint: float, temp: float) -> RoomInputs:
+        return make_inputs(
+            mode=Mode.TRANSITIONAL,
+            setpoint_c=setpoint,
+            room_temperature_c=temp,
+            fast_source_kind=FastSourceKind.SPLIT,
+        )
+
+    @pytest.mark.unit
+    def test_transitional_setpoint_drop_never_flips_in_two_seconds(self) -> None:
+        """Scenario S1: a 2 s recompute after a -2 K setpoint change must
+        re-emit the REMEMBERED heating direction, not cooling."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        engaged = controller.step(self._transitional(21.0, 19.0), dt_seconds=300.0)
+        assert engaged.fast_source.on is True
+        assert engaged.fast_source.mode is FastSourceMode.HEATING
+
+        # User drops the setpoint 2 K BELOW the room (a cooling demand
+        # appears); the debounced recompute runs 2 s later.
+        recompute = controller.step(self._transitional(17.0, 19.0), dt_seconds=2.0)
+        assert recompute.fast_source.mode is not FastSourceMode.COOLING
+        # The min-ON dwell holds the machine in its remembered direction.
+        assert recompute.fast_source.on is True
+        assert recompute.fast_source.mode is FastSourceMode.HEATING
+        assert "fast_source_min_runtime" in recompute.report.flags
+
+    @pytest.mark.unit
+    def test_mode_change_during_min_on_hold_reemits_remembered_direction(
+        self,
+    ) -> None:
+        """Scenario S2: HEATING -> COOLING while held by min-ON keeps HEATING."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        engaged = controller.step(
+            make_inputs(
+                mode=Mode.HEATING,
+                setpoint_c=21.0,
+                room_temperature_c=19.0,
+                fast_source_kind=FastSourceKind.SPLIT,
+            ),
+            dt_seconds=300.0,
+        )
+        assert engaged.fast_source.mode is FastSourceMode.HEATING
+
+        # 5 min later the global mode flips to COOLING; min-ON (10 min) holds.
+        held = controller.step(
+            make_inputs(
+                mode=Mode.COOLING,
+                setpoint_c=21.0,
+                room_temperature_c=19.0,
+                humidity_pct=50.0,
+                fast_source_kind=FastSourceKind.SPLIT,
+            ),
+            dt_seconds=300.0,
+        )
+        # The hold must NOT command active cooling for a room 2 K BELOW the
+        # setpoint: the remembered HEATING direction is re-emitted.
+        assert held.fast_source.on is True
+        assert held.fast_source.mode is FastSourceMode.HEATING
+        assert "fast_source_min_runtime" in held.report.flags
+
+    @pytest.mark.unit
+    def test_transitional_deadband_crossing_keeps_heating(self) -> None:
+        """Scenario S3: 0.1 K above the setpoint while ON stays HEATING (S12:
+        the split self-regulates at the setpoint; no OFF-COOLING fallback)."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        engaged = controller.step(self._transitional(21.0, 19.0), dt_seconds=300.0)
+        assert engaged.fast_source.mode is FastSourceMode.HEATING
+
+        crossed = controller.step(self._transitional(21.0, 21.1), dt_seconds=300.0)
+        assert crossed.fast_source.mode is not FastSourceMode.COOLING
+        # Inside/near the comfort band the split stays ON at target=setpoint.
+        assert crossed.fast_source.on is True
+        assert crossed.fast_source.mode is FastSourceMode.HEATING
+        assert crossed.fast_source.target_temperature_c == pytest.approx(21.0)
+
+    @pytest.mark.unit
+    def test_direction_flip_goes_through_off_with_full_min_off(self) -> None:
+        """A real reversal is OFF-gated: min-ON, then OFF for the FULL min-OFF."""
+        cfg = ControllerConfig(fast_min_on_minutes=10.0, fast_min_off_minutes=10.0)
+        controller = RoomController(cfg, name="salon")
+        engaged = controller.step(self._transitional(21.0, 19.0), dt_seconds=300.0)
+        assert engaged.fast_source.mode is FastSourceMode.HEATING
+
+        # Free gains overshoot the room far above the setpoint (spring sun).
+        # min-ON elapsed (10 min after engage) -> the machine stops.
+        controller.step(self._transitional(21.0, 20.0), dt_seconds=300.0)
+        stopped = controller.step(self._transitional(21.0, 22.5), dt_seconds=300.0)
+        assert stopped.fast_source.on is False
+
+        # Cooling demand is present but min-OFF has not elapsed: still OFF.
+        blocked = controller.step(self._transitional(21.0, 22.5), dt_seconds=300.0)
+        assert blocked.fast_source.on is False
+        assert "fast_source_min_runtime" in blocked.report.flags
+
+        # Full min-OFF elapsed: the machine may finally engage COOLING.
+        cooled = controller.step(self._transitional(21.0, 22.5), dt_seconds=300.0)
+        assert cooled.fast_source.on is True
+        assert cooled.fast_source.mode is FastSourceMode.COOLING
+
+    @pytest.mark.unit
+    def test_active_mode_boost_target_is_offset(self) -> None:
+        """S12: active-mode boost targets are setpoint +1 K / -1 K."""
+        heating = RoomController(ControllerConfig(), name="a")
+        out_h = heating.step(
+            make_inputs(
+                mode=Mode.HEATING,
+                setpoint_c=21.0,
+                room_temperature_c=19.0,
+                fast_source_kind=FastSourceKind.SPLIT,
+            ),
+            dt_seconds=300.0,
+        )
+        assert out_h.fast_source.target_temperature_c == pytest.approx(22.0)
+
+        cooling = RoomController(ControllerConfig(), name="b")
+        out_c = cooling.step(
+            make_inputs(
+                mode=Mode.COOLING,
+                setpoint_c=24.0,
+                room_temperature_c=26.0,
+                humidity_pct=45.0,
+                loops=(LoopInput(None, 22.0, None),),
+                fast_source_kind=FastSourceKind.SPLIT,
+            ),
+            dt_seconds=300.0,
+        )
+        assert out_c.fast_source.on is True
+        assert out_c.fast_source.mode is FastSourceMode.COOLING
+        assert out_c.fast_source.target_temperature_c == pytest.approx(23.0)
+
+
+class TestFastPhysicalSync:
+    """S4 (2026-07-09): the machine consumes the physical on/off feedback."""
+
+    def _inputs(self, temp: float, *, fast_on: bool | None) -> RoomInputs:
+        return RoomInputs(
+            mode=Mode.HEATING,
+            setpoint_c=21.0,
+            room_temperature_c=temp,
+            fast_source_kind=FastSourceKind.SPLIT,
+            fast_source_on=fast_on,
+        )
+
+    @pytest.mark.unit
+    def test_running_unit_adopted_on_first_feedback(self) -> None:
+        """A physically running split is adopted as ON with a fresh min-ON."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        # Room satisfied (no demand) but the unit is physically running.
+        out = controller.step(self._inputs(21.0, fast_on=True), dt_seconds=300.0)
+        # The machine adopted ON; min-ON (seeded conservatively) blocks the
+        # immediate OFF, so the just-discovered compressor keeps running.
+        assert out.fast_source.on is True
+        assert out.fast_source.mode is FastSourceMode.HEATING
+        assert "fast_source_min_runtime" in out.report.flags
+
+    @pytest.mark.unit
+    def test_stopped_unit_seeds_conservative_min_off(self) -> None:
+        """A physically stopped split waits a FULL min-OFF before engaging."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        first = controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
+        # Demand is 2 K > boost, but the conservative restart seed blocks the
+        # engage until the full min-OFF (10 min) has elapsed.
+        assert first.fast_source.on is False
+        assert "fast_source_min_runtime" in first.report.flags
+
+        second = controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
+        assert second.fast_source.on is True
+
+    @pytest.mark.unit
+    def test_unknown_feedback_keeps_free_first_transition(self) -> None:
+        """No feedback configured (None): the first engage stays unblocked."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(self._inputs(19.0, fast_on=None), dt_seconds=300.0)
+        assert out.fast_source.on is True
+
+    @pytest.mark.unit
+    def test_persistent_divergence_flags_mismatch(self) -> None:
+        """Feedback disagreeing with the previous command raises the flag."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
+        engaged = controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
+        assert engaged.fast_source.on is True
+        assert "fast_source_mismatch" not in engaged.report.flags
+
+        # One settling cycle later the unit is STILL physically off.
+        stuck = controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
+        assert "fast_source_mismatch" in stuck.report.flags
+
+    @pytest.mark.unit
+    def test_agreeing_feedback_never_flags(self) -> None:
+        """Feedback matching the emitted command raises no mismatch."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
+        engaged = controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
+        assert engaged.fast_source.on is True
+        tracking = controller.step(self._inputs(19.0, fast_on=True), dt_seconds=300.0)
+        assert "fast_source_mismatch" not in tracking.report.flags
+
+
+class TestBoostOffsetValidation:
+    """D2 (2026-07-09): boost_offset_c must exceed deadband_c."""
+
+    @pytest.mark.unit
+    def test_boost_below_deadband_rejected(self) -> None:
+        """An inverted engage/release hysteresis is rejected at construction."""
+        with pytest.raises(ValueError, match="boost_offset_c must be > deadband_c"):
+            ControllerConfig(boost_offset_c=0.2, deadband_c=0.3)
+
+    @pytest.mark.unit
+    def test_boost_equal_deadband_rejected(self) -> None:
+        """A zero-width hysteresis band is rejected too."""
+        with pytest.raises(ValueError, match="boost_offset_c must be > deadband_c"):
+            ControllerConfig(boost_offset_c=0.3, deadband_c=0.3)
+
+
+class TestTrendFilter:
+    """S10 (2026-07-09): the trend is EMA-filtered with a 60 s sample floor."""
+
+    @pytest.mark.unit
+    def test_fast_recompute_holds_trend(self) -> None:
+        """A 2 s debounced recompute must NOT explode the trend estimate."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        controller.step(make_inputs(room_temperature_c=19.0), dt_seconds=300.0)
+        warmed = controller.step(make_inputs(room_temperature_c=19.5), dt_seconds=300.0)
+        held_trend = warmed.report.trend_c_per_h
+        assert held_trend is not None
+        assert held_trend > 0.0
+
+        # 2 s later a sensor tick of +0.1 K arrives: raw would be 180 K/h.
+        recompute = controller.step(
+            make_inputs(room_temperature_c=19.6), dt_seconds=2.0
+        )
+        assert recompute.report.trend_c_per_h == pytest.approx(held_trend)
+
+    @pytest.mark.unit
+    def test_trend_is_smoothed_not_raw(self) -> None:
+        """One raw sample moves the filtered trend only by the EMA fraction."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        controller.step(make_inputs(room_temperature_c=19.0), dt_seconds=300.0)
+        # Raw sample: +0.5 K over 300 s = +6 K/h; EMA alpha = 1 - exp(-1/3).
+        out = controller.step(make_inputs(room_temperature_c=19.5), dt_seconds=300.0)
+        alpha = 1.0 - math.exp(-300.0 / 900.0)
+        assert out.report.trend_c_per_h == pytest.approx(alpha * 6.0, rel=1e-6)
+
+    @pytest.mark.unit
+    def test_sensor_loss_resets_filter(self) -> None:
+        """A sensor gap invalidates the trend: recovery restarts from 0."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        controller.step(make_inputs(room_temperature_c=19.0), dt_seconds=300.0)
+        controller.step(make_inputs(room_temperature_c=19.5), dt_seconds=300.0)
+        controller.step(make_inputs(room_temperature_c=None), dt_seconds=300.0)
+        recovered = controller.step(
+            make_inputs(room_temperature_c=20.5), dt_seconds=300.0
+        )
+        assert recovered.report.trend_c_per_h == pytest.approx(0.0)
+
+
+class TestIntegratorHygiene:
+    """S1/S2 (2026-07-09): dew-throttle freeze, mode reset, inactivity decay."""
+
+    def _throttled_cooling(self, temp: float) -> RoomInputs:
+        """Cooling inputs whose supply sits INSIDE the dew ramp (factor < 1)."""
+        # Room 26 degC / RH 60 % -> dew ~ 17.9; margin 2, ramp 2: a supply of
+        # 21 degC sits mid-ramp (factor ~ 0.5) - throttle active, not closed.
+        return make_inputs(
+            mode=Mode.COOLING,
+            setpoint_c=24.0,
+            room_temperature_c=temp,
+            humidity_pct=60.0,
+            loops=(LoopInput(None, 21.0, None),),
+        )
+
+    @pytest.mark.unit
+    def test_integrator_frozen_under_dew_throttle(self) -> None:
+        """An active S2 throttle (< 1) freezes the integrator (no windup)."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(self._throttled_cooling(26.0), dt_seconds=300.0)
+        assert 0.0 < out.report.dew_throttle_factor < 1.0
+        assert out.report.integrator_frozen is True
+        assert out.report.i_term == pytest.approx(0.0)
+
+    @pytest.mark.unit
+    def test_mode_change_resets_integrator(self) -> None:
+        """HEATING -> COOLING clears the accumulated heating integral."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        for _ in range(5):
+            heated = controller.step(
+                make_inputs(room_temperature_c=19.0), dt_seconds=300.0
+            )
+        assert heated.report.i_term > 0.0
+
+        cooled = controller.step(
+            make_inputs(
+                mode=Mode.COOLING,
+                setpoint_c=24.0,
+                room_temperature_c=24.1,
+                humidity_pct=45.0,
+                loops=(LoopInput(None, 20.0, None),),
+            ),
+            dt_seconds=300.0,
+        )
+        # The first cooling cycle must not inherit the heating-scale integral.
+        assert abs(cooled.report.i_term) < 0.1
+
+    @pytest.mark.unit
+    def test_long_transitional_decays_integrator(self) -> None:
+        """More than 12 h in TRANSITIONAL clears the stored integral."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        for _ in range(5):
+            controller.step(make_inputs(room_temperature_c=19.0), dt_seconds=300.0)
+
+        parked = make_inputs(mode=Mode.TRANSITIONAL, room_temperature_c=21.0)
+        out = controller.step(parked, dt_seconds=300.0)
+        assert out.report.i_term > 0.0  # shortly after: the integral survives
+        out = controller.step(parked, dt_seconds=13.0 * 3600.0)
+        assert out.report.i_term == pytest.approx(0.0)
+
+
+class TestSaturatedSemantics:
+    """control-F8 (2026-07-09): an S2 zero is throttling, not saturation."""
+
+    @pytest.mark.unit
+    def test_s2_zero_is_not_saturated(self) -> None:
+        """A valve closed purely by the dew throttle reports saturated=False.
+
+        Missing humidity makes the LOCAL throttle conservatively 0 while the
+        hard-safety S2 rule cannot evaluate (its condition needs humidity), so
+        the observable zero comes from the throttle alone: since 2026-07-09
+        (control-F8) that is NOT reported as PI saturation.
+        """
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(
+                mode=Mode.COOLING,
+                setpoint_c=24.0,
+                room_temperature_c=27.0,
+                humidity_pct=None,
+                loops=(LoopInput(None, 18.0, None),),
+            ),
+            dt_seconds=300.0,
+        )
+        assert out.valve_position_pct == 0.0
+        assert out.report.dew_throttle_factor == 0.0
+        assert "s2_condensation" in out.report.flags
+        assert out.report.saturated is False
+
+
+class TestWatchdogNeutral:
+    """S6 (2026-07-09): S5 fed by the adapter age, action = neutral position."""
+
+    @pytest.mark.unit
+    def test_stale_age_drives_neutral_position_heating(self) -> None:
+        """Age > 15 min trips S5: heating parks at the valve floor."""
+        cfg = ControllerConfig()
+        controller = RoomController(cfg, name="salon")
+        # Healthy cycle establishes a high valve (cold room).
+        busy = controller.step(make_inputs(room_temperature_c=17.0), dt_seconds=300.0)
+        assert busy.valve_position_pct > cfg.valve_floor_pct
+
+        stale = RoomInputs(
+            mode=Mode.HEATING,
+            setpoint_c=21.0,
+            room_temperature_c=17.0,
+            last_update_age_minutes=20.0,
+        )
+        out = controller.step(stale, dt_seconds=300.0)
+        assert "s5_watchdog" in out.report.flags
+        assert out.valve_position_pct == pytest.approx(cfg.valve_floor_pct)
+        assert out.fast_source.on is False
+
+    @pytest.mark.unit
+    def test_stale_age_closes_valve_cooling(self) -> None:
+        """In COOLING the S5 neutral position is 0 (no blind chilled water)."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        stale = RoomInputs(
+            mode=Mode.COOLING,
+            setpoint_c=24.0,
+            room_temperature_c=27.0,
+            humidity_pct=45.0,
+            loops=(LoopInput(None, 22.0, None),),
+            last_update_age_minutes=20.0,
+        )
+        out = controller.step(stale, dt_seconds=300.0)
+        assert "s5_watchdog" in out.report.flags
+        assert out.valve_position_pct == 0.0
+
+    @pytest.mark.unit
+    def test_fresh_age_keeps_s5_quiet(self) -> None:
+        """The default age 0.0 never trips S5 (compat for old callers)."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(make_inputs(room_temperature_c=19.0), dt_seconds=300.0)
+        assert "s5_watchdog" not in out.report.flags
+
+
+class TestSensorLostRoomsCounter:
+    """safety-F13 (2026-07-09): building-level degraded-rooms counter."""
+
+    @pytest.mark.unit
+    def test_counts_sensor_lost_rooms(self) -> None:
+        """The building output counts rooms currently flagged sensor_lost."""
+        building = BuildingController(
+            {"a": ControllerConfig(), "b": ControllerConfig()}
+        )
+        outputs = building.step(
+            {
+                "a": make_inputs(room_temperature_c=None),
+                "b": make_inputs(room_temperature_c=20.0),
+            },
+            dt_seconds=300.0,
+        )
+        assert outputs.sensor_lost_rooms == 1
+        assert outputs.to_dict()["sensor_lost_rooms"] == 1
+
+        outputs = building.step(
+            {
+                "a": make_inputs(room_temperature_c=20.0),
+                "b": make_inputs(room_temperature_c=20.0),
+            },
+            dt_seconds=300.0,
+        )
+        assert outputs.sensor_lost_rooms == 0

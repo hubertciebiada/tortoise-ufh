@@ -53,7 +53,11 @@ class RCParams:
     """Immutable thermal parameters for an RC model.
 
     All resistances are in K/W and all capacitances in J/K. The solar split
-    obeys ``f_conv + f_rad <= 1.0`` (the remaining fraction is reflected).
+    obeys ``f_conv + f_rad + f_slab <= 1.0`` (the remaining fraction is
+    reflected). Sunlight entering through windows mostly lands on the FLOOR of
+    a UFH room, so ``f_slab`` routes that share straight into the slab node —
+    the main physical mechanism behind solar overshoot in high-mass floors
+    (amendment 2026-07-09, simulator calibration).
 
     Attributes:
         C_air: Thermal capacitance of the air node [J/K].
@@ -61,6 +65,8 @@ class RCParams:
         R_sf: Thermal resistance slab-to-air (floor surface) [K/W].
         f_conv: Fraction of solar gain absorbed convectively by the air [-].
         f_rad: Fraction of solar gain absorbed radiatively by the walls [-].
+        f_slab: Fraction of solar gain absorbed by the slab (sun on the
+            floor) [-]. Default 0.0 keeps legacy parameter sets valid.
         T_ground: Ground temperature beneath the slab [degC].
         has_split: Whether the room has a fast source (MIMO input when True).
         C_wall: Thermal capacitance of the wall node [J/K] (3R3C only).
@@ -76,6 +82,7 @@ class RCParams:
     R_sf: float
     f_conv: float = 0.6
     f_rad: float = 0.4
+    f_slab: float = 0.0
     T_ground: float = 10.0
     has_split: bool = False
 
@@ -105,15 +112,19 @@ class RCParams:
         if self.C_slab <= 0:
             msg = f"C_slab must be positive, got {self.C_slab}"
             raise ValueError(msg)
-        if self.f_conv < 0 or self.f_rad < 0:
+        if self.f_conv < 0 or self.f_rad < 0 or self.f_slab < 0:
             msg = (
-                f"Solar fractions must be non-negative, "
-                f"got f_conv={self.f_conv}, f_rad={self.f_rad}"
+                f"Solar fractions must be non-negative, got f_conv={self.f_conv}, "
+                f"f_rad={self.f_rad}, f_slab={self.f_slab}"
             )
             raise ValueError(msg)
         if self.f_conv + self.f_rad > 1.0:
             total = self.f_conv + self.f_rad
             msg = f"f_conv + f_rad must be <= 1.0, got {total}"
+            raise ValueError(msg)
+        if self.f_conv + self.f_rad + self.f_slab > 1.0:
+            total_all = self.f_conv + self.f_rad + self.f_slab
+            msg = f"f_conv + f_rad + f_slab must be <= 1.0, got {total_all}"
             raise ValueError(msg)
 
     def validate_for_order(self, order: ModelOrder) -> None:
@@ -299,6 +310,7 @@ class RCModel:
         E_c[0, 0] = 1 / (p.R_ve * p.C_air)  # T_out -> T_air (ventilation)
         E_c[0, 1] = p.f_conv / p.C_air  # Q_sol convective -> T_air
         E_c[0, 2] = 1 / p.C_air  # Q_int -> T_air
+        E_c[1, 1] = p.f_slab / p.C_slab  # Q_sol on the floor -> T_slab
         E_c[2, 0] = 1 / (p.R_wo * p.C_wall)  # T_out -> T_wall
         E_c[2, 1] = p.f_rad / p.C_wall  # Q_sol radiative -> T_wall
         self._E_c = E_c
@@ -336,6 +348,7 @@ class RCModel:
         E_c: NDArray[np.float64] = np.zeros((2, 2))
         E_c[0, 0] = 1 / (p.R_env * p.C_air)  # T_out -> T_air
         E_c[0, 1] = p.f_conv / p.C_air  # Q_sol convective -> T_air
+        E_c[1, 1] = p.f_slab / p.C_slab  # Q_sol on the floor -> T_slab
         self._E_c = E_c
 
         self._b_c = np.zeros(2)

@@ -100,14 +100,19 @@ async def test_data_has_both_rooms_with_outputs_report_and_setpoint(
 async def test_changed_room_sensor_updates_report_and_valve(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
-    """Dropping the room temperature raises the error and opens the valve."""
+    """Dropping the room temperature raises the error and opens the valve.
+
+    The drop to 15.0 is a >4 K jump, so the C3 plausibility gate holds the
+    first sample; the second consistent sample confirms the new level.
+    """
     coordinator = _get_coordinator(setup_integration)
     before = coordinator.data.rooms["Salon"]
     # Room started at 21.5 (above the 21.0 setpoint): not calling for heat.
     assert before.report.error_c == pytest.approx(-0.5, abs=0.05)
 
     hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
-    await _refresh(hass, coordinator)
+    await _refresh(hass, coordinator)  # first sample: held for confirmation
+    await _refresh(hass, coordinator)  # second sample: accepted
 
     after = coordinator.data.rooms["Salon"]
     # error = setpoint - room = 21.0 - 15.0.
@@ -310,7 +315,9 @@ async def test_report_echoes_measured_room_temperature(
 
 
 async def test_room_offset_change_rewrites_split_target_same_cycle(
-    hass: HomeAssistant, setup_integration: MockConfigEntry
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    freezer: Any,
 ) -> None:
     """J2 regression: a room offset change re-emits the split target promptly.
 
@@ -321,11 +328,18 @@ async def test_room_offset_change_rewrites_split_target_same_cycle(
     trailing refresh completes deterministically under ``async_block_till_done``
     instead of waiting out the real ~2 s cooldown.
     """
+    from datetime import timedelta
+
     from homeassistant.helpers.debounce import Debouncer
 
     coordinator = _get_coordinator(setup_integration)
     coordinator._room_states["Salon"] = ROOM_STATE_LIVE
     # A cold room makes the split boost and self-regulate to the room target.
+    # Two refreshes: the >4 K drop needs the C3 two-sample confirmation; the
+    # 11-min tick lets the S4 conservative restart seed's min-OFF dwell elapse.
+    hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
+    await _refresh(hass, coordinator)
+    freezer.tick(timedelta(minutes=11))
     hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
     await _refresh(hass, coordinator)
     assert coordinator.data.rooms["Salon"].outputs.fast_source.on is True
@@ -349,9 +363,284 @@ async def test_room_offset_change_rewrites_split_target_same_cycle(
     assert salon.setpoint_c == pytest.approx(23.0)
     assert salon.report.error_c == pytest.approx(8.0, abs=0.05)  # 23.0 - 15.0
 
+    # S12 (2026-07-09): the heating boost target is setpoint + 1 K.
     set_temp_calls = mocks[("climate", "set_temperature")]
     assert any(
         call.data.get("entity_id") == "climate.salon_split"
-        and call.data.get("temperature") == pytest.approx(23.0)
+        and call.data.get("temperature") == pytest.approx(24.0)
         for call in set_temp_calls
     )
+
+
+# -- Phase A hardening: input plausibility, staleness, farewell, mismatch ----
+
+
+async def test_temperature_spike_rejected_then_confirmed(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """C3: a >4 K jump is rejected once; two consistent samples accept it."""
+    coordinator = _get_coordinator(setup_integration)
+    # Setup accepted 21.5 degC. A 9 K jump is implausible in one 5-min cycle.
+    hass.states.async_set("sensor.salon_temp", "30.5", _TEMP_ATTRS)
+    await _refresh(hass, coordinator)
+    report = coordinator.data.rooms["Salon"].report
+    assert "sensor_lost" in report.flags
+    assert report.room_temperature_c is None
+
+    # The second consecutive consistent sample confirms the new level.
+    hass.states.async_set("sensor.salon_temp", "30.6", _TEMP_ATTRS)
+    await _refresh(hass, coordinator)
+    report = coordinator.data.rooms["Salon"].report
+    assert "sensor_lost" not in report.flags
+    assert report.room_temperature_c == pytest.approx(30.6)
+
+
+async def test_temperature_out_of_range_always_rejected(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """C3: the 1-wire 85 degC power-on-reset can never be confirmed."""
+    coordinator = _get_coordinator(setup_integration)
+    for _ in range(3):
+        hass.states.async_set("sensor.salon_temp", "85.0", _TEMP_ATTRS)
+        await _refresh(hass, coordinator)
+        assert "sensor_lost" in coordinator.data.rooms["Salon"].report.flags
+
+    # A plausible reading recovers the room immediately (within 4 K of 21.5).
+    hass.states.async_set("sensor.salon_temp", "21.4", _TEMP_ATTRS)
+    await _refresh(hass, coordinator)
+    report = coordinator.data.rooms["Salon"].report
+    assert "sensor_lost" not in report.flags
+    assert report.room_temperature_c == pytest.approx(21.4)
+
+
+async def test_small_change_accepted_immediately(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """C3: normal cycle-to-cycle drift passes the gate untouched."""
+    coordinator = _get_coordinator(setup_integration)
+    hass.states.async_set("sensor.salon_temp", "20.8", _TEMP_ATTRS)
+    await _refresh(hass, coordinator)
+    report = coordinator.data.rooms["Salon"].report
+    assert report.room_temperature_c == pytest.approx(20.8)
+
+
+async def test_stale_room_temperature_treated_as_lost(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    freezer: Any,
+) -> None:
+    """C4: a present-but-frozen temperature (>45 min old) degrades the room."""
+    from datetime import timedelta
+
+    coordinator = _get_coordinator(setup_integration)
+    assert "sensor_lost" not in coordinator.data.rooms["Salon"].report.flags
+
+    # Nobody re-reports the sensor for 46 minutes.
+    freezer.tick(timedelta(minutes=46))
+    await _refresh(hass, coordinator)
+    report = coordinator.data.rooms["Salon"].report
+    assert "sensor_lost" in report.flags
+    assert report.room_temperature_c is None
+
+
+async def test_stale_humidity_blocks_cooling(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    freezer: Any,
+) -> None:
+    """C4: stale RH (>60 min) nulls the dew inputs instead of trusting them."""
+    from datetime import timedelta
+
+    coordinator = _get_coordinator(setup_integration)
+    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    await _refresh(hass, coordinator)
+    assert coordinator.data.global_safe_dew_point_c is not None
+
+    # 61 min later the humidity was never re-reported; temperature is fresh.
+    freezer.tick(timedelta(minutes=61))
+    hass.states.async_set("sensor.salon_temp", "21.6", _TEMP_ATTRS)
+    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    await _refresh(hass, coordinator)
+
+    data = coordinator.data
+    report = data.rooms["Salon"].report
+    # The room falls out of the global maximum and S2 throttles to 0.
+    assert report.dew_excluded_reason == "no_humidity"
+    assert data.global_safe_dew_point_c is None
+    assert "s2_condensation" in report.flags
+
+
+async def test_live_to_shadow_emits_farewell_split_off(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """C5: leaving live parks the split OFF once (heating keeps the valve)."""
+    coordinator = _get_coordinator(setup_integration)
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+
+    mocks = _mock_actuator_services(hass)
+    coordinator.set_room_state("Salon", ROOM_STATE_SHADOW)
+    await hass.async_block_till_done()
+
+    hvac_calls = mocks[("climate", "set_hvac_mode")]
+    assert [(c.data["entity_id"], c.data["hvac_mode"]) for c in hvac_calls] == [
+        ("climate.salon_split", "off")
+    ]
+    # Heating mode: the valve position is deliberately left untouched.
+    assert mocks[("number", "set_value")] == []
+
+
+async def test_live_to_off_in_cooling_closes_valve(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """C5: in COOLING the farewell also drives the orphaned valve to 0."""
+    coordinator = _get_coordinator(setup_integration)
+    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    await _refresh(hass, coordinator)
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+
+    mocks = _mock_actuator_services(hass)
+    coordinator.set_room_state("Salon", ROOM_STATE_OFF)
+    await hass.async_block_till_done()
+
+    valve_writes = mocks[("number", "set_value")]
+    assert [(c.data["entity_id"], c.data["value"]) for c in valve_writes] == [
+        ("number.salon_valve", 0.0)
+    ]
+    hvac_calls = mocks[("climate", "set_hvac_mode")]
+    assert [c.data["hvac_mode"] for c in hvac_calls] == ["off"]
+
+
+async def test_shadow_to_off_emits_no_farewell(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """C5: transitions not leaving live never write to the hardware."""
+    coordinator = _get_coordinator(setup_integration)
+    assert coordinator.get_room_state("Salon") == ROOM_STATE_SHADOW
+
+    mocks = _mock_actuator_services(hass)
+    coordinator.set_room_state("Salon", ROOM_STATE_OFF)
+    await hass.async_block_till_done()
+
+    assert _all_actuator_calls(mocks) == []
+
+
+async def test_bad_valve_feedback_does_not_degrade_room(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """S8: a garbage feedback (255) nulls one loop, not the whole room."""
+    coordinator = _get_coordinator(setup_integration)
+    hass.states.async_set("number.salon_valve", "255", {"unit_of_measurement": "%"})
+    await _refresh(hass, coordinator)
+
+    report = coordinator.data.rooms["Salon"].report
+    assert "sensor_lost" not in report.flags
+    assert report.error_c is not None
+    assert report.room_temperature_c == pytest.approx(21.5)
+
+
+async def test_valve_mismatch_flag_after_three_cycles(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """S8: persistent command-vs-feedback divergence raises valve_mismatch."""
+    coordinator = _get_coordinator(setup_integration)
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    # A cold room commands a wide-open valve; the mock service never moves the
+    # physical entity, whose feedback stays 0 -> persistent divergence.
+    hass.states.async_set("sensor.salon_temp", "18.0", _TEMP_ATTRS)
+    _mock_actuator_services(hass)
+
+    # Cycle 1 writes the command; feedback comparison starts on cycle 2.
+    await _refresh(hass, coordinator)
+    assert coordinator.data.rooms["Salon"].outputs.valve_position_pct > 15.0
+    for _ in range(2):
+        await _refresh(hass, coordinator)
+        assert "valve_mismatch" not in coordinator.data.rooms["Salon"].report.flags
+
+    await _refresh(hass, coordinator)
+    assert "valve_mismatch" in coordinator.data.rooms["Salon"].report.flags
+
+
+async def test_valve_mismatch_not_tracked_in_shadow(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """S8: a shadow room (nothing written) never accuses the valve."""
+    coordinator = _get_coordinator(setup_integration)
+    hass.states.async_set("sensor.salon_temp", "18.0", _TEMP_ATTRS)
+    for _ in range(4):
+        await _refresh(hass, coordinator)
+        assert "valve_mismatch" not in coordinator.data.rooms["Salon"].report.flags
+
+
+async def test_set_mode_snapshot_carries_mode(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """S9: the persisted setpoint snapshot includes the global mode."""
+    from custom_components.tortoise_ufh.core.models import Mode
+
+    coordinator = _get_coordinator(setup_integration)
+    coordinator.set_mode(Mode.COOLING)
+    snapshot = coordinator._setpoint_snapshot()
+    assert snapshot["mode"] == "cooling"
+
+
+# -- Phase B: split command cache (S3) ---------------------------------------
+
+
+async def test_split_command_cached_not_respammed(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    freezer: Any,
+) -> None:
+    """S3: an unchanged split command is written once, not every cycle."""
+    from datetime import timedelta
+
+    coordinator = _get_coordinator(setup_integration)
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    # A cold room engages the split (two refreshes for the C3 confirmation;
+    # the tick lets the S4 conservative min-OFF seed elapse).
+    hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
+    await _refresh(hass, coordinator)
+    freezer.tick(timedelta(minutes=11))
+    hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
+
+    mocks = _mock_actuator_services(hass)
+    await _refresh(hass, coordinator)
+    assert coordinator.data.rooms["Salon"].outputs.fast_source.on is True
+    hvac_calls = mocks[("climate", "set_hvac_mode")]
+    temp_calls = mocks[("climate", "set_temperature")]
+    assert len(hvac_calls) == 1
+    assert len(temp_calls) == 1
+
+    # Unchanged command: further cycles are silent (cache, re-assert 45 min).
+    await _refresh(hass, coordinator)
+    await _refresh(hass, coordinator)
+    assert len(hvac_calls) == 1
+    assert len(temp_calls) == 1
+
+
+async def test_split_command_change_writes_immediately(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    freezer: Any,
+) -> None:
+    """S3: a changed target breaks the cache and is written the same cycle."""
+    from datetime import timedelta
+
+    coordinator = _get_coordinator(setup_integration)
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
+    await _refresh(hass, coordinator)
+    freezer.tick(timedelta(minutes=11))
+    hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
+
+    mocks = _mock_actuator_services(hass)
+    await _refresh(hass, coordinator)
+    temp_calls = mocks[("climate", "set_temperature")]
+    assert [c.data["temperature"] for c in temp_calls] == [pytest.approx(22.0)]
+
+    coordinator.set_room_offset("Salon", 1.0)
+    await _refresh(hass, coordinator)
+    assert [c.data["temperature"] for c in temp_calls] == [
+        pytest.approx(22.0),
+        pytest.approx(23.0),
+    ]
