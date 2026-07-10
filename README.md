@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="custom_components/tortoise_ufh/brand/icon.png" alt="Tortoise-UFH logo" width="160">
+</p>
+
 # Tortoise-UFH
 
 **Per-room closed-loop climate control for high-thermal-mass underfloor heating in Home Assistant — the slow tortoise carries the load, the fast hare closes the gap.**

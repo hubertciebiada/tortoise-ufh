@@ -47,6 +47,10 @@ const OFFSET_STEP = 0.5;
 
 const MANAGE_ROOMS_PATH = "/config/integrations/integration/tortoise_ufh";
 
+// Brand icon served by panel.py next to this module; the header falls back to
+// the mdi/glyph mark when the image fails to load (e.g. dev preview).
+const BRAND_ICON_URL = "/tortoise_ufh_panel/panel-icon.png";
+
 const MODES = ["heating", "transitional", "cooling", "off"];
 
 /** Canonical per-room control state (mirrors the adapter's `ROOM_STATES`). */
@@ -1771,9 +1775,15 @@ class TortoiseUfhPanel extends HTMLElement {
   _buildHero() {
     const H = {};
 
-    // Brand + manage-rooms deep link.
+    // Brand + manage-rooms deep link. The mark is the served brand icon; on
+    // load failure (e.g. dev preview without the static path) it swaps itself
+    // for the previous mdi/glyph mark.
+    const brandImg = h("img", { class: "brand-img", src: BRAND_ICON_URL, alt: "" });
+    brandImg.addEventListener("error", () => {
+      brandImg.replaceWith(this._icon("mdi:tortoise", "🐢"));
+    });
     const brand = h("div", { class: "brand" }, [
-      this._icon("mdi:tortoise", "🐢"),
+      brandImg,
       h("span", { text: "Tortoise-UFH" }),
     ]);
     H.manageBtn = h(
@@ -4415,6 +4425,7 @@ button { font-family: inherit; cursor: pointer; }
 .hero-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
 .brand .hicon { --mdc-icon-size: 22px; color: var(--t-primary); }
+.brand .brand-img { width: 22px; height: 22px; object-fit: contain; display: block; }
 .pill {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 6px 12px; border-radius: 999px;

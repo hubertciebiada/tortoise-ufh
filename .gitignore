@@ -20,6 +20,12 @@ htmlcov/
 tests/simulation/output/
 *.png
 
+# ...but the generated brand assets ARE tracked (the private source logo in
+# the repo root stays ignored by the *.png rule above)
+!custom_components/tortoise_ufh/brand/*.png
+!custom_components/tortoise_ufh/frontend/panel-icon.png
+!brand-submission/tortoise_ufh/*.png
+
 # HA dev container runtime state (keep only the hand-written config)
 docker/config/*
 !docker/config/configuration.yaml

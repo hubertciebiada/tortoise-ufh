@@ -1,8 +1,9 @@
 """Sidebar panel registration for the Tortoise-UFH Home Assistant adapter.
 
 This module registers (and unregisters) the custom sidebar panel and the
-static HTTP path that serves the self-contained vanilla-JS panel module
-``frontend/tortoise-ufh-panel.js``.
+static HTTP paths that serve the self-contained vanilla-JS panel module
+``frontend/tortoise-ufh-panel.js`` and its header brand icon
+``frontend/panel-icon.png``.
 
 Registration is process-wide (not per config entry): the panel and its static
 path are registered exactly once, guarded by a boolean flag stored in
@@ -38,9 +39,11 @@ PANEL_REGISTERED_KEY = f"{DOMAIN}_panel_registered"
 # flag is set once for the process lifetime and never cleared on reload.
 _STATIC_PATH_REGISTERED_KEY = f"{DOMAIN}_static_path_registered"
 
-# Relative location (inside this package) of the served JS module.
+# Relative location (inside this package) of the served JS module and the
+# brand icon the panel header displays next to the JS module.
 _FRONTEND_DIR_NAME = "frontend"
 _PANEL_JS_FILENAME = "tortoise-ufh-panel.js"
+_PANEL_ICON_FILENAME = "panel-icon.png"
 
 
 @dataclass(frozen=True)
@@ -50,6 +53,9 @@ class PanelRegistration:
     Attributes:
         static_url_path: HTTP path at which the JS module is served
             (e.g. ``/tortoise_ufh_panel/panel.js``).
+        icon_static_url_path: HTTP path at which the brand icon PNG shown in
+            the panel header is served (the JS references this path and falls
+            back to a glyph when it fails to load).
         custom_element_name: Name of the custom element defined by the module
             and referenced by ``_panel_custom.name``.
         frontend_url_path: URL slug of the panel in the HA sidebar.
@@ -63,6 +69,7 @@ class PanelRegistration:
     """
 
     static_url_path: str = "/tortoise_ufh_panel/panel.js"
+    icon_static_url_path: str = "/tortoise_ufh_panel/panel-icon.png"
     custom_element_name: str = "tortoise-ufh-panel"
     frontend_url_path: str = "tortoise-ufh"
     sidebar_title: str = "Tortoise-UFH"
@@ -79,6 +86,7 @@ class PanelRegistration:
         """
         for field_name in (
             "static_url_path",
+            "icon_static_url_path",
             "custom_element_name",
             "frontend_url_path",
             "sidebar_title",
@@ -88,9 +96,11 @@ class PanelRegistration:
             if not isinstance(value, str) or not value.strip():
                 msg = f"{field_name} must be a non-empty string"
                 raise ValueError(msg)
-        if not self.static_url_path.startswith("/"):
-            msg = f"static_url_path must be absolute, got {self.static_url_path!r}"
-            raise ValueError(msg)
+        for path_field in ("static_url_path", "icon_static_url_path"):
+            path_value = getattr(self, path_field)
+            if not path_value.startswith("/"):
+                msg = f"{path_field} must be absolute, got {path_value!r}"
+                raise ValueError(msg)
         if not self.sidebar_icon.startswith("mdi:"):
             msg = (
                 f"sidebar_icon must be an 'mdi:' identifier, got {self.sidebar_icon!r}"
@@ -106,6 +116,17 @@ class PanelRegistration:
         """
         return (
             Path(__file__).parent / _FRONTEND_DIR_NAME / _PANEL_JS_FILENAME
+        ).resolve()
+
+    def icon_path(self) -> Path:
+        """Return the absolute filesystem path to the served brand icon.
+
+        Returns:
+            Absolute :class:`pathlib.Path` to ``frontend/panel-icon.png``
+            inside this package.
+        """
+        return (
+            Path(__file__).parent / _FRONTEND_DIR_NAME / _PANEL_ICON_FILENAME
         ).resolve()
 
     def panel_config(self) -> dict[str, object]:
@@ -158,7 +179,12 @@ async def async_register_panel(hass: HomeAssistant) -> None:
                         _PANEL.static_url_path,
                         str(_PANEL.js_module_path()),
                         False,
-                    )
+                    ),
+                    StaticPathConfig(
+                        _PANEL.icon_static_url_path,
+                        str(_PANEL.icon_path()),
+                        False,
+                    ),
                 ]
             )
             hass.data[_STATIC_PATH_REGISTERED_KEY] = True
