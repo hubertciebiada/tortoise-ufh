@@ -566,7 +566,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         """Override the global operating mode, persist it and rebroadcast.
 
         The mode is persisted to the private setpoint Store (S9) so a restart
-        in July does not silently fall back to heating logic.
+        in July does not silently fall back to heating logic. Like
+        :meth:`set_home_temperature`, the change schedules a debounced
+        recompute (fix 2026-07-10) so a panel/service mode change takes effect
+        within seconds instead of waiting out the 5-min cycle — an immediate
+        recompute is safe because the fast-source direction machine forces any
+        HEATING<->COOLING reversal through OFF with the full dwell anyway.
 
         Args:
             mode: New global :class:`~tortoise_ufh.models.Mode`.
@@ -585,6 +590,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     sensor_lost_rooms=self.data.sensor_lost_rooms,
                 )
             )
+        self._schedule_recompute()
 
     def get_room_state(self, room_name: str) -> str:
         """Return a room's control state (``off`` / ``shadow`` / ``live``).

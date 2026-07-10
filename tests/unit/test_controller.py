@@ -981,6 +981,73 @@ class TestSafetyValveVsAirSource:
         assert out.fast_source.on is True
 
 
+class TestFastDwellSingleAccumulation:
+    """Fix 2026-07-10: dt accumulates into the fast dwell timer exactly once.
+
+    Before the fix the normal fast-source decision added dt AND a safety
+    override in the same step added it again, so under a sustained S1 the
+    min-OFF wait elapsed twice as fast as wall-clock time.
+    """
+
+    def _s1_inputs(self, room_temp: float, supply: float) -> RoomInputs:
+        return make_inputs(
+            room_temperature_c=room_temp,
+            loops=(LoopInput(None, supply, None),),
+            fast_source_kind=FastSourceKind.SPLIT,
+        )
+
+    @pytest.mark.unit
+    def test_sustained_s1_advances_dwell_by_exactly_dt(self) -> None:
+        """N held-S1 steps of dt=300 s advance the timer by N*300, not 2N*300.
+
+        The room sits INSIDE the comfort band so the normal path issues no
+        engage requests: the timer moves only through the per-step
+        accumulation (plus the safety force-OFF edge reset).
+        """
+        controller = RoomController(ControllerConfig(), name="salon")
+        # Cold room, healthy supply: the split engages (dwell clock -> 0).
+        engaged = controller.step(self._s1_inputs(19.0, 35.0), dt_seconds=300.0)
+        assert engaged.fast_source.on is True
+        # Room recovers into the band; S1 trips (45 > 40): safety forces OFF.
+        tripped = controller.step(self._s1_inputs(21.0, 45.0), dt_seconds=300.0)
+        assert "s1_floor_overheat" in tripped.report.flags
+        assert tripped.fast_source.on is False
+        # The ON->OFF edge restarts the OFF stretch at 0.
+        assert controller._fast_timer_s == pytest.approx(0.0)
+        # S1 held by hysteresis (39 > 38): exactly +300 s per 300 s step.
+        for n in range(1, 4):
+            out = controller.step(self._s1_inputs(21.0, 39.0), dt_seconds=300.0)
+            assert "s1_floor_overheat" in out.report.flags
+            assert out.fast_source.on is False
+            assert controller._fast_timer_s == pytest.approx(n * 300.0)
+
+    @pytest.mark.unit
+    def test_min_off_after_safety_release_counts_from_actual_stop(self) -> None:
+        """Min-OFF needs the full 10 min from the ACTUAL stop, not 5.
+
+        One held-S1 step (300 s) plus a 2 s debounced recompute after the rule
+        clears is only 302 s of real OFF time — the double-counting bug saw
+        602 s and re-engaged the compressor half a dwell too early.
+        """
+        controller = RoomController(ControllerConfig(), name="salon")
+        engaged = controller.step(self._s1_inputs(19.0, 35.0), dt_seconds=300.0)
+        assert engaged.fast_source.on is True
+        # S1 trip: force OFF (edge -> OFF stretch starts at 0).
+        controller.step(self._s1_inputs(19.0, 45.0), dt_seconds=300.0)
+        # One full cycle with S1 held: 300 s of genuine OFF time.
+        held = controller.step(self._s1_inputs(19.0, 39.0), dt_seconds=300.0)
+        assert held.fast_source.on is False
+        # S1 clears (30 < 38); the cold room demands boost 2 s later, but only
+        # 302 s have passed since the actual stop: min-OFF (600 s) must block.
+        blocked = controller.step(self._s1_inputs(19.0, 30.0), dt_seconds=2.0)
+        assert blocked.fast_source.on is False
+        assert "fast_source_min_runtime" in blocked.report.flags
+        # Once the full 10 min from the stop elapse, the boost returns.
+        released = controller.step(self._s1_inputs(19.0, 30.0), dt_seconds=300.0)
+        assert released.fast_source.on is True
+        assert released.fast_source.mode is FastSourceMode.HEATING
+
+
 class TestFastDirectionMachine:
     """C6 (2026-07-09): the split direction is machine state, never a flip.
 

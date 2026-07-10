@@ -372,6 +372,44 @@ async def test_room_offset_change_rewrites_split_target_same_cycle(
     )
 
 
+async def test_set_mode_schedules_prompt_recompute(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """A panel/service mode change recomputes promptly (fix 2026-07-10).
+
+    ``set_mode`` schedules the same debounced recompute as
+    ``set_home_temperature``; without it the new mode's control step would
+    wait out the 5-min cycle. The mode source entity is detached so the
+    override is authoritative (with one configured, the recompute re-reads
+    the entity), and the per-instance debouncer is swapped for an immediate
+    one exactly like the offset-recompute test above.
+    """
+    from homeassistant.helpers.debounce import Debouncer
+
+    from custom_components.tortoise_ufh.core.models import Mode
+
+    coordinator = _get_coordinator(setup_integration)
+    assert coordinator.data.rooms["Salon"].report.explanation.startswith("Grzanie")
+
+    coordinator._mode_entity = ""
+    coordinator._recompute_debouncer = Debouncer(
+        hass,
+        coordinator.logger,
+        cooldown=0.0,
+        immediate=True,
+        function=coordinator.async_refresh,
+    )
+    coordinator.set_mode(Mode.OFF)
+    await hass.async_block_till_done()
+
+    assert coordinator.data.mode == "off"
+    # The FULL recompute ran under the new mode (not just the rebroadcast):
+    # the room report was rebuilt by the OFF path of the control step.
+    salon = coordinator.data.rooms["Salon"]
+    assert salon.report.explanation.startswith("Off")
+    assert salon.outputs.valve_position_pct == 0.0
+
+
 # -- Phase A hardening: input plausibility, staleness, farewell, mismatch ----
 
 

@@ -172,6 +172,10 @@ the dew-point layers (§2), and the control law (Q4).
   untouched — warm supply water is bounded by the heat pump's own curve, so holding the last
   position keeps the house warm and is strictly safer in winter than cold-parking. This
   narrows the §4 statement "off ⇒ the physical actuator is left untouched" to the heating case.
+  *Note (2026-07-10):* the farewell also fires on every entry **reload** (each tuning change
+  unloads the entry), so the split turns off and the conservative restart seed then demands a
+  full min-OFF before the boost may return. This is a deliberate, safe cost: reloads are rare
+  and compressor hygiene outranks a few minutes of missing boost.
 - **S5 — safety override keeps controller state honest.** A safety force-ON (S3/S4) now syncs
   the fast-source dwell machine (`_fast_on` + timer), so releasing the override cannot stop a
   compressor started seconds earlier; and the override no longer writes `_last_valve_pct`, so

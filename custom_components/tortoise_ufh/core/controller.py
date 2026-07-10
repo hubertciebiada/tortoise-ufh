@@ -115,6 +115,14 @@ _INTEGRATOR_DECAY_AFTER_S: float = 12.0 * 3600.0
 cleared [s] — the accumulated integral of one season must not become the
 first valve command of the next (S2, 2026-07-09)."""
 
+_SAFETY_EXPLANATION_MAX_LEN: int = 200
+"""Maximum length of a safety-prefixed report explanation [characters].
+
+The safety override PREPENDS its banner to the regulation explanation
+(fix 2026-07-10) instead of replacing it; the concatenation is capped so the
+report/websocket payload can never bloat.
+"""
+
 _INITIAL_FAST_TIMER_S: float = 1.0e9
 """Initial fast-source dwell timer [s] used only while the physical fast-source
 state is UNKNOWN (no ``fast_source_on`` feedback configured).
@@ -267,6 +275,13 @@ class RoomController:
         # divergence only raises a report flag.
         self._sync_fast_state(inputs)
 
+        # Fast-source dwell clock: dt accumulates here EXACTLY ONCE per step
+        # (fix 2026-07-10); the decision helpers below only RESET the timer on
+        # ON<->OFF edges. Previously every fast-source decision added dt itself
+        # and a safety override in the same step added it AGAIN, so the min-OFF
+        # wait under an active S1 elapsed twice as fast as wall-clock time.
+        self._fast_timer_s += dt_seconds
+
         # -- Step 1: missing room temperature -> safe degrade ---------------
         t_room = inputs.room_temperature_c
         if t_room is None:
@@ -334,9 +349,7 @@ class RoomController:
                 dt_seconds=dt_seconds,
             )
 
-        return self._finalize(
-            inputs, self._apply_safety(inputs, result, dt_seconds=dt_seconds)
-        )
+        return self._finalize(inputs, self._apply_safety(inputs, result))
 
     def _finalize(self, inputs: RoomInputs, result: RoomOutputs) -> RoomOutputs:
         """Stamp the additive dew-reason and dwell-remaining report fields.
@@ -468,14 +481,15 @@ class RoomController:
         Args:
             mode: The room's current operating mode, used to pick the safe
                 valve position.
-            dt_seconds: Elapsed time [s]; accumulated into the fast-source
-                dwell timer so a recovered sensor does not restart the min-OFF
-                wait from scratch (fast-F6, 2026-07-09).
+            dt_seconds: Elapsed time [s]; accumulated into the integrator
+                inactivity clock (the fast dwell timer is advanced once per
+                step by :meth:`step`; fast-F6, 2026-07-09 still holds — a
+                recovered sensor does not restart the min-OFF wait).
 
         Returns:
             A safe-degraded :class:`~tortoise_ufh.models.RoomOutputs`.
         """
-        fast = self._force_fast_off(dt_seconds)
+        fast = self._force_fast_off()
         if mode is Mode.HEATING:
             if self._seeded:
                 valve = self._last_valve_pct
@@ -540,13 +554,15 @@ class RoomController:
             explanation: Report text.
             room_temperature_c: Measured room temperature [degC] echoed into the
                 report, or ``None`` when unavailable.
-            dt_seconds: Elapsed time [s], accumulated into the fast dwell timer
-                (fast-F6: an OFF stretch counts toward the min-OFF wait).
+            dt_seconds: Elapsed time [s], accumulated into the integrator
+                inactivity clock (the fast dwell timer advances once per step
+                in :meth:`step`; fast-F6: an OFF stretch counts toward the
+                min-OFF wait).
 
         Returns:
             The passive :class:`~tortoise_ufh.models.RoomOutputs`.
         """
-        fast = self._force_fast_off(dt_seconds)
+        fast = self._force_fast_off()
         self._last_valve_pct = valve
         self._note_inactive(dt_seconds)
         report = RoomReport(
@@ -623,7 +639,7 @@ class RoomController:
         self._note_inactive(dt_seconds)
 
         if inputs.fast_source_kind is FastSourceKind.NONE:
-            fast = self._force_fast_off(dt_seconds)
+            fast = self._force_fast_off()
             direction = "brak"
         else:
             # Bidirectional demands: heating below setpoint, cooling above.
@@ -661,7 +677,7 @@ class RoomController:
                     want_on = True
                     direction = "chlodzenie"
             if heater_cannot_cool:
-                fast = self._force_fast_off(dt_seconds)
+                fast = self._force_fast_off()
             else:
                 # S12: transitional target is exactly the setpoint in BOTH
                 # directions — the split is the only source here and its own
@@ -672,7 +688,6 @@ class RoomController:
                     fs_mode=fs_mode,
                     target_heating=inputs.setpoint_c,
                     target_cooling=inputs.setpoint_c,
-                    dt_seconds=dt_seconds,
                     flags=flags,
                 )
                 if fast.on:
@@ -737,7 +752,7 @@ class RoomController:
         # mirroring the OFF path. Never run the cooling PID for such a room:
         # opening the valve here would bypass both condensation defences.
         if mode is Mode.COOLING and not inputs.cooling_enabled:
-            fast = self._force_fast_off(dt_seconds)
+            fast = self._force_fast_off()
             self._last_valve_pct = 0.0
             self._note_inactive(dt_seconds)
             report = RoomReport(
@@ -841,7 +856,6 @@ class RoomController:
         fast = self._coordinate_fast_source(
             inputs=inputs,
             error_c=error_c,
-            dt_seconds=dt_seconds,
             flags=flags,
         )
 
@@ -962,7 +976,6 @@ class RoomController:
         *,
         inputs: RoomInputs,
         error_c: float,
-        dt_seconds: float,
         flags: list[str],
     ) -> FastSourceCommand:
         """Decide the fast-source command for HEATING/COOLING (step 14).
@@ -980,14 +993,13 @@ class RoomController:
         Args:
             inputs: The room's raw inputs.
             error_c: ``setpoint - room_temp`` [K] (heating convention).
-            dt_seconds: Elapsed time [s].
             flags: Mutable flag list (appended in place).
 
         Returns:
             The :class:`~tortoise_ufh.models.FastSourceCommand`.
         """
         if inputs.fast_source_kind is FastSourceKind.NONE:
-            return self._force_fast_off(dt_seconds)
+            return self._force_fast_off()
 
         if inputs.mode is Mode.HEATING:
             demand = error_c  # setpoint - t_room
@@ -1004,7 +1016,7 @@ class RoomController:
         ):
             if "fast_source_cannot_cool" not in flags:
                 flags.append("fast_source_cannot_cool")
-            return self._force_fast_off(dt_seconds)
+            return self._force_fast_off()
 
         want_on = self._want_fast(demand, engaged=self._fast_state is fs_mode)
         return self._decide_fast_source(
@@ -1012,7 +1024,6 @@ class RoomController:
             fs_mode=fs_mode,
             target_heating=inputs.setpoint_c + FAST_TARGET_OFFSET_K,
             target_cooling=inputs.setpoint_c - FAST_TARGET_OFFSET_K,
-            dt_seconds=dt_seconds,
             flags=flags,
         )
 
@@ -1045,12 +1056,13 @@ class RoomController:
         fs_mode: FastSourceMode,
         target_heating: float,
         target_cooling: float,
-        dt_seconds: float,
         flags: list[str],
     ) -> FastSourceCommand:
         """Advance the three-state fast-source machine (C6, 2026-07-09).
 
-        The machine state is OFF / HEATING / COOLING. Transitions:
+        The machine state is OFF / HEATING / COOLING. The dwell clock is
+        advanced once per step by :meth:`step` (fix 2026-07-10); this method
+        only resets it on state transitions:
 
         * ``OFF -> fs_mode`` when ``want_on`` and the min-OFF dwell elapsed.
         * ``running -> OFF`` when the request is OFF **or a different
@@ -1066,14 +1078,12 @@ class RoomController:
             fs_mode: Direction requested when ``want_on`` is ``True``.
             target_heating: Split target [degC] emitted while HEATING.
             target_cooling: Split target [degC] emitted while COOLING.
-            dt_seconds: Elapsed time [s].
             flags: Mutable flag list (appended in place).
 
         Returns:
             The gated :class:`~tortoise_ufh.models.FastSourceCommand`.
         """
         cfg = self._config
-        self._fast_timer_s += dt_seconds
         current = self._fast_state
         if current is FastSourceMode.OFF:
             if want_on:
@@ -1142,18 +1152,16 @@ class RoomController:
         self._fast_dwell_remaining_s = remaining if remaining > 0.0 else None
         return FastSourceCommand(on=True, mode=fs_mode, target_temperature_c=target)
 
-    def _force_fast_off(self, dt_seconds: float = 0.0) -> FastSourceCommand:
+    def _force_fast_off(self) -> FastSourceCommand:
         """Force the fast source OFF immediately (safety / OFF mode).
 
         Bypasses the min ON timer because a lost sensor or an explicit OFF is a
         safety condition. Resets the dwell timer on the ON->OFF edge so
         re-engaging respects the min OFF dwell afterwards; on subsequent
-        already-OFF cycles the timer keeps accumulating ``dt_seconds``
-        (fast-F6, 2026-07-09), so a long sensor-lost or OFF stretch counts
-        toward the min-OFF wait instead of restarting it on recovery.
-
-        Args:
-            dt_seconds: Elapsed time [s] accumulated while already OFF.
+        already-OFF cycles the timer keeps growing via the single per-step
+        accumulation in :meth:`step` (fast-F6, 2026-07-09; single-accumulation
+        fix 2026-07-10), so a long sensor-lost or OFF stretch counts toward the
+        min-OFF wait instead of restarting it on recovery.
 
         Returns:
             An OFF :class:`~tortoise_ufh.models.FastSourceCommand`.
@@ -1161,8 +1169,6 @@ class RoomController:
         if self._fast_state is not FastSourceMode.OFF:
             self._fast_state = FastSourceMode.OFF
             self._fast_timer_s = 0.0
-        else:
-            self._fast_timer_s += dt_seconds
         # A forced OFF is a safety / OFF-mode condition, not a normal dwell gate:
         # the panel shows no assist timer here (the min-runtime flag conveys any
         # block instead).
@@ -1194,9 +1200,7 @@ class RoomController:
             return None
         return max(supplies) if inputs.mode is Mode.HEATING else min(supplies)
 
-    def _apply_safety(
-        self, inputs: RoomInputs, result: RoomOutputs, *, dt_seconds: float = 0.0
-    ) -> RoomOutputs:
+    def _apply_safety(self, inputs: RoomInputs, result: RoomOutputs) -> RoomOutputs:
         """Apply the hard-safety layer (S1..S5) as a post-processing override.
 
         Builds a :class:`~tortoise_ufh.safety.SensorSnapshot` from the governing
@@ -1204,6 +1208,9 @@ class RoomController:
         stateful rule set (hysteresis carried across cycles), and — if any rule
         is active — overrides the computed valve / fast-source command with the
         highest-priority action and merges the rule flags into the report.
+        The fast dwell clock is NOT advanced here — :meth:`step` accumulates
+        dt exactly once per cycle (fix 2026-07-10); a forced OFF/ON below only
+        resets the timer on an actual state edge.
 
         The S5 watchdog age comes from ``inputs.last_update_age_minutes``
         (S6, 2026-07-09): the adapter tracks how long each room has gone
@@ -1214,9 +1221,6 @@ class RoomController:
         Args:
             inputs: The room's raw inputs for this cycle.
             result: The pre-safety computed outputs.
-            dt_seconds: Elapsed time [s] this cycle, so a forced-OFF fast
-                source keeps accumulating its dwell timer during safety
-                overrides (fast-F6) instead of pausing the min-OFF wait.
 
         Returns:
             The (possibly overridden) :class:`~tortoise_ufh.models.RoomOutputs`.
@@ -1251,7 +1255,7 @@ class RoomController:
             fast = (
                 self._force_fast_on(FastSourceMode.HEATING, target)
                 if has_split
-                else self._force_fast_off(dt_seconds)
+                else self._force_fast_off()
             )
         elif SafetyAction.EMERGENCY_COOL in actions:
             valve = 0.0  # air-side only; never open the floor without S2 cover
@@ -1259,13 +1263,13 @@ class RoomController:
             if inputs.fast_source_kind is FastSourceKind.SPLIT:
                 fast = self._force_fast_on(FastSourceMode.COOLING, target)
             else:
-                fast = self._force_fast_off(dt_seconds)
+                fast = self._force_fast_off()
                 if inputs.fast_source_kind is FastSourceKind.HEATER:
                     flags = tuple(dict.fromkeys((*flags, "fast_source_cannot_cool")))
         elif close_valve:
             # CLOSE_VALVE (S1/S2): park the valve, release the fast source.
             valve = 0.0
-            fast = self._force_fast_off(dt_seconds)
+            fast = self._force_fast_off()
         else:
             # FALLBACK_HP_CURVE (S5 watchdog) alone: NEUTRAL position, not a
             # hard close (amendment 2026-07-09, S6) — "defer to the heat-pump
@@ -1273,14 +1277,22 @@ class RoomController:
             # in HEATING (keeps the house tempered by the HP curve), 0 in
             # COOLING (chilled water without fresh data is never safe).
             valve = self._config.valve_floor_pct if inputs.mode is Mode.HEATING else 0.0
-            fast = self._force_fast_off(dt_seconds)
+            fast = self._force_fast_off()
 
         # Amendment 2026-07-09 (S5): do NOT overwrite _last_valve_pct with the
         # emergency 0/100 — the sensor-lost freeze must hold the last position
         # of HEALTHY regulation (already stored by the pre-safety path), not a
         # safety extreme that may outlive the fault by days.
         saturated = valve <= 0.0 or valve >= 100.0
-        explanation = f"Bezpieczenstwo {active[0].rule.name}: zawor {valve:.0f}%."
+        # Fix 2026-07-10: prepend the safety banner instead of REPLACING the
+        # explanation — a safety cycle keeps telling the operator what the
+        # underlying regulation was doing (capped against pathological growth).
+        explanation = (
+            f"Bezpieczenstwo {active[0].rule.name}: zawor {valve:.0f}%. | "
+            f"{result.report.explanation}"
+        )
+        if len(explanation) > _SAFETY_EXPLANATION_MAX_LEN:
+            explanation = explanation[: _SAFETY_EXPLANATION_MAX_LEN - 3] + "..."
         report = replace(
             result.report,
             flags=flags,
