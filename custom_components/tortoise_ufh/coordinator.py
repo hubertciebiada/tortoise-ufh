@@ -37,13 +37,13 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.core import callback, split_entity_id
+from homeassistant.core import callback
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .config_flow import CONF_CONTROLLER
 from .const import (
+    CONF_CONTROLLER,
     CONF_COOLING_ENABLED,
     CONF_ENTITY_FAST_SOURCE,
     CONF_ENTITY_HUMIDITY,
@@ -62,7 +62,6 @@ from .const import (
     CONF_ROOMS,
     DEFAULT_ROOM_STATE,
     DOMAIN,
-    ENTITY_STALE_MAX_SECONDS,
     ROOM_STATE_LIVE,
     ROOM_STATE_OFF,
     ROOM_STATES,
@@ -73,14 +72,14 @@ from .const import (
 from .core.config import ControllerConfig
 from .core.controller import BuildingController
 from .core.models import (
-    FastSourceKind,
-    FastSourceMode,
     LoopInput,
     Mode,
     RoomInputs,
     RoomOutputs,
     RoomReport,
 )
+from .readers import HUMIDITY_MAX_AGE_S, UNAVAILABLE_STATES, SourceReader
+from .writers import CommandWriter
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -117,41 +116,10 @@ _MAX_DT_SECONDS: float = 900.0
 _STORE_KEY_MODE: str = "mode"
 """Key of the persisted global mode in the private setpoint Store."""
 
-# -- Input plausibility (fixed constants, deliberately NOT config knobs) ------
-# Tailored to the owner's house: 1-wire/Zigbee room sensors in a high-mass UFH
-# building. A real room cannot leave -10..50 degC, and its air temperature
-# cannot move more than ~4 K between two 5-minute cycles — a bigger jump is a
-# sensor fault (e.g. the DS18B20 85 degC power-on-reset), not physics.
-
-_TEMP_PLAUSIBLE_MIN_C: float = -10.0
-"""Lowest plausible room-air temperature [degC]; below -> reject the sample."""
-
-_TEMP_PLAUSIBLE_MAX_C: float = 50.0
-"""Highest plausible room-air temperature [degC]; above -> reject the sample."""
-
-_TEMP_MAX_JUMP_K: float = 4.0
-"""Max plausible room-temperature change between control cycles [K].
-
-A sample jumping further than this from the last accepted value is rejected
-(treated as a missing reading); two consecutive mutually consistent samples
-accept the new level, so a real fast change is adopted within two cycles.
-"""
-
-_ROOM_TEMP_MAX_AGE_S: float = 45.0 * 60.0
-"""Max age of a room-temperature state before it is treated as unavailable [s].
-
-Guards against a present-but-frozen sensor (dead battery, stuck bridge): a
-reading not re-reported for this long can no longer be trusted to control heat,
-let alone chilled water.
-"""
-
-_HUMIDITY_MAX_AGE_S: float = 60.0 * 60.0
-"""Max age of a humidity state before it is treated as unavailable [s].
-
-The most dangerous stale input: a frozen winter RH makes BOTH condensation
-defences (global safe dew point and local S2 throttle) agree to pass water
-below the real dew point. Stale RH -> None -> the core cools nothing blindly.
-"""
+# The input-plausibility constants (temperature range/jump gates, state ages)
+# and the write-path constants (fast re-assert, valve domain) moved to
+# ``readers.py`` / ``writers.py`` with the SourceReader / CommandWriter
+# extraction (2026-07-10).
 
 _VALVE_MISMATCH_TOLERANCE_PCT: float = 10.0
 """Command-vs-feedback divergence beyond which a valve counts as mismatched [%]."""
@@ -159,52 +127,17 @@ _VALVE_MISMATCH_TOLERANCE_PCT: float = 10.0
 _VALVE_MISMATCH_CYCLES: int = 3
 """Consecutive mismatched cycles before the ``valve_mismatch`` flag is raised."""
 
-_FAST_REASSERT_SECONDS: float = 45.0 * 60.0
-"""Age after which an unchanged fast-source command is re-written anyway [s].
-
-The splits are local (ESPHome), so this is hygiene, not an API budget: an
-unchanged (hvac_mode, target) pair is normally NOT re-sent every cycle (no IR
-beeps / stomping on manual tweaks), but a periodic re-assert self-heals the
-hardware after a missed write or a manual override — the machine stays the
-owner (S3, 2026-07-09).
-"""
-
 # Per-room config key for an optional heat-pump-status source entity. Defined
 # here (not in const.py) because this file is the only adapter surface allowed
 # to change; when present its on/off/unavailable state drives the core's
 # integrator freeze during DHW / defrost. Absent -> tri-state None (feature off).
 CONF_ENTITY_HP_ACTIVE: str = "entity_hp_active"
 
-_HP_INACTIVE_STATES: frozenset[str] = frozenset(
-    {"off", "false", "idle", "standby", "0"}
-)
-"""HP-status states meaning the pump is NOT heating the UFH supply (freeze)."""
-
-_UNAVAILABLE_STATES: frozenset[str] = frozenset({"unavailable", "unknown", "none", ""})
-"""Home Assistant state strings treated as "no reading"."""
-
 _ALGORITHM_STATES: frozenset[str] = frozenset({"running", "stale", "error"})
 """Permitted :attr:`CoordinatorData.algorithm_status` values."""
 
 _WATCHDOG_STATES: frozenset[str] = frozenset({"ok", "stale"})
 """Permitted :attr:`CoordinatorData.watchdog_state` values."""
-
-# FastSourceMode -> Home Assistant climate HVAC mode string.
-_HVAC_MODE_BY_FAST_SOURCE: dict[FastSourceMode, str] = {
-    FastSourceMode.HEATING: "heat",
-    FastSourceMode.COOLING: "cool",
-    FastSourceMode.OFF: "off",
-}
-
-_VALVE_DOMAIN: str = "valve"
-"""Home Assistant domain of position-capable ``valve`` actuator entities.
-
-A ``valve`` reports its position in the ``current_position`` attribute (0..100)
-and is driven via ``valve.set_valve_position`` (integer ``position``); a
-``number`` valve reports the position as its numeric state and is driven via
-``number.set_value`` (float ``value``). Everything else in the read/write path
-is domain-agnostic.
-"""
 
 
 def _reload_signature(options: Mapping[str, Any]) -> dict[str, Any]:
@@ -457,13 +390,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             else None
         )
 
-        # Fallback cache for entity reads: entity_id -> (value, timestamp).
-        self._entity_cache: dict[str, tuple[float, datetime]] = {}
-
-        # Room-temperature plausibility state (C3): per-entity last accepted
-        # value and the pending candidate awaiting a second consistent sample.
-        self._temp_last_accepted: dict[str, float] = {}
-        self._temp_pending: dict[str, float] = {}
+        # Source-entity read path (stale cache + plausibility gates) and the
+        # actuator write path (thresholds + command caches), each with its own
+        # private state (extracted 2026-07-10; see readers.py / writers.py).
+        self._reader = SourceReader(hass)
+        self._writer = CommandWriter(hass)
 
         # Per-room last-fresh-data timestamp (S6): feeds the core S5 watchdog
         # via RoomInputs.last_update_age_minutes. Seeded on first sight so a
@@ -472,14 +403,6 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         # Consecutive command-vs-feedback divergence cycles per room (S8).
         self._valve_mismatch_cycles: dict[str, int] = {}
-
-        # Last value written to each valve entity (for the write threshold).
-        self._last_written_valve: dict[str, float] = {}
-
-        # Last fast-source command written per climate entity (S3):
-        # entity_id -> (hvac_mode, target_temp_c or None, monotonic timestamp).
-        # An unchanged command younger than _FAST_REASSERT_SECONDS is skipped.
-        self._last_written_fast: dict[str, tuple[str, float | None, float]] = {}
 
         # Watchdog heartbeat: last time at least one room had fresh data.
         self._last_heartbeat: datetime = datetime.now(UTC)
@@ -502,6 +425,16 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             immediate=False,
             function=self.async_request_refresh,
         )
+
+    @property
+    def _entity_cache(self) -> dict[str, tuple[float, datetime]]:
+        """The reader's stale cache (read/write delegate).
+
+        Kept after the 2026-07-10 :class:`SourceReader` extraction so existing
+        white-box staleness tests keep observing (and seeding) the cache
+        through the coordinator.
+        """
+        return self._reader.entity_cache
 
     # -- Setpoint / flag accessors (single source of truth) -----------------
 
@@ -960,16 +893,18 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # (frozen-but-present) humidity is the single most dangerous input in
         # cooling — both condensation defences trust it — so it also carries a
         # max state age (C4).
-        humidity = self._read_float_state(
+        humidity = self._reader.read_float_state(
             room_cfg.get(CONF_ENTITY_HUMIDITY),
-            max_age_seconds=_HUMIDITY_MAX_AGE_S,
+            max_age_seconds=HUMIDITY_MAX_AGE_S,
         )
         if humidity is not None and not 0.0 <= humidity <= 100.0:
             humidity = None
         # S6: per-room data age for the core S5 watchdog. A fresh temperature
         # resets the clock; otherwise the age grows from the last fresh sample
         # (or from the first time the room was ever seen).
-        room_temp = self._read_room_temperature(room_cfg.get(CONF_ENTITY_TEMP_ROOM))
+        room_temp = self._reader.read_room_temperature(
+            room_cfg.get(CONF_ENTITY_TEMP_ROOM)
+        )
         now = datetime.now(UTC)
         if room_temp is not None:
             self._room_last_fresh[name] = now
@@ -982,13 +917,19 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 setpoint_c=setpoint,
                 room_temperature_c=room_temp,
                 humidity_pct=humidity,
-                outdoor_temperature_c=self._read_float_state(
+                outdoor_temperature_c=self._reader.read_float_state(
                     room_cfg.get(CONF_ENTITY_TEMP_OUTDOOR)
                 ),
                 loops=loops,
-                fast_source_kind=self._read_fast_source_kind(room_cfg),
-                fast_source_on=self._read_fast_source_on(room_cfg),
-                hp_active_for_ufh=self._read_hp_active_for_ufh(room_cfg),
+                fast_source_kind=self._reader.read_fast_source_kind(
+                    room_cfg.get(CONF_FAST_SOURCE_KIND)
+                ),
+                fast_source_on=self._reader.read_fast_source_on(
+                    room_cfg.get(CONF_ENTITY_FAST_SOURCE)
+                ),
+                hp_active_for_ufh=self._reader.read_hp_active_for_ufh(
+                    room_cfg.get(CONF_ENTITY_HP_ACTIVE)
+                ),
                 cooling_enabled=cooling_enabled,
                 last_update_age_minutes=age_minutes,
             )
@@ -1029,10 +970,10 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     valve_position_pct=self._read_valve_position(
                         valves[i] if i < len(valves) else None
                     ),
-                    supply_temperature_c=self._read_float_state(
+                    supply_temperature_c=self._reader.read_float_state(
                         supplies[i] if i < len(supplies) else None
                     ),
-                    return_temperature_c=self._read_float_state(
+                    return_temperature_c=self._reader.read_float_state(
                         returns[i] if i < len(returns) else None
                     ),
                 )
@@ -1068,7 +1009,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         compared = False
         mismatch = False
         for i, valve_entity in enumerate(valves):
-            written = self._last_written_valve.get(valve_entity)
+            written = self._writer.last_written_valve(valve_entity)
             if written is None or i >= len(room_inputs.loops):
                 continue
             feedback = room_inputs.loops[i].valve_position_pct
@@ -1091,63 +1032,6 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             )
         return count >= _VALVE_MISMATCH_CYCLES
 
-    def _read_fast_source_kind(self, room_cfg: dict[str, Any]) -> FastSourceKind:
-        """Map the configured fast-source kind string to the core enum.
-
-        Args:
-            room_cfg: The room's configuration dict.
-
-        Returns:
-            The :class:`~tortoise_ufh.models.FastSourceKind` (``NONE`` on an
-            unrecognised or missing value).
-        """
-        raw = str(room_cfg.get(CONF_FAST_SOURCE_KIND, "none") or "none").lower()
-        try:
-            return FastSourceKind(raw)
-        except ValueError:
-            return FastSourceKind.NONE
-
-    def _read_fast_source_on(self, room_cfg: dict[str, Any]) -> bool | None:
-        """Read the fast source's on/off feedback from its climate entity.
-
-        Args:
-            room_cfg: The room's configuration dict.
-
-        Returns:
-            ``True`` if the split is running, ``False`` if off, ``None`` when no
-            entity is configured or its state is unavailable.
-        """
-        entity_id = room_cfg.get(CONF_ENTITY_FAST_SOURCE)
-        if not entity_id:
-            return None
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state.lower() in _UNAVAILABLE_STATES:
-            return None
-        return state.state.lower() != "off"
-
-    def _read_hp_active_for_ufh(self, room_cfg: dict[str, Any]) -> bool | None:
-        """Read whether the heat pump is actively heating the UFH supply.
-
-        Maps the optional :data:`CONF_ENTITY_HP_ACTIVE` entity's state to the
-        core's tri-state used for the integrator freeze during DHW / defrost:
-        ``True`` when the pump is heating the floor, ``False`` when it is
-        diverted (so the integrator freezes and cannot wind up), and ``None``
-        when no entity is configured or its state is unavailable.
-
-        Args:
-            room_cfg: The room's configuration dict.
-
-        Returns:
-            ``True`` / ``False`` / ``None`` per above.
-        """
-        entity_id = room_cfg.get(CONF_ENTITY_HP_ACTIVE)
-        if not entity_id:
-            return None
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state.lower() in _UNAVAILABLE_STATES:
-            return None
-        return state.state.lower() not in _HP_INACTIVE_STATES
-
     def _read_mode(self) -> Mode:
         """Read the global mode entity, holding the last mode on failure.
 
@@ -1157,7 +1041,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         if not self._mode_entity:
             return self._mode
         state = self.hass.states.get(self._mode_entity)
-        if state is None or state.state.lower() in _UNAVAILABLE_STATES:
+        if state is None or state.state.lower() in UNAVAILABLE_STATES:
             return self._mode
         try:
             return Mode(state.state.lower())
@@ -1206,14 +1090,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
     async def _write_valves(
         self, room_cfg: dict[str, Any], name: str, outputs: RoomOutputs
     ) -> None:
-        """Write the recommended valve position to every room valve entity.
+        """Write the room's valve command through the :class:`CommandWriter`.
 
-        Each actuator is driven per its domain: a ``valve``-domain entity via
-        ``valve.set_valve_position`` (integer ``position`` 0..100) and any other
-        (``number`` …) via ``number.set_value`` (float ``value``). A value is
-        written to an entity only when it differs from the last value written to
-        that entity by at least the room's ``valve_write_threshold_pct``. All
-        calls are non-blocking.
+        Thin delegate: resolves the room's valve entity list and its
+        ``valve_write_threshold_pct``, then hands off to
+        :meth:`CommandWriter.write_valves` (which owns the per-entity write
+        threshold cache and the domain dispatch).
 
         Args:
             room_cfg: The room's configuration dict.
@@ -1223,95 +1105,29 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         valves: list[str] = list(room_cfg.get(CONF_ENTITY_VALVES) or [])
         if not valves:
             return
-        threshold = self._controller_configs[name].valve_write_threshold_pct
-        value = outputs.valve_position_pct
-        for valve_entity in valves:
-            last = self._last_written_valve.get(valve_entity)
-            if last is not None and abs(value - last) < threshold:
-                continue
-            try:
-                if self._is_valve_domain(valve_entity):
-                    # valve.set_valve_position expects an int 0..100 position.
-                    await self.hass.services.async_call(
-                        "valve",
-                        "set_valve_position",
-                        {"entity_id": valve_entity, "position": round(value)},
-                        blocking=False,
-                    )
-                else:
-                    await self.hass.services.async_call(
-                        "number",
-                        "set_value",
-                        {"entity_id": valve_entity, "value": value},
-                        blocking=False,
-                    )
-            except Exception:  # noqa: BLE001
-                _LOGGER.exception(
-                    "Failed to set valve %s for room %s", valve_entity, name
-                )
-            else:
-                self._last_written_valve[valve_entity] = value
+        await self._writer.write_valves(
+            valves,
+            name,
+            outputs,
+            threshold_pct=self._controller_configs[name].valve_write_threshold_pct,
+        )
 
     async def _write_fast_source(
         self, room_cfg: dict[str, Any], name: str, outputs: RoomOutputs
     ) -> None:
-        """Write the fast-source command to the room's climate entity.
+        """Write the room's fast-source command through the writer.
 
-        Issues ``set_hvac_mode`` and, when the split is on, ``set_temperature``.
-        All calls are non-blocking.
-
-        Command cache (S3, 2026-07-09): an unchanged ``(hvac_mode, target)``
-        pair is NOT re-sent every cycle — mirroring ``_last_written_valve`` —
-        so the split is not spammed with identical commands (IR beeps, stomping
-        on manual louvre/fan tweaks). The command is still re-asserted after
-        :data:`_FAST_REASSERT_SECONDS` so a missed write or a manual override
-        self-heals: the machine stays the owner.
+        Thin delegate to :meth:`CommandWriter.write_fast_source` (which owns
+        the S3 command cache and the periodic re-assert).
 
         Args:
             room_cfg: The room's configuration dict.
             name: The room name.
             outputs: The room's controller outputs.
         """
-        entity_id = room_cfg.get(CONF_ENTITY_FAST_SOURCE)
-        if not entity_id:
-            return
-        command = outputs.fast_source
-        hvac_mode = (
-            _HVAC_MODE_BY_FAST_SOURCE.get(command.mode, "off") if command.on else "off"
+        await self._writer.write_fast_source(
+            room_cfg.get(CONF_ENTITY_FAST_SOURCE), name, outputs
         )
-        target = command.target_temperature_c if command.on else None
-        cached = self._last_written_fast.get(entity_id)
-        now_monotonic = time.monotonic()
-        if (
-            cached is not None
-            and cached[0] == hvac_mode
-            and cached[1] == target
-            and now_monotonic - cached[2] < _FAST_REASSERT_SECONDS
-        ):
-            return
-        try:
-            await self.hass.services.async_call(
-                "climate",
-                "set_hvac_mode",
-                {"entity_id": entity_id, "hvac_mode": hvac_mode},
-                blocking=False,
-            )
-            if command.on and command.target_temperature_c is not None:
-                await self.hass.services.async_call(
-                    "climate",
-                    "set_temperature",
-                    {
-                        "entity_id": entity_id,
-                        "temperature": command.target_temperature_c,
-                    },
-                    blocking=False,
-                )
-        except Exception:  # noqa: BLE001
-            _LOGGER.exception(
-                "Failed to control fast source %s for room %s", entity_id, name
-            )
-        else:
-            self._last_written_fast[entity_id] = (hvac_mode, target, now_monotonic)
 
     # -- Internal: farewell command (live -> shadow/off, unload) -------------
 
@@ -1333,64 +1149,20 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
     async def _async_farewell_room(self, room_cfg: dict[str, Any], name: str) -> None:
         """Park a room's actuators safely when releasing live ownership (C5).
 
-        Emitted exactly once on a live -> shadow/off transition and on entry
-        unload. The split is always commanded OFF (nobody regulates it any
-        more). The valve is mode-dependent: in COOLING it is driven to 0 —
-        an orphaned open valve would keep passing chilled water while the room
-        silently drops out of BOTH condensation defences (the global dew
-        maximum and the local S2 throttle). In HEATING the position is left
-        untouched: warm supply water is bounded by the heat pump's own curve,
-        so holding the last position keeps the house warm and is strictly
-        safer than cold-parking it in winter.
+        Thin delegate to :meth:`CommandWriter.farewell_room` (split always OFF;
+        valve driven to 0 in COOLING, left holding in HEATING), passing the
+        coordinator's current global mode.
 
         Args:
             room_cfg: The room's configuration dict.
             name: The room name.
         """
-        entity_id = room_cfg.get(CONF_ENTITY_FAST_SOURCE)
-        if entity_id:
-            try:
-                await self.hass.services.async_call(
-                    "climate",
-                    "set_hvac_mode",
-                    {"entity_id": entity_id, "hvac_mode": "off"},
-                    blocking=False,
-                )
-            except Exception:  # noqa: BLE001
-                _LOGGER.exception(
-                    "Farewell: failed to turn off fast source %s for room %s",
-                    entity_id,
-                    name,
-                )
-            else:
-                self._last_written_fast[entity_id] = ("off", None, time.monotonic())
-        if self._mode is not Mode.COOLING:
-            return
-        valves: list[str] = list(room_cfg.get(CONF_ENTITY_VALVES) or [])
-        for valve_entity in valves:
-            try:
-                if self._is_valve_domain(valve_entity):
-                    await self.hass.services.async_call(
-                        "valve",
-                        "set_valve_position",
-                        {"entity_id": valve_entity, "position": 0},
-                        blocking=False,
-                    )
-                else:
-                    await self.hass.services.async_call(
-                        "number",
-                        "set_value",
-                        {"entity_id": valve_entity, "value": 0.0},
-                        blocking=False,
-                    )
-            except Exception:  # noqa: BLE001
-                _LOGGER.exception(
-                    "Farewell: failed to close valve %s for room %s",
-                    valve_entity,
-                    name,
-                )
-            else:
-                self._last_written_valve[valve_entity] = 0.0
+        await self._writer.farewell_room(
+            room_cfg.get(CONF_ENTITY_FAST_SOURCE),
+            list(room_cfg.get(CONF_ENTITY_VALVES) or []),
+            name,
+            mode=self._mode,
+        )
 
     async def async_farewell_all(self) -> None:
         """Park every live room's actuators (called on config-entry unload)."""
@@ -1400,198 +1172,20 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
     # -- Internal: entity reads ---------------------------------------------
 
-    @staticmethod
-    def _is_valve_domain(entity_id: str) -> bool:
-        """Return whether ``entity_id`` is a Home Assistant ``valve`` entity.
-
-        ``valve`` actuators report position in the ``current_position``
-        attribute and are driven via ``valve.set_valve_position``; every other
-        domain (``number`` …) reports position as its numeric state and is
-        driven via ``number.set_value``.
-
-        Args:
-            entity_id: A non-empty Home Assistant entity id.
-
-        Returns:
-            ``True`` for a ``valve``-domain entity, ``False`` otherwise.
-        """
-        return split_entity_id(entity_id)[0] == _VALVE_DOMAIN
-
     def _read_valve_position(self, entity_id: str | None) -> float | None:
-        """Read a valve actuator's position [0..100 %], dispatching by domain.
+        """Read a valve actuator's position [0..100 %] through the reader.
 
-        A ``valve``-domain actuator reports its position in the
-        ``current_position`` attribute (its *state* is ``open`` / ``closed`` /
-        ``opening`` / ``closing`` and is not numeric), so it is read from that
-        attribute. Every other domain (``number`` …) reports the position as its
-        numeric state and is read through :meth:`_read_float_state` with its
-        short stale cache — so the ``number`` path is byte-for-byte the previous
-        behaviour.
+        Thin delegate to :meth:`SourceReader.read_valve_position` (domain
+        dispatch + per-loop S8 plausibility), kept on the coordinator after
+        the 2026-07-10 extraction so existing white-box tests keep exercising
+        the read path through the coordinator.
 
         Args:
-            entity_id: The valve actuator entity id, or ``None`` / empty when the
-                loop has no valve at this position.
+            entity_id: The valve actuator entity id, or ``None`` / empty when
+                the loop has no valve at this position.
 
         Returns:
-            The reported position [0..100 %], or ``None`` when it cannot be read.
+            The reported position [0..100 %], or ``None`` when it cannot be
+            read.
         """
-        if not entity_id:
-            return None
-        if not self._is_valve_domain(entity_id):
-            value_or_none = self._read_float_state(entity_id)
-        else:
-            state = self.hass.states.get(entity_id)
-            if state is None:
-                return None
-            position = state.attributes.get("current_position")
-            if position is None:
-                return None
-            try:
-                value = float(position)
-            except (ValueError, TypeError):
-                return None
-            value_or_none = value if math.isfinite(value) else None
-        # Per-loop plausibility (S8): a garbage feedback (e.g. 255 from a stuck
-        # Modbus register) nulls ONLY this loop's feedback instead of tripping
-        # the LoopInput validator and degrading the whole room to sensor_lost.
-        if value_or_none is not None and not 0.0 <= value_or_none <= 100.0:
-            _LOGGER.warning(
-                "Valve %s reported implausible position %s%%; ignoring",
-                entity_id,
-                value_or_none,
-            )
-            return None
-        return value_or_none
-
-    def _read_room_temperature(self, entity_id: str | None) -> float | None:
-        """Read a room-temperature entity with plausibility gating (C3 + C4).
-
-        On top of :meth:`_read_float_state` (which already enforces the
-        :data:`_ROOM_TEMP_MAX_AGE_S` state age), a sample is rejected — treated
-        exactly like a missing reading, triggering the core's safe degrade —
-        when it is outside :data:`_TEMP_PLAUSIBLE_MIN_C` ..
-        :data:`_TEMP_PLAUSIBLE_MAX_C` (e.g. the DS18B20 85 degC power-on-reset)
-        or when it jumps more than :data:`_TEMP_MAX_JUMP_K` from the last
-        accepted value. Two consecutive mutually consistent samples accept a
-        genuinely new level, so a real fast change is adopted within two
-        cycles instead of being locked out forever.
-
-        Args:
-            entity_id: The room-temperature entity id, or ``None`` / empty.
-
-        Returns:
-            The accepted temperature [degC], or ``None`` when unavailable or
-            rejected as implausible.
-        """
-        if not entity_id:
-            return None
-        value = self._read_float_state(entity_id, max_age_seconds=_ROOM_TEMP_MAX_AGE_S)
-        if value is None:
-            self._temp_pending.pop(entity_id, None)
-            return None
-        if not _TEMP_PLAUSIBLE_MIN_C <= value <= _TEMP_PLAUSIBLE_MAX_C:
-            _LOGGER.warning(
-                "Entity %s reported implausible room temperature %.1f degC; "
-                "rejecting sample",
-                entity_id,
-                value,
-            )
-            self._temp_pending.pop(entity_id, None)
-            return None
-        last = self._temp_last_accepted.get(entity_id)
-        pending = self._temp_pending.get(entity_id)
-        jumped = last is not None and abs(value - last) > _TEMP_MAX_JUMP_K
-        confirmed = pending is not None and abs(value - pending) <= _TEMP_MAX_JUMP_K
-        if jumped and not confirmed:
-            _LOGGER.warning(
-                "Entity %s jumped %.1f -> %.1f degC in one cycle; holding "
-                "sample for confirmation",
-                entity_id,
-                last,
-                value,
-            )
-            self._temp_pending[entity_id] = value
-            return None
-        # Either plausible against the last accepted value, or the second
-        # consecutive sample consistent with the pending candidate — the new
-        # level is real (e.g. a window opened), accept it.
-        self._temp_last_accepted[entity_id] = value
-        self._temp_pending.pop(entity_id, None)
-        return value
-
-    def _read_float_state(
-        self, entity_id: str | None, *, max_age_seconds: float | None = None
-    ) -> float | None:
-        """Read a numeric entity state with a short stale cache.
-
-        On a successful read the value is cached with the current time. When the
-        entity is unavailable/unknown the cached value is returned if it is
-        younger than :data:`ENTITY_STALE_MAX_SECONDS`; otherwise ``None``.
-
-        When ``max_age_seconds`` is given, a present-but-frozen state whose last
-        report is older than that limit is treated as **no reading at all**
-        (C4) — deliberately NOT falling back to the short cache, which would
-        hold the very same stale value.
-
-        Args:
-            entity_id: The source entity id, or ``None`` / empty for "not
-                configured".
-            max_age_seconds: Optional maximum age of the state's last report
-                [s]; older states are rejected outright.
-
-        Returns:
-            The numeric value, or ``None`` when unreadable and no fresh cache
-            exists.
-        """
-        if not entity_id:
-            return None
-        state = self.hass.states.get(entity_id)
-        if (
-            state is not None
-            and state.state.lower() not in _UNAVAILABLE_STATES
-            and max_age_seconds is not None
-        ):
-            # last_reported also covers same-value re-reports (HA 2024.4+);
-            # fall back to last_updated on older cores.
-            reported = getattr(state, "last_reported", None) or state.last_updated
-            age_s = (datetime.now(UTC) - reported).total_seconds()
-            if age_s > max_age_seconds:
-                _LOGGER.warning(
-                    "Entity %s state is %.0f min old (limit %.0f min); "
-                    "treating as unavailable",
-                    entity_id,
-                    age_s / 60.0,
-                    max_age_seconds / 60.0,
-                )
-                return None
-        if state is None or state.state.lower() in _UNAVAILABLE_STATES:
-            cached = self._entity_cache.get(entity_id)
-            if cached is not None:
-                value, ts = cached
-                age = (datetime.now(UTC) - ts).total_seconds()
-                if age <= ENTITY_STALE_MAX_SECONDS:
-                    _LOGGER.debug(
-                        "Entity %s unavailable; using cached %.2f (age %.0fs)",
-                        entity_id,
-                        value,
-                        age,
-                    )
-                    return value
-            _LOGGER.warning(
-                "Entity %s is unavailable and no recent cached value exists",
-                entity_id,
-            )
-            return None
-        try:
-            value = float(state.state)
-        except (ValueError, TypeError):
-            return None
-        if not math.isfinite(value):
-            _LOGGER.warning(
-                "Entity %s reported non-finite value %r; ignoring",
-                entity_id,
-                state.state,
-            )
-            return None
-        self._entity_cache[entity_id] = (value, datetime.now(UTC))
-        return value
+        return self._reader.read_valve_position(entity_id)

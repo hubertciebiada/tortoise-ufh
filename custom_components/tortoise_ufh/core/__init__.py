@@ -55,6 +55,7 @@ from .dew_point import (
     dew_point,
     dew_point_simplified,
 )
+from .fast_source import FastSourceMachine
 from .metrics import (
     SimMetrics,
     assert_comfort,
@@ -98,6 +99,7 @@ from .simulation_log import SimRecord, SimulationLog
 # ``SimulatedRoom`` is defined in :mod:`tortoise_ufh.simulator` (the canonical
 # BuildingSimulator bridge listed in the BUILD_SPEC) and re-exported here.
 from .simulator import BuildingSimulator, HeatPumpMode, SimulatedRoom
+from .trend import TrendEstimator
 from .ufh_loop import LoopGeometry, loop_power, loop_power_with_valve
 from .weather import (
     ChannelProfile,
@@ -108,7 +110,7 @@ from .weather import (
 )
 from .weather_comp import CoolingCompCurve, WeatherCompCurve
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 __all__ = [
     "BUILDING_PROFILES",
@@ -133,6 +135,7 @@ __all__ = [
     "CoolingCompCurve",
     "FastSourceCommand",
     "FastSourceKind",
+    "FastSourceMachine",
     "FastSourceMode",
     "HeatPumpMode",
     "LoopGeometry",
@@ -161,6 +164,7 @@ __all__ = [
     "SimulatedRoom",
     "SimulationLog",
     "SyntheticWeather",
+    "TrendEstimator",
     "WeatherCompCurve",
     "WeatherPoint",
     "WeatherSource",

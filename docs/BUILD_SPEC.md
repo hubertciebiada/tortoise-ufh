@@ -75,6 +75,9 @@ tortoise-ufh/
     manifest.json
     const.py                         # CONF_* vocabulary + defaults + PLATFORMS + knob specs
     coordinator.py                   # DataUpdateCoordinator: read states, run core, write commands
+    readers.py                       # SourceReader: entity reads + plausibility (annex 2026-07-10)
+    writers.py                       # CommandWriter: valve/split writes + caches (annex 2026-07-10)
+    tuning.py                        # controller-knob introspection helpers (annex 2026-07-10)
     config_flow.py                   # multi-step wizard + options-flow menu (selectors)
     entity_validator.py              # hardware-agnostic unit validation
     number.py                        # global home-temp + per-room offset (writable)
@@ -102,6 +105,8 @@ tortoise-ufh/
       rc_model.py                    # RCParams, ModelOrder, RCModel (3R3C ZOH via expm)
       pid.py                         # PIDController (PI + anti-windup)
       controller.py                  # RoomController (black box) + BuildingController (orchestrator)
+      fast_source.py                 # FastSourceMachine (split direction/dwell; annex 2026-07-10)
+      trend.py                       # TrendEstimator (filtered dT/dt trend; annex 2026-07-10)
       dew_point.py                   # Magnus dew point + cooling throttle
       weather_comp.py                # WeatherCompCurve / CoolingCompCurve (feedforward)
       ufh_loop.py                    # LoopGeometry + loop_power (EN 1264) — used by simulator
@@ -129,6 +134,30 @@ tortoise-ufh/
 ```
 
 ---
+
+> **Annex 2026-07-10 (structural refactor, zero behaviour change).** Five submodules were
+> extracted verbatim from the largest modules; every public API, signature and numeric
+> path is unchanged (simulation results on both seeds are bit-identical):
+>
+> * `core/fast_source.py` — `FastSourceMachine`: the three-state split direction machine
+>   (OFF/HEATING/COOLING), min ON/OFF dwell clock and S4 physical-feedback sync, formerly
+>   ~6 methods + 5 state fields inside `RoomController`. `RoomController` delegates; the
+>   mode→demand mapping and the HEATER-cannot-cool rule stay in `controller.py`.
+>   `FAST_TARGET_OFFSET_K` moved with it and is re-exported from `controller.py`.
+> * `core/trend.py` — `TrendEstimator`: the debounce-aware EMA trend filter (S10),
+>   formerly 3 fields + inline logic in `RoomController.step` / `_safe_degrade`.
+> * `readers.py` — `SourceReader`: entity reads, stale cache, state-age gate (C4) and the
+>   C3/S8 plausibility gates, formerly `coordinator._read_*` + two private caches.
+> * `writers.py` — `CommandWriter`: valve/split service calls, write-threshold and S3
+>   re-assert caches, farewell parking (C5), formerly `coordinator._write_*` / farewell.
+> * `tuning.py` — controller-knob introspection (names/ranges/descriptors/values/coercion),
+>   formerly private helpers in `websocket.py`; the options flow reuses `global_controller`.
+>
+> `controller.py` keeps `RoomController` + `BuildingController` per this section (no split);
+> the coordinator remains the only owner of the cycle, setpoints/Store and the watchdog.
+> `CONF_CONTROLLER` moved from `config_flow.py` to `const.py` (same key string; re-imported
+> in `config_flow.py` for compatibility) so runtime modules no longer import the wizard.
+> The core re-export hub gained `FastSourceMachine` and `TrendEstimator` (additive only).
 
 ## 3. Units & conventions (repo-wide, non-negotiable)
 

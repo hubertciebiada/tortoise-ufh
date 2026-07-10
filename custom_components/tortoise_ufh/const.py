@@ -48,6 +48,12 @@ CONF_HOME_SETPOINT: str = "home_setpoint"
 CONF_ENTITY_MODE: str = "entity_mode"
 """Global mode input entity (select/input_select): heating/transitional/cooling/off."""
 
+CONF_CONTROLLER: str = "controller"
+"""Serialised global :class:`~core.config.ControllerConfig` knobs, stored under
+``entry.data`` (wizard result) and overlaid by ``entry.options`` (options flow /
+``set_tuning``). Defined here — not in ``config_flow.py`` — so runtime modules
+(coordinator, websocket) never import the config wizard for one string key."""
+
 CONF_LIVE_CONTROL: str = "live_control"
 """LEGACY per-room shadow->live toggle map (options), keyed by room name.
 
@@ -67,7 +73,7 @@ control participation. ``state`` is one of :data:`ROOM_STATES`."""
 CONF_ROOM_TUNING: str = "room_tuning"
 """Options map ``{room_name: {field: value}}`` of *sparse* per-room controller
 overrides. Only fields a room deliberately overrides are stored; every other
-field falls back to the global :data:`~config_flow.CONF_CONTROLLER` tuning. An
+field falls back to the global :data:`CONF_CONTROLLER` tuning. An
 empty override dict for a room means "back to global" and is pruned entirely."""
 
 ROOM_STATE_OFF: str = "off"

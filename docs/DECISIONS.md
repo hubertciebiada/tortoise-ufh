@@ -370,3 +370,52 @@ the dew-point layers (§2), and the control law (Q4).
 - Installation docs: hardware pipe-condensation sensor on the manifold as the independent
   third protection layer, manifold insulation, supply probes on the manifold beam (before
   the valves — dew-F5), an RH sensor for every cooled room.
+
+## 9. Revision — architectural round: modularity without behaviour change (2026-07-10)
+
+A purely structural refactor after v0.4.0: module boundaries and single
+responsibility, with a hard zero-behaviour-change gate (all 295 unit + 20
+simulation tests pass unmodified; closed-loop simulation fingerprints on both
+seeds are **bit-identical** before and after — the order of floating-point
+operations was preserved by extracting code verbatim).
+
+- **`core/fast_source.py` — `FastSourceMachine`** (BUILD_SPEC §2 annex
+  2026-07-10). The three-state split direction machine (OFF/HEATING/COOLING),
+  the min ON/OFF dwell clock (single per-step `tick`), and the S4 physical
+  feedback sync moved out of `RoomController` (~350 lines, 6 methods, 5 state
+  fields — the part with the dwell double-accumulation bug history) into a
+  self-contained, unit-testable class. The controller delegates; the
+  mode→demand mapping and HEATER-cannot-cool stay in `controller.py`.
+  `FAST_TARGET_OFFSET_K` moved with it (re-exported from `controller.py`).
+- **`core/trend.py` — `TrendEstimator`.** The debounce-aware EMA trend filter
+  (S10: min-dt 60 s accumulation, tau = 900 s, sensor-loss invalidation) moved
+  out of `RoomController.step` / `_safe_degrade` into a 1:1 class.
+- **`readers.py` — `SourceReader` / `writers.py` — `CommandWriter`.** The
+  coordinator's read path (stale cache, C4 state-age gate, C3 room-temperature
+  plausibility, S8 per-loop valve plausibility, HP/fast on-off mapping) and
+  write path (valve write threshold + domain dispatch, S3 fast-command cache
+  with periodic re-assert, C5 farewell parking) each own their caches in a
+  dedicated adapter class. The coordinator keeps orchestration, setpoints +
+  Store, watchdog and `RoomInputs` assembly, and exposes thin delegates where
+  the HA test tier observes the old surface (`_read_valve_position`,
+  `_write_valves`, `_entity_cache`).
+- **`tuning.py`.** Knob introspection (names, ranges, descriptors, effective
+  values, sparse room overrides, payload coercion) moved out of
+  `websocket.py`; the websocket keeps handlers + payload-view dataclasses, and
+  `config_flow._current_controller` now reuses `tuning.global_controller`
+  (identical merge/fallback semantics).
+- **`CONF_CONTROLLER` → `const.py`.** The one inverted edge of the adapter
+  import graph (runtime modules importing the config wizard for a single
+  string) is gone; `config_flow.py` re-imports the key for compatibility.
+  The key string is unchanged (Store/entry contract untouched).
+- **Panel: internal reorganization only.** Still ONE vanilla-JS file (CSP, no
+  build step); the 100+ methods of `TortoiseUfhPanel` are now grouped under
+  eleven section banners (lifecycle → i18n → WS/data → view-model → skeleton/
+  hero → rooms table → detail drawer → valves → assist → tuning → charts) —
+  a pure method-reordering (verified line-multiset-identical plus banners).
+- **Deliberately NOT done:** no `controller.py` split (frozen §2 keeps
+  `RoomController` + `BuildingController` together), no changes to `models.py`
+  / `config.py` / `pid.py` / `safety.py` / `dew_point.py` (frozen contracts),
+  no touching `simulator.py` (dense seeded numeric path), no Protocol layers
+  between coordinator and reader/writer (one consumer, one implementation),
+  no splitting of the panel into files, no renames of public symbols.

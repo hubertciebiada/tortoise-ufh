@@ -52,6 +52,7 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_ADD_ANOTHER,
+    CONF_CONTROLLER,
     CONF_COOLING_ENABLED,
     CONF_ENTITY_FAST_SOURCE,
     CONF_ENTITY_HUMIDITY,
@@ -87,6 +88,7 @@ from .const import (
 )
 from .core.config import ControllerConfig
 from .entity_validator import EntityValidator
+from .tuning import global_controller
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -100,9 +102,8 @@ _LOGGER = logging.getLogger(__name__)
 CONF_HAS_FAST_SOURCE: str = "has_fast_source"
 """Per-room wizard flag: whether the room has a fast auxiliary source."""
 
-CONF_CONTROLLER: str = "controller"
-"""Serialised default :class:`ControllerConfig` knobs (``entry.data`` /
-``entry.options``)."""
+# NOTE: ``CONF_CONTROLLER`` moved to ``const.py`` (2026-07-10) so runtime
+# modules never import this wizard; it is re-exported above for compatibility.
 
 _ENTITY_UNAVAILABLE: str = "entity_unavailable"
 """Non-blocking validation error key (an entity may come online later)."""
@@ -1388,7 +1389,8 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
 
         Merges the serialised knobs from ``entry.data`` (setup) with any override
         in ``entry.options``. Falls back to :class:`ControllerConfig` defaults if
-        the stored values are absent or invalid.
+        the stored values are absent or invalid. Delegates to
+        :func:`~tuning.global_controller` (single source of the merge rule).
 
         Args:
             entry: The config entry.
@@ -1396,11 +1398,4 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         Returns:
             The current :class:`ControllerConfig`.
         """
-        merged: dict[str, Any] = {
-            **entry.data.get(CONF_CONTROLLER, {}),
-            **entry.options.get(CONF_CONTROLLER, {}),
-        }
-        try:
-            return ControllerConfig(**merged)
-        except (TypeError, ValueError):
-            return ControllerConfig()
+        return global_controller(entry)

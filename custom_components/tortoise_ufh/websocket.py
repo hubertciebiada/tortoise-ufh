@@ -34,8 +34,8 @@ from homeassistant.components import websocket_api
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 
-from .config_flow import CONF_CONTROLLER
 from .const import (
+    CONF_CONTROLLER,
     CONF_COOLING_ENABLED,
     CONF_ENTITY_FAST_SOURCE,
     CONF_ENTITY_HUMIDITY,
@@ -49,9 +49,6 @@ from .const import (
     CONF_ROOM_NAME,
     CONF_ROOM_TUNING,
     CONF_ROOMS,
-    CONTROLLER_BOOL_KNOB,
-    CONTROLLER_KNOB_UNITS,
-    CONTROLLER_NUMBER_KNOBS,
     DEFAULT_COOLING_ENABLED,
     DEFAULT_FAST_SOURCE_KIND,
     DOMAIN,
@@ -65,9 +62,17 @@ from .const import (
 )
 from .core.config import ControllerConfig
 from .core.models import Mode
+from .tuning import (
+    coerce_tuning_values,
+    global_controller,
+    global_controller_dict,
+    knob_names,
+    knob_values,
+    room_overrides,
+    tuning_fields,
+)
 
 if TYPE_CHECKING:
-    from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
     from .coordinator import TortoiseUfhCoordinator
@@ -368,7 +373,7 @@ class TuningResult:
 
     def __post_init__(self) -> None:
         """Validate that the value maps cover every exposed knob."""
-        expected = set(_knob_names())
+        expected = set(knob_names())
         for label, values in (
             ("global_values", self.global_values),
             ("defaults", self.defaults),
@@ -495,120 +500,6 @@ def _resolve_global_dew_point_entity(
     return registry.async_get_entity_id(
         "sensor", DOMAIN, f"{entry_id}_{_GLOBAL_DEW_POINT_KEY}"
     )
-
-
-# ---------------------------------------------------------------------------
-# Controller-tuning helpers (get_tuning / set_tuning)
-# ---------------------------------------------------------------------------
-
-
-def _knob_names() -> list[str]:
-    """Return every exposed knob field name (numeric knobs + the boolean knob)."""
-    return [name for name, _low, _high, _step in CONTROLLER_NUMBER_KNOBS] + [
-        CONTROLLER_BOOL_KNOB
-    ]
-
-
-def _knob_range(field_name: str) -> tuple[float, float] | None:
-    """Return a numeric knob's ``(min, max)``, or ``None`` for the boolean knob.
-
-    Args:
-        field_name: A candidate knob field name.
-
-    Returns:
-        The inclusive ``(min, max)`` for a numeric knob, or ``None`` when the
-        field is the boolean knob or is not an exposed knob.
-    """
-    for name, low, high, _step in CONTROLLER_NUMBER_KNOBS:
-        if name == field_name:
-            return (low, high)
-    return None
-
-
-def _tuning_fields() -> tuple[dict[str, Any], ...]:
-    """Build the ordered knob descriptors for the ``get_tuning`` payload."""
-    fields: list[dict[str, Any]] = []
-    for name, low, high, step in CONTROLLER_NUMBER_KNOBS:
-        fields.append(
-            {
-                "name": name,
-                "type": "number",
-                "min": low,
-                "max": high,
-                "step": step,
-                "unit": CONTROLLER_KNOB_UNITS.get(name, ""),
-            }
-        )
-    fields.append(
-        {
-            "name": CONTROLLER_BOOL_KNOB,
-            "type": "bool",
-            "unit": CONTROLLER_KNOB_UNITS.get(CONTROLLER_BOOL_KNOB, ""),
-        }
-    )
-    return tuple(fields)
-
-
-def _knob_values(config: ControllerConfig) -> dict[str, Any]:
-    """Extract the exposed-knob values (numeric + boolean) from a config."""
-    values: dict[str, Any] = {
-        name: float(getattr(config, name))
-        for name, _low, _high, _step in CONTROLLER_NUMBER_KNOBS
-    }
-    values[CONTROLLER_BOOL_KNOB] = bool(getattr(config, CONTROLLER_BOOL_KNOB))
-    return values
-
-
-def _global_controller_dict(entry: ConfigEntry) -> dict[str, Any]:
-    """Return the merged global controller dict (``entry.data`` <- ``options``)."""
-    return {
-        **entry.data.get(CONF_CONTROLLER, {}),
-        **entry.options.get(CONF_CONTROLLER, {}),
-    }
-
-
-def _global_controller(entry: ConfigEntry) -> ControllerConfig:
-    """Resolve the effective global :class:`ControllerConfig` for an entry.
-
-    Args:
-        entry: The config entry.
-
-    Returns:
-        The validated global controller config, or library defaults when the
-        persisted values are absent or invalid.
-    """
-    try:
-        return ControllerConfig(**_global_controller_dict(entry))
-    except (TypeError, ValueError):
-        return ControllerConfig()
-
-
-def _room_overrides(entry: ConfigEntry) -> dict[str, dict[str, Any]]:
-    """Return the sparse per-room override map, filtered to known knob fields.
-
-    Args:
-        entry: The config entry.
-
-    Returns:
-        ``{room: {field: value}}`` containing only recognised knob fields; rooms
-        or fields that are not valid knobs are dropped.
-    """
-    raw: Any = entry.options.get(CONF_ROOM_TUNING, {})
-    knobs = set(_knob_names())
-    out: dict[str, dict[str, Any]] = {}
-    if not isinstance(raw, dict):
-        return out
-    for room, override in raw.items():
-        if not isinstance(override, dict):
-            continue
-        clean = {
-            field_name: value
-            for field_name, value in override.items()
-            if field_name in knobs
-        }
-        if clean:
-            out[str(room)] = clean
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -796,10 +687,10 @@ def ws_get_tuning(
 
     entry = coordinator.config_entry
     result = TuningResult(
-        fields=_tuning_fields(),
-        global_values=_knob_values(_global_controller(entry)),
-        rooms=_room_overrides(entry),
-        defaults=_knob_values(ControllerConfig()),
+        fields=tuning_fields(),
+        global_values=knob_values(global_controller(entry)),
+        rooms=room_overrides(entry),
+        defaults=knob_values(ControllerConfig()),
     )
     connection.send_result(msg["id"], result.to_dict())
 
@@ -968,60 +859,6 @@ def ws_set_mode(
     connection.send_result(msg["id"], {"mode": mode.value})
 
 
-def _coerce_tuning_values(
-    raw_values: dict[str, Any], *, allow_delete: bool
-) -> dict[str, Any]:
-    """Coerce + range-validate submitted knob values.
-
-    Args:
-        raw_values: The ``{field: value}`` payload. A ``None`` value requests
-            deletion of that field's override (room scope only).
-        allow_delete: Whether ``None`` values are permitted (room scope).
-
-    Returns:
-        A ``{field: value}`` dict where numeric knobs are floats, the boolean
-        knob is a bool, and (when ``allow_delete``) a deleted field maps to
-        ``None``.
-
-    Raises:
-        ValueError: If a field is not an exposed knob, a value has the wrong
-            type, a numeric value is out of range, or a ``None`` is submitted
-            when ``allow_delete`` is ``False``.
-    """
-    knobs = set(_knob_names())
-    coerced: dict[str, Any] = {}
-    for field_name, value in raw_values.items():
-        if field_name not in knobs:
-            msg = f"unknown knob {field_name!r}"
-            raise ValueError(msg)
-        if value is None:
-            if not allow_delete:
-                msg = f"cannot clear global knob {field_name!r}"
-                raise ValueError(msg)
-            coerced[field_name] = None
-            continue
-        if field_name == CONTROLLER_BOOL_KNOB:
-            if not isinstance(value, bool):
-                msg = f"{field_name} must be a boolean, got {value!r}"
-                raise ValueError(msg)
-            coerced[field_name] = value
-            continue
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError) as err:
-            msg = f"{field_name} must be a number, got {value!r}"
-            raise ValueError(msg) from err
-        if not math.isfinite(numeric):
-            msg = f"{field_name} must be finite, got {numeric}"
-            raise ValueError(msg)
-        rng = _knob_range(field_name)
-        if rng is not None and not rng[0] <= numeric <= rng[1]:
-            msg = f"{field_name} must be in [{rng[0]}, {rng[1]}], got {numeric}"
-            raise ValueError(msg)
-        coerced[field_name] = numeric
-    return coerced
-
-
 @websocket_api.require_admin
 @websocket_api.websocket_command(
     {
@@ -1072,17 +909,17 @@ def ws_set_tuning(
 
     raw_values: dict[str, Any] = dict(msg["values"])
     try:
-        coerced = _coerce_tuning_values(raw_values, allow_delete=not is_global)
+        coerced = coerce_tuning_values(raw_values, allow_delete=not is_global)
     except ValueError as err:
         connection.send_error(msg["id"], _ERR_INVALID_TUNING, str(err))
         return
 
-    global_dict = _global_controller_dict(entry)
+    global_dict = global_controller_dict(entry)
     new_override: dict[str, Any] = {}
     if is_global:
         merged = {**global_dict, **coerced}
     else:
-        new_override = dict(_room_overrides(entry).get(scope, {}))
+        new_override = dict(room_overrides(entry).get(scope, {}))
         for field_name, value in coerced.items():
             if value is None:
                 new_override.pop(field_name, None)
@@ -1099,7 +936,7 @@ def ws_set_tuning(
     if is_global:
         new_options = {**entry.options, CONF_CONTROLLER: asdict(validated)}
     else:
-        room_map = {room: dict(vals) for room, vals in _room_overrides(entry).items()}
+        room_map = {room: dict(vals) for room, vals in room_overrides(entry).items()}
         if new_override:
             room_map[scope] = new_override
         else:
@@ -1109,10 +946,10 @@ def ws_set_tuning(
     hass.config_entries.async_update_entry(entry, options=new_options)
 
     result = TuningResult(
-        fields=_tuning_fields(),
-        global_values=_knob_values(_global_controller(entry)),
-        rooms=_room_overrides(entry),
-        defaults=_knob_values(ControllerConfig()),
+        fields=tuning_fields(),
+        global_values=knob_values(global_controller(entry)),
+        rooms=room_overrides(entry),
+        defaults=knob_values(ControllerConfig()),
     )
     reply = result.to_dict()
     reply["scope"] = scope

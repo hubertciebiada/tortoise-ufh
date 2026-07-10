@@ -32,18 +32,23 @@ Core talks to the outside only through plain frozen dataclasses and structural `
 
 - **Core** — `custom_components/tortoise_ufh/core/`. Pure library: RC thermal model,
   `PIDController`, `RoomController` (the per-room black box) + `BuildingController`
-  (orchestrator), dew point, weather-comp feedforward, EN 1264 loop power, safety rules,
+  (orchestrator), `FastSourceMachine` (`fast_source.py`: split direction/dwell machine the
+  controller delegates to), `TrendEstimator` (`trend.py`: filtered dT/dt), dew point,
+  weather-comp feedforward, EN 1264 loop power, safety rules,
   metrics. No HA import, ever. Vendored inside the integration for a self-contained HACS
   install; imports its siblings relatively (`from .X import ...`).
 - **Adapter** — `custom_components/tortoise_ufh/`. Thin HA shim: `TortoiseUfhCoordinator`
   (`DataUpdateCoordinator`, 5-min nominal; feeds the core the REAL measured dt, clamped, and
   debounces a setpoint change into one off-cycle recompute) reads source entity states, builds
-  `dict[str, RoomInputs]`, calls `BuildingController.step`, and writes commands. Entities
+  `dict[str, RoomInputs]`, calls `BuildingController.step`, and writes commands. The read
+  path (stale cache + plausibility gates) lives in `readers.py` (`SourceReader`), the write
+  path (thresholds, S3 re-assert cache, C5 farewell) in `writers.py` (`CommandWriter`);
+  knob introspection shared by websocket + options flow lives in `tuning.py`. Entities
   (number/sensor/binary_sensor/select), config_flow + options flow (add/edit/remove room,
   settings), websocket (incl. `get_tuning`/`set_tuning`), services, panel registration.
   Tuning: global knobs + sparse per-room overrides (`options[CONF_ROOM_TUNING]`); the knob
-  specs (`CONTROLLER_NUMBER_KNOBS`) live in `const.py`. Imports the core via `.core`; is
-  imported by nothing.
+  specs (`CONTROLLER_NUMBER_KNOBS`) and `CONF_CONTROLLER` live in `const.py`. Imports the
+  core via `.core`; is imported by nothing.
 - **Panel** — `custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js`. Self-contained
   vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Four tabs — Rooms (table
   with the per-room three-state control), Tuning, Valves, Assist — rendering the black-box

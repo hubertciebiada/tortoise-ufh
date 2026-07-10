@@ -795,6 +795,10 @@ function niceTicks(min, max, count) {
 // --- Custom element ---------------------------------------------------------
 
 class TortoiseUfhPanel extends HTMLElement {
+  // --------------------------------------------------------------------------
+  // Lifecycle, wiring & timers
+  // --------------------------------------------------------------------------
+
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
@@ -855,30 +859,6 @@ class TortoiseUfhPanel extends HTMLElement {
       this[prop] = value;
     }
   }
-
-  /** Restore the persisted active tab, defaulting to `rooms` (storage may throw). */
-  _loadActiveTab() {
-    try {
-      const v = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
-      if (v && TAB_ORDER.includes(v)) {
-        return v;
-      }
-    } catch (err) {
-      /* private mode / disabled storage: fall through to default */
-    }
-    return DEFAULT_TAB;
-  }
-
-  /** Persist the active tab (best-effort; storage may be unavailable). */
-  _saveActiveTab(tab) {
-    try {
-      window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, tab);
-    } catch (err) {
-      /* ignore */
-    }
-  }
-
-  // -- Lifecycle -----------------------------------------------------------
 
   /** HA assigns this on every state change; keep the latest handle. */
   set hass(hass) {
@@ -943,11 +923,6 @@ class TortoiseUfhPanel extends HTMLElement {
     }
   }
 
-  _resolveLang(hass) {
-    const raw = (hass && (hass.language || hass.selectedLanguage)) || "en";
-    return String(raw).toLowerCase().startsWith("pl") ? "pl" : "en";
-  }
-
   _handleVisibility() {
     if (document.hidden) {
       this._stopTimers();
@@ -977,7 +952,36 @@ class TortoiseUfhPanel extends HTMLElement {
     }
   }
 
-  // -- i18n ----------------------------------------------------------------
+  /** Restore the persisted active tab, defaulting to `rooms` (storage may throw). */
+  _loadActiveTab() {
+    try {
+      const v = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+      if (v && TAB_ORDER.includes(v)) {
+        return v;
+      }
+    } catch (err) {
+      /* private mode / disabled storage: fall through to default */
+    }
+    return DEFAULT_TAB;
+  }
+
+  /** Persist the active tab (best-effort; storage may be unavailable). */
+  _saveActiveTab(tab) {
+    try {
+      window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, tab);
+    } catch (err) {
+      /* ignore */
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // i18n & lookups
+  // --------------------------------------------------------------------------
+
+  _resolveLang(hass) {
+    const raw = (hass && (hass.language || hass.selectedLanguage)) || "en";
+    return String(raw).toLowerCase().startsWith("pl") ? "pl" : "en";
+  }
 
   _t(key) {
     const dict = STR[this._lang] || STR.en;
@@ -1007,7 +1011,22 @@ class TortoiseUfhPanel extends HTMLElement {
     return key in STR.en ? this._t(key) : name;
   }
 
-  // -- Websocket -----------------------------------------------------------
+  /** Localised text for a `dew_excluded_reason` code (raw code as fallback). */
+  _dewReasonText(code) {
+    const key = DEW_REASON_KEYS[code];
+    return key ? this._t(key) : String(code);
+  }
+
+  _icon(name, fallback) {
+    if (this._hasHaIcon) {
+      return h("ha-icon", { class: "hicon", icon: name });
+    }
+    return h("span", { class: "hicon-fallback", text: fallback || "›" });
+  }
+
+  // --------------------------------------------------------------------------
+  // Websocket / data layer + user actions
+  // --------------------------------------------------------------------------
 
   async _callWS(message) {
     if (!this._hass || typeof this._hass.callWS !== "function") {
@@ -1020,6 +1039,18 @@ class TortoiseUfhPanel extends HTMLElement {
     } catch (err) {
       const detail = err && err.message ? err.message : String(err);
       this._setError(`${message.type}: ${detail}`);
+      return null;
+    }
+  }
+
+  /** Call a websocket command without touching the error banner (charts fail soft). */
+  async _callWSSilent(message) {
+    if (!this._hass || typeof this._hass.callWS !== "function") {
+      return null;
+    }
+    try {
+      return await this._hass.callWS(message);
+    } catch (err) {
       return null;
     }
   }
@@ -1052,16 +1083,17 @@ class TortoiseUfhPanel extends HTMLElement {
 
   // -- History fetch (recorder; cached per entity+window, silent on error) --
 
-  /** Call a websocket command without touching the error banner (charts fail soft). */
-  async _callWSSilent(message) {
-    if (!this._hass || typeof this._hass.callWS !== "function") {
-      return null;
+  _patchConfig(mutator) {
+    if (!this._config) {
+      return;
     }
-    try {
-      return await this._hass.callWS(message);
-    } catch (err) {
-      return null;
+    const next = { ...this._config };
+    if (Array.isArray(next.rooms)) {
+      next.rooms = next.rooms.map((r) => ({ ...r }));
     }
+    mutator(next);
+    this._config = next;
+    this._render();
   }
 
   /**
@@ -1158,21 +1190,6 @@ class TortoiseUfhPanel extends HTMLElement {
       }))
       .filter((pt) => pt.t !== null)
       .sort((a, b) => a.t - b.t);
-  }
-
-  // -- Write commands (optimistic local patch, then re-sync) ---------------
-
-  _patchConfig(mutator) {
-    if (!this._config) {
-      return;
-    }
-    const next = { ...this._config };
-    if (Array.isArray(next.rooms)) {
-      next.rooms = next.rooms.map((r) => ({ ...r }));
-    }
-    mutator(next);
-    this._config = next;
-    this._render();
   }
 
   async _nudgeHome(delta) {
@@ -1290,66 +1307,9 @@ class TortoiseUfhPanel extends HTMLElement {
     );
   }
 
-  // -- Data shaping --------------------------------------------------------
-
-  _severity(flags) {
-    let rank = 0;
-    for (const f of flags) {
-      rank = Math.max(rank, SEV_RANK[this._flagSev(f)] || 0);
-    }
-    return rank >= 2 ? "problem" : rank === 1 ? "warn" : "ok";
-  }
-
-  /** Coerce any control-state value to one of `ROOM_STATES` (default shadow). */
-  _normState(value) {
-    const s = String(value);
-    return ROOM_STATES.includes(s) ? s : STATE_SHADOW;
-  }
-
-  /**
-   * Localised fast-source (assist) badge for a room view-model.
-   *
-   * Returns `{ text, cls }` where `cls` is `on` / `off` / `none`. Composes the
-   * source kind (Split / Heater) with its command state and target, e.g.
-   * "Split: heating → 22.0 °C"; a room with no fast source reads as an em dash.
-   */
-  _assistLabel(r) {
-    if (r.fastKind === "none") {
-      return { text: this._t("assist_none"), cls: "none" };
-    }
-    const short =
-      r.fastKind === "heater" ? this._t("assist_heater") : this._t("assist_split");
-    if (!r.fastOn || r.fastMode === "off") {
-      return { text: short + ": " + this._t("assist_state_off"), cls: "off" };
-    }
-    const verb =
-      r.fastMode === "cooling"
-        ? this._t("assist_state_cooling")
-        : this._t("assist_state_heating");
-    const target = r.fastTarget !== null ? " → " + fmt(r.fastTarget, 1, " °C") : "";
-    return { text: short + ": " + verb + target, cls: "on" };
-  }
-
-  /**
-   * Localised fast-source MODE only (Off / Cool / Heat), for the Rooms table's
-   * split-out "Tryb" column. Same on/off/mode reading as `_assistLabel`, minus
-   * the source-kind prefix and target temperature.
-   *
-   * Returns `{ text, cls }` where `cls` is `on` / `off` / `none`.
-   */
-  _assistModeLabel(r) {
-    if (r.fastKind === "none") {
-      return { text: this._t("assist_none"), cls: "none" };
-    }
-    if (!r.fastOn || r.fastMode === "off") {
-      return { text: this._t("assist_state_off"), cls: "off" };
-    }
-    const verb =
-      r.fastMode === "cooling"
-        ? this._t("assist_state_cooling")
-        : this._t("assist_state_heating");
-    return { text: verb, cls: "on" };
-  }
+  // --------------------------------------------------------------------------
+  // View-model & entity-state readers
+  // --------------------------------------------------------------------------
 
   /** Merge config + live into a sorted list of normalized room view-models. */
   _computeView() {
@@ -1450,31 +1410,194 @@ class TortoiseUfhPanel extends HTMLElement {
     return rows;
   }
 
-  // -- Rendering: skeleton -------------------------------------------------
-
-  _setError(msg) {
-    // While a save is reloading the entry, transient errors (get_live /
-    // get_tuning → not_found) are expected: swallow non-empty messages during
-    // the suppression window. Clears (empty msg) always pass through.
-    if (msg && Date.now() < this._suppressErrorUntil) {
-      return;
+  _severity(flags) {
+    let rank = 0;
+    for (const f of flags) {
+      rank = Math.max(rank, SEV_RANK[this._flagSev(f)] || 0);
     }
-    if (msg === this._error) {
-      return;
-    }
-    this._error = msg;
-    if (this._els && this._els.banner) {
-      this._els.banner.textContent = msg;
-      this._els.banner.style.display = msg ? "" : "none";
-    }
+    return rank >= 2 ? "problem" : rank === 1 ? "warn" : "ok";
   }
 
-  _icon(name, fallback) {
-    if (this._hasHaIcon) {
-      return h("ha-icon", { class: "hicon", icon: name });
-    }
-    return h("span", { class: "hicon-fallback", text: fallback || "›" });
+  /** Coerce any control-state value to one of `ROOM_STATES` (default shadow). */
+  _normState(value) {
+    const s = String(value);
+    return ROOM_STATES.includes(s) ? s : STATE_SHADOW;
   }
+
+  /**
+   * Localised fast-source (assist) badge for a room view-model.
+   *
+   * Returns `{ text, cls }` where `cls` is `on` / `off` / `none`. Composes the
+   * source kind (Split / Heater) with its command state and target, e.g.
+   * "Split: heating → 22.0 °C"; a room with no fast source reads as an em dash.
+   */
+  _assistLabel(r) {
+    if (r.fastKind === "none") {
+      return { text: this._t("assist_none"), cls: "none" };
+    }
+    const short =
+      r.fastKind === "heater" ? this._t("assist_heater") : this._t("assist_split");
+    if (!r.fastOn || r.fastMode === "off") {
+      return { text: short + ": " + this._t("assist_state_off"), cls: "off" };
+    }
+    const verb =
+      r.fastMode === "cooling"
+        ? this._t("assist_state_cooling")
+        : this._t("assist_state_heating");
+    const target = r.fastTarget !== null ? " → " + fmt(r.fastTarget, 1, " °C") : "";
+    return { text: short + ": " + verb + target, cls: "on" };
+  }
+
+  /**
+   * Localised fast-source MODE only (Off / Cool / Heat), for the Rooms table's
+   * split-out "Tryb" column. Same on/off/mode reading as `_assistLabel`, minus
+   * the source-kind prefix and target temperature.
+   *
+   * Returns `{ text, cls }` where `cls` is `on` / `off` / `none`.
+   */
+  _assistModeLabel(r) {
+    if (r.fastKind === "none") {
+      return { text: this._t("assist_none"), cls: "none" };
+    }
+    if (!r.fastOn || r.fastMode === "off") {
+      return { text: this._t("assist_state_off"), cls: "off" };
+    }
+    const verb =
+      r.fastMode === "cooling"
+        ? this._t("assist_state_cooling")
+        : this._t("assist_state_heating");
+    return { text: verb, cls: "on" };
+  }
+
+  /** Aggregated reason why the safe dew point is unavailable (hero subline). */
+  _dewReasonSummary() {
+    const excluded = this._view.filter((r) => r.dewReason);
+    if (!excluded.length) {
+      return "";
+    }
+    if (excluded.length <= 3) {
+      return excluded
+        .map((r) => r.name + ": " + this._dewReasonText(r.dewReason))
+        .join(" · ");
+    }
+    return fmtStr(this._t("dew_none_collective"), { n: excluded.length });
+  }
+
+  /** Read a raw HA state string for an entity, or null when absent. */
+  _hassState(entityId) {
+    if (!entityId) {
+      return null;
+    }
+    const st = this._hass && this._hass.states && this._hass.states[entityId];
+    return st || null;
+  }
+
+  /** Numeric temperature/state for an entity (state number), or null. */
+  _stateNum(entityId) {
+    const st = this._hassState(entityId);
+    if (!st) {
+      return null;
+    }
+    if (UNAVAILABLE_STATES.has(String(st.state))) {
+      return null;
+    }
+    return num(st.state);
+  }
+
+  /**
+   * Valve feedback position [%] for an entity: `current_position` for the
+   * native `valve` domain, else the numeric state (a `number`/`input_number`).
+   */
+  _valvePosition(entityId) {
+    const st = this._hassState(entityId);
+    if (!st) {
+      return null;
+    }
+    const attrs = st.attributes || {};
+    if (attrs.current_position !== undefined && attrs.current_position !== null) {
+      return num(attrs.current_position);
+    }
+    if (UNAVAILABLE_STATES.has(String(st.state))) {
+      return null;
+    }
+    return num(st.state);
+  }
+
+  /** Split a config `entities` value into a clean id list (single or array). */
+  _entityList(value) {
+    if (Array.isArray(value)) {
+      return value.filter(Boolean);
+    }
+    return value ? [value] : [];
+  }
+
+  /** Loop descriptors (valve / supply / return ids) zipped by index. */
+  _roomLoops(r) {
+    const ent = r.entities || {};
+    const valves = this._entityList(ent[LOOP_VALVE_KEY]);
+    const supplies = this._entityList(ent[LOOP_SUPPLY_KEY]);
+    const returns = this._entityList(ent[LOOP_RETURN_KEY]);
+    const count = Math.max(valves.length, supplies.length, returns.length);
+    const loops = [];
+    for (let i = 0; i < count; i += 1) {
+      loops.push({
+        valveId: valves[i] || null,
+        supplyId: supplies[i] || null,
+        returnId: returns[i] || null,
+      });
+    }
+    return loops;
+  }
+
+  _ageMs() {
+    if (this._lastUpdateMs === null) {
+      return null;
+    }
+    return Math.max(0, Date.now() - this._lastUpdateMs);
+  }
+
+  _ageText(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    if (totalSec < 60) {
+      return fmtStr(this._t("age_sec"), { s: totalSec });
+    }
+    const totalMin = Math.floor(totalSec / 60);
+    if (totalMin < 10) {
+      return fmtStr(this._t("age_min_sec"), { m: totalMin, s: totalSec % 60 });
+    }
+    if (totalMin < 60) {
+      return fmtStr(this._t("age_min"), { m: totalMin });
+    }
+    return fmtStr(this._t("age_hour_min"), {
+      h: Math.floor(totalMin / 60),
+      m: totalMin % 60,
+    });
+  }
+
+  _pillState() {
+    const live = this._live;
+    if (!live) {
+      return { sev: "problem", text: this._t("status_nodata") };
+    }
+    if (live.algorithm_status === "error") {
+      return { sev: "problem", text: this._t("status_error") };
+    }
+    const ageMs = this._ageMs();
+    const stale =
+      live.algorithm_status === "stale" ||
+      live.watchdog_state === "stale" ||
+      (ageMs !== null && ageMs > STALE_AGE_MS);
+    if (stale) {
+      const suffix = ageMs !== null ? " · " + this._ageText(ageMs) : "";
+      return { sev: "warn", text: this._t("status_stale") + suffix };
+    }
+    const age = ageMs !== null ? this._ageText(ageMs) : this._t("age_unknown");
+    return { sev: "ok", text: fmtStr(this._t("status_running"), { age }) };
+  }
+
+  // --------------------------------------------------------------------------
+  // Skeleton, tabs & hero
+  // --------------------------------------------------------------------------
 
   _ensureBuilt() {
     if (this._built && this._builtLang === this._lang) {
@@ -1606,6 +1729,299 @@ class TortoiseUfhPanel extends HTMLElement {
     }
   }
 
+  /** Switch the active tab, persist it, and reveal / lazily update its section. */
+  _setActiveTab(tab) {
+    if (!TAB_ORDER.includes(tab)) {
+      return;
+    }
+    if (tab !== this._activeTab) {
+      this._activeTab = tab;
+      this._saveActiveTab(tab);
+    }
+    this._syncTabs();
+  }
+
+  /**
+   * Toggle section visibility + tab ARIA to match `_activeTab`, then update only
+   * the visible section (hidden sections stay stale until shown — lazy).
+   */
+  _syncTabs() {
+    const T = this._tabs;
+    if (!T || !T.sections) {
+      return;
+    }
+    for (const key of TAB_ORDER) {
+      const on = key === this._activeTab;
+      T.sections[key].style.display = on ? "" : "none";
+      const btn = T.btns[key];
+      btn.classList.toggle("active", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+      btn.tabIndex = on ? 0 : -1;
+    }
+    if (this._activeTab === "rooms") {
+      this._reconcileTable();
+    } else if (this._activeTab === "tuning") {
+      this._ensureTuningLoaded();
+    } else if (this._activeTab === "valves") {
+      this._renderValves();
+    } else if (this._activeTab === "assist") {
+      this._renderAssist();
+    }
+  }
+
+  _buildHero() {
+    const H = {};
+
+    // Brand + manage-rooms deep link.
+    const brand = h("div", { class: "brand" }, [
+      this._icon("mdi:tortoise", "🐢"),
+      h("span", { text: "Tortoise-UFH" }),
+    ]);
+    H.manageBtn = h(
+      "button",
+      { class: "ghost-btn", type: "button", on: { click: () => this._manageRooms() } },
+      [this._icon("mdi:cog-outline", "⚙"), h("span", { text: this._t("manage_rooms") })],
+    );
+    const brandRow = h("div", { class: "hero-row brand-row" }, [
+      brand,
+      h("span", { class: "spacer" }),
+      H.manageBtn,
+    ]);
+
+    // Status pill + metrics.
+    H.pillDot = h("span", { class: "pill-dot" });
+    H.pillText = h("span", { class: "pill-text" });
+    H.pill = h("div", { class: "pill" }, [H.pillDot, H.pillText]);
+
+    H.liveVal = h("span", { class: "metric-val" });
+    const liveMetric = h("div", { class: "metric" }, [
+      H.liveVal,
+      h("span", { class: "metric-cap", text: this._t("rooms_live_cap") }),
+    ]);
+
+    H.flagsVal = h("span", { class: "metric-val" });
+    H.flagsMetric = h("div", { class: "metric" }, [
+      H.flagsVal,
+      h("span", { class: "metric-cap", text: this._t("flags_cap") }),
+    ]);
+
+    H.dewVal = h("span", { class: "metric-val" });
+    H.dewSub = h("span", { class: "chip-sub", style: "display:none" });
+    H.dewChip = h("div", { class: "chip chip-dew", style: "display:none" }, [
+      h("div", { class: "chip-main" }, [
+        h("span", { class: "chip-cap", text: this._t("dew_cap") }),
+        H.dewVal,
+      ]),
+      H.dewSub,
+    ]);
+
+    const statusRow = h("div", { class: "hero-row status-row" }, [
+      H.pill,
+      liveMetric,
+      H.flagsMetric,
+      H.dewChip,
+    ]);
+
+    // Controls: home stepper + mode segmented.
+    H.homeMinus = h("button", {
+      class: "step-btn",
+      type: "button",
+      text: "−",
+      on: { click: () => this._nudgeHome(-HOME_STEP) },
+    });
+    H.homeVal = h("span", { class: "step-val" });
+    H.homePlus = h("button", {
+      class: "step-btn",
+      type: "button",
+      text: "+",
+      on: { click: () => this._nudgeHome(HOME_STEP) },
+    });
+    const homeCtl = h("div", { class: "ctl" }, [
+      h("span", { class: "ctl-cap", text: this._t("home_cap") }),
+      h("div", { class: "stepper" }, [H.homeMinus, H.homeVal, H.homePlus]),
+    ]);
+
+    H.modeBtns = {};
+    const seg = h(
+      "div",
+      { class: "seg", role: "group" },
+      MODES.map((m) => {
+        const b = h("button", {
+          class: "seg-btn",
+          type: "button",
+          text: this._modeLabel(m),
+          dataset: { mode: m },
+          on: { click: () => this._setMode(m) },
+        });
+        H.modeBtns[m] = b;
+        return b;
+      }),
+    );
+    const modeCtl = h("div", { class: "ctl" }, [
+      h("span", { class: "ctl-cap", text: this._t("mode_cap") }),
+      seg,
+    ]);
+
+    const ctlRow = h("div", { class: "hero-row ctl-row" }, [homeCtl, modeCtl]);
+
+    this._hero = H;
+    return h("header", { class: "hero" }, [brandRow, statusRow, ctlRow]);
+  }
+
+  /** Press-and-hold repeat with acceleration; keyboard-activated once. */
+  _bindHold(btn, fn) {
+    let timer = null;
+    let delay = 350;
+    const stop = () => {
+      if (timer) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+    };
+    const repeat = () => {
+      timer = window.setTimeout(() => {
+        fn();
+        delay = Math.max(45, delay * 0.82);
+        repeat();
+      }, delay);
+    };
+    btn.addEventListener("pointerdown", (e) => {
+      if (e.button != null && e.button !== 0) {
+        return;
+      }
+      if (btn.disabled) {
+        return;
+      }
+      fn();
+      delay = 350;
+      stop();
+      repeat();
+    });
+    for (const ev of ["pointerup", "pointerleave", "pointercancel"]) {
+      btn.addEventListener(ev, stop);
+    }
+    btn.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        fn();
+      }
+    });
+  }
+
+  _render() {
+    this._ensureBuilt();
+    this._computeView();
+
+    if (this._els.banner) {
+      this._els.banner.textContent = this._error;
+      this._els.banner.style.display = this._error ? "" : "none";
+    }
+
+    this._updateHero();
+    this._syncTabs();
+    this._syncDetail();
+  }
+
+  _setError(msg) {
+    // While a save is reloading the entry, transient errors (get_live /
+    // get_tuning → not_found) are expected: swallow non-empty messages during
+    // the suppression window. Clears (empty msg) always pass through.
+    if (msg && Date.now() < this._suppressErrorUntil) {
+      return;
+    }
+    if (msg === this._error) {
+      return;
+    }
+    this._error = msg;
+    if (this._els && this._els.banner) {
+      this._els.banner.textContent = msg;
+      this._els.banner.style.display = msg ? "" : "none";
+    }
+  }
+
+  _applyPill() {
+    if (!this._hero) {
+      return;
+    }
+    const { sev, text } = this._pillState();
+    this._hero.pill.className = "pill pill-" + sev;
+    this._hero.pillText.textContent = text;
+    // Tooltip: the exact local timestamp (with seconds) of the last cycle.
+    this._hero.pill.title =
+      this._lastUpdateMs === null
+        ? this._t("age_unknown")
+        : new Date(this._lastUpdateMs).toLocaleString(this._lang, {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          });
+  }
+
+  /** 1-second tick: refresh only the age-dependent pill (cheap, no reflow). */
+  _tickAge() {
+    if (this._built) {
+      this._applyPill();
+    }
+  }
+
+  _updateHero() {
+    const H = this._hero;
+    const cfg = this._config || {};
+    const live = this._live || {};
+
+    this._applyPill();
+
+    const total = this._view.length;
+    const liveN = this._view.filter((r) => r.state === STATE_LIVE).length;
+    H.liveVal.textContent = total ? `${liveN}/${total}` : "—";
+
+    const flagN = this._view.reduce((s, r) => s + r.flags.length, 0);
+    H.flagsVal.textContent = String(flagN);
+    H.flagsMetric.classList.toggle("has", flagN > 0);
+
+    // Prefer live.mode: it is refreshed on every poll, whereas config.mode is
+    // only re-fetched on writes / initial load (so it can lag an external
+    // mode change made through the HA mode entity).
+    const mode = pick(live, ["mode"], pick(cfg, ["mode"], "heating"));
+    for (const m of MODES) {
+      H.modeBtns[m].classList.toggle("active", m === mode);
+    }
+
+    // Safe dew point is only meaningful while cooling; the chip stays visible
+    // throughout cooling and, when there is no value, explains why (per room
+    // for a small house, collectively above three rooms).
+    const dew = num(live.global_safe_dew_point_c);
+    if (mode === "cooling") {
+      H.dewChip.style.display = "";
+      if (dew !== null) {
+        H.dewVal.textContent = fmt(dew, 1, " °C");
+        H.dewSub.textContent = "";
+        H.dewSub.style.display = "none";
+        H.dewChip.title = "";
+      } else {
+        H.dewVal.textContent = "—";
+        const reason = this._dewReasonSummary();
+        H.dewSub.textContent = reason;
+        H.dewSub.style.display = reason ? "" : "none";
+        H.dewChip.title = reason;
+      }
+    } else {
+      H.dewChip.style.display = "none";
+    }
+
+    const homeTemp = num(cfg.home_setpoint_c);
+    H.homeVal.textContent = fmt(homeTemp, 1, " °C");
+    H.homeMinus.disabled = homeTemp === null || homeTemp <= HOME_MIN;
+    H.homePlus.disabled = homeTemp === null || homeTemp >= HOME_MAX;
+  }
+
+  // --------------------------------------------------------------------------
+  // Rooms tab: table
+  // --------------------------------------------------------------------------
+
   /** Build the Rooms tab: an accessible table with a sticky header. */
   _buildRoomsSection() {
     const empty = h("div", { class: "empty", text: this._t("loading") });
@@ -1639,73 +2055,697 @@ class TortoiseUfhPanel extends HTMLElement {
     return { el, tbody, empty, wrapEl };
   }
 
-  // -- Valves tab ----------------------------------------------------------
+  _reconcileTable() {
+    const tbody = this._els.tbody;
+    const rows = this._view;
 
-  /** Read a raw HA state string for an entity, or null when absent. */
-  _hassState(entityId) {
-    if (!entityId) {
-      return null;
+    if (rows.length === 0) {
+      for (const [, el] of this._rows) {
+        el.remove();
+      }
+      this._rows.clear();
+      const loading = !this._config && !this._live;
+      this._els.empty.textContent = loading ? this._t("loading") : this._t("no_rooms");
+      this._els.empty.style.display = "";
+      this._els.tableWrap.style.display = "none";
+      return;
     }
-    const st = this._hass && this._hass.states && this._hass.states[entityId];
-    return st || null;
+    this._els.empty.style.display = "none";
+    this._els.tableWrap.style.display = "";
+
+    const desired = new Set(rows.map((r) => r.name));
+    for (const [name, el] of [...this._rows]) {
+      if (!desired.has(name)) {
+        el.remove();
+        this._rows.delete(name);
+      }
+    }
+
+    rows.forEach((r, i) => {
+      let tr = this._rows.get(r.name);
+      if (!tr) {
+        tr = this._buildRow(r.name);
+        this._rows.set(r.name, tr);
+      }
+      const at = tbody.children[i];
+      if (at !== tr) {
+        tbody.insertBefore(tr, at || null);
+      }
+      this._updateRow(tr, r);
+    });
   }
 
-  /** Numeric temperature/state for an entity (state number), or null. */
-  _stateNum(entityId) {
-    const st = this._hassState(entityId);
-    if (!st) {
-      return null;
+  _buildRow(name) {
+    const p = {};
+
+    // Column 1: three-state control segment (Off / Shadow / Live).
+    p.stateBtns = {};
+    const seg = h("div", { class: "seg3", role: "group" });
+    for (const meta of STATE_META) {
+      const btn = h(
+        "button",
+        {
+          class: "seg3-btn",
+          type: "button",
+          title: this._t(meta.key),
+          "aria-label": this._t(meta.key),
+          dataset: { state: meta.state },
+          on: {
+            click: (e) => {
+              e.stopPropagation();
+              this._setRoomState(name, meta.state);
+            },
+          },
+        },
+        [this._icon(meta.icon, meta.glyph)],
+      );
+      p.stateBtns[meta.state] = btn;
+      seg.appendChild(btn);
     }
-    if (UNAVAILABLE_STATES.has(String(st.state))) {
-      return null;
-    }
-    return num(st.state);
+    const stateCell = h("td", { class: "col-state" }, [seg]);
+
+    // Column 2: severity dot + name.
+    p.dot = h("span", { class: "dot" });
+    p.name = h("span", { class: "card-name", text: name });
+    const nameCell = h("td", { class: "col-room" }, [
+      h("div", { class: "name-cell" }, [p.dot, p.name]),
+    ]);
+
+    // Column 3: measured room temperature + trend arrow.
+    p.temp = h("span", { class: "meas-val" });
+    p.trend = h("span", { class: "trend" });
+    const measCell = h("td", { class: "col-measured" }, [
+      h("div", { class: "meas-cell" }, [p.temp, p.trend]),
+    ]);
+
+    // Column 4: setpoint + offset annotation.
+    p.spVal = h("span", { class: "sp-val" });
+    p.spOffset = h("span", { class: "cell-sub" });
+    const spCell = h("td", { class: "col-setpoint" }, [
+      h("div", { class: "sp-cell" }, [p.spVal, p.spOffset]),
+    ]);
+
+    // Column 5: error = setpoint - measured (signed, computed in the panel).
+    p.err = h("span", { class: "err-val" });
+    const errCell = h("td", { class: "col-error" }, [p.err]);
+
+    // Column 6: valve percent (no mini-bar here — that stays on the Valves tab).
+    p.valveVal = h("span", { class: "valve-val" });
+    const valveCell = h("td", { class: "col-valve" }, [p.valveVal]);
+
+    // Columns 7-8: loop supply / return temperature, read live from hass.states
+    // (same entities + helper the Valves tab uses; first loop when a room has
+    // several).
+    p.supplyVal = h("span", { class: "meas-val" });
+    const supplyCell = h("td", { class: "col-supply" }, [p.supplyVal]);
+    p.returnVal = h("span", { class: "meas-val" });
+    const returnCell = h("td", { class: "col-return" }, [p.returnVal]);
+
+    // Columns 9-10: fast-source (assist) mode + target temperature.
+    p.assistMode = h("span", { class: "fast-badge" });
+    const assistModeCell = h("td", { class: "col-assist-mode" }, [p.assistMode]);
+    p.assistTemp = h("span", { class: "meas-val" });
+    const assistTempCell = h("td", { class: "col-assist-temp" }, [p.assistTemp]);
+
+    const tr = h(
+      "tr",
+      {
+        tabindex: "0",
+        dataset: { room: name },
+        on: {
+          click: (e) => {
+            if (e.target.closest("button")) {
+              return;
+            }
+            this._select(name);
+          },
+          keydown: (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              this._select(name);
+            }
+          },
+        },
+      },
+      [
+        stateCell,
+        nameCell,
+        measCell,
+        spCell,
+        errCell,
+        valveCell,
+        supplyCell,
+        returnCell,
+        assistModeCell,
+        assistTempCell,
+      ],
+    );
+    tr._parts = p;
+    return tr;
   }
 
-  /**
-   * Valve feedback position [%] for an entity: `current_position` for the
-   * native `valve` domain, else the numeric state (a `number`/`input_number`).
-   */
-  _valvePosition(entityId) {
-    const st = this._hassState(entityId);
-    if (!st) {
-      return null;
-    }
-    const attrs = st.attributes || {};
-    if (attrs.current_position !== undefined && attrs.current_position !== null) {
-      return num(attrs.current_position);
-    }
-    if (UNAVAILABLE_STATES.has(String(st.state))) {
-      return null;
-    }
-    return num(st.state);
-  }
+  _updateRow(tr, r) {
+    const p = tr._parts;
 
-  /** Split a config `entities` value into a clean id list (single or array). */
-  _entityList(value) {
-    if (Array.isArray(value)) {
-      return value.filter(Boolean);
-    }
-    return value ? [value] : [];
-  }
+    tr.classList.toggle("selected", r.name === this._selectedRoom);
+    tr.classList.toggle("off", r.state === STATE_OFF);
+    p.dot.className = "dot sev-" + r.severity;
 
-  /** Loop descriptors (valve / supply / return ids) zipped by index. */
-  _roomLoops(r) {
-    const ent = r.entities || {};
-    const valves = this._entityList(ent[LOOP_VALVE_KEY]);
-    const supplies = this._entityList(ent[LOOP_SUPPLY_KEY]);
-    const returns = this._entityList(ent[LOOP_RETURN_KEY]);
-    const count = Math.max(valves.length, supplies.length, returns.length);
-    const loops = [];
-    for (let i = 0; i < count; i += 1) {
-      loops.push({
-        valveId: valves[i] || null,
-        supplyId: supplies[i] || null,
-        returnId: returns[i] || null,
+    // Three-state segment: highlight the active state's button.
+    for (const meta of STATE_META) {
+      p.stateBtns[meta.state].classList.toggle("active", r.state === meta.state);
+    }
+
+    // Measured — the echoed room temperature, never setpoint - error.
+    p.temp.textContent = fmt(r.current, 1, "°");
+    p.trend.textContent = trendArrow(r.trend) + " " + fmt(r.trend, 1, " K/h");
+
+    // Setpoint + offset annotation (shown only when the offset is non-zero).
+    p.spVal.textContent = fmt(r.setpoint, 1, "°");
+    if (r.offset) {
+      p.spOffset.textContent = fmtStr(this._t("card_offset"), {
+        v: signed(r.offset, 1),
       });
+      p.spOffset.style.display = "";
+    } else {
+      p.spOffset.textContent = "";
+      p.spOffset.style.display = "none";
     }
-    return loops;
+
+    // Error = setpoint - measured (signed K), consistent by construction with
+    // the two adjacent columns.
+    const err =
+      r.setpoint !== null && r.current !== null ? r.setpoint - r.current : null;
+    p.err.textContent = signed(err, 1, " K");
+
+    // Valve percent (value only — the mini-bar stays on the Valves tab).
+    p.valveVal.textContent = fmt(r.valve, 0, "%");
+
+    // Loop supply / return, read live from hass.states (first loop when a
+    // room has several — the full per-loop breakdown lives on the Valves tab).
+    const primaryLoop = this._roomLoops(r)[0] || null;
+    p.supplyVal.textContent = fmt(
+      primaryLoop ? this._stateNum(primaryLoop.supplyId) : null,
+      1,
+      "°",
+    );
+    p.returnVal.textContent = fmt(
+      primaryLoop ? this._stateNum(primaryLoop.returnId) : null,
+      1,
+      "°",
+    );
+
+    // Assist mode + target temperature (split from the old combined badge).
+    const assistMode = this._assistModeLabel(r);
+    p.assistMode.className = "fast-badge " + assistMode.cls;
+    p.assistMode.textContent = assistMode.text;
+    const assistActive = r.fastKind !== "none" && r.fastOn && r.fastMode !== "off";
+    p.assistTemp.textContent = assistActive ? fmt(r.fastTarget, 1, "°") : "—";
   }
+
+  _chip(code) {
+    return h("span", {
+      class: "chip chip-" + this._flagSev(code),
+      text: this._flagLabel(code),
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Rooms tab: detail drawer (wiring / decision)
+  // --------------------------------------------------------------------------
+
+  /** True when the detail renders as a fixed overlay drawer (narrow viewport). */
+  _isOverlay() {
+    return !!(
+      window.matchMedia &&
+      window.matchMedia(`(max-width: ${OVERLAY_MAX_PX}px)`).matches
+    );
+  }
+
+  _select(name) {
+    this._selectedRoom = name;
+    this._render();
+    // Side-by-side layout: keep the sticky column in view. The overlay drawer
+    // is fixed, so scrolling would only jump the page behind it.
+    if (!this._isOverlay() && this._els.detail && this._els.detail.scrollIntoView) {
+      this._els.detail.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  _deselect() {
+    const prev = this._selectedRoom;
+    const detail = this._els && this._els.detail;
+    const active = this.shadowRoot ? this.shadowRoot.activeElement : null;
+    const hadFocus = !!(detail && active && detail.contains(active));
+    this._selectedRoom = null;
+    this._render();
+    // Hand focus back to the room's table row when the close came from inside
+    // the inspector (keyboard flow); an outside click keeps its own focus.
+    if (hadFocus && prev) {
+      const row = this._rows.get(prev);
+      if (row && row.isConnected) {
+        row.focus();
+      }
+    }
+  }
+
+  _syncDetail() {
+    const detail = this._els.detail;
+    if (!this._selectedRoom) {
+      detail.style.display = "none";
+      this._els.layout.classList.remove("has-detail");
+      this._detailRoom = null;
+      this._disconnectChartRO();
+      return;
+    }
+    detail.style.display = "";
+    this._els.layout.classList.add("has-detail");
+
+    const fresh = this._detailRoom !== this._selectedRoom;
+    if (fresh) {
+      this._buildDetail(this._selectedRoom);
+      this._detailRoom = this._selectedRoom;
+    }
+    const r = this._viewByName.get(this._selectedRoom);
+    this._updateDetail(r);
+    this._refreshWiringStates();
+    this._refreshHistory();
+    this._updateLegendValues();
+    // Overlay drawer: move focus into the (role=dialog) inspector on open so
+    // Escape and screen readers land in the right place — never on a poll.
+    if (fresh && this._isOverlay()) {
+      detail.focus({ preventScroll: true });
+    }
+  }
+
+  _buildDetail(name) {
+    const D = { rows: [] };
+    // Publish the new refs before building sections: `_buildHistory` kicks off
+    // an async fetch that resolves against `this._detail.history`.
+    this._detail = D;
+    const detail = this._els.detail;
+    detail.textContent = "";
+    detail.setAttribute("aria-label", name);
+
+    // Sticky header: severity dot + room name + close.
+    D.headDot = h("span", { class: "dot" });
+    D.title = h("span", { class: "detail-title", text: name });
+    const close = h(
+      "button",
+      {
+        class: "ghost-btn detail-close",
+        type: "button",
+        title: this._t("detail_close"),
+        "aria-label": this._t("detail_close"),
+        on: { click: () => this._deselect() },
+      },
+      [this._icon("mdi:close", "✕")],
+    );
+    const header = h("div", { class: "detail-head" }, [
+      D.headDot,
+      D.title,
+      h("span", { class: "spacer" }),
+      close,
+    ]);
+
+    // Active flags surface first — they explain everything below them.
+    D.flagsEl = h("div", { class: "chips" });
+    D.flagsBlock = h("div", { class: "detail-flags", style: "display:none" }, [
+      D.flagsEl,
+    ]);
+
+    // Key numbers as a 2×2 tile grid: measured (+trend), setpoint (the offset
+    // stepper lives here), valve (+bar) and the fast-source command.
+    D.statTempVal = h("span", { class: "stat-val" });
+    D.statTempTrend = h("span", { class: "stat-sub" });
+    D.spMinus = h("button", {
+      class: "step-btn",
+      type: "button",
+      text: "−",
+      on: { click: () => this._nudgeOffset(name, -OFFSET_STEP) },
+    });
+    D.spVal = h("span", { class: "step-val" });
+    D.spPlus = h("button", {
+      class: "step-btn",
+      type: "button",
+      text: "+",
+      on: { click: () => this._nudgeOffset(name, OFFSET_STEP) },
+    });
+    D.spOffset = h("span", { class: "stat-sub" });
+    D.statValveVal = h("span", { class: "stat-val" });
+    D.statValveFill = h("span", { class: "valve-fill" });
+    D.statAssist = h("span", { class: "fast-badge stat-badge" });
+    const tiles = h("div", { class: "stat-tiles" }, [
+      h("div", { class: "stat-tile" }, [
+        h("span", { class: "stat-cap", text: this._t("th_measured") }),
+        D.statTempVal,
+        D.statTempTrend,
+      ]),
+      h("div", { class: "stat-tile" }, [
+        h("span", { class: "stat-cap", text: this._t("card_setpoint") }),
+        h("div", { class: "stepper" }, [D.spMinus, D.spVal, D.spPlus]),
+        D.spOffset,
+      ]),
+      h("div", { class: "stat-tile" }, [
+        h("span", { class: "stat-cap", text: this._t("th_valve") }),
+        D.statValveVal,
+        h("div", { class: "valve-track stat-track" }, [D.statValveFill]),
+      ]),
+      h("div", { class: "stat-tile" }, [
+        h("span", { class: "stat-cap", text: this._t("dec_fast") }),
+        D.statAssist,
+      ]),
+    ]);
+
+    // Section: controller decision.
+    const dec = this._buildDecision(D);
+
+    // Section: history charts, mounted in `.history-mount[data-room]`.
+    const historyMount = h("div", {
+      class: "history-mount",
+      dataset: { room: name },
+    });
+    this._buildHistory(D, name, historyMount);
+    const history = this._section(this._t("sec_history"), historyMount);
+
+    // Section: wiring — reference material, foldable, at the bottom; the
+    // disclosure state persists across room switches (instance-level).
+    D.wiringBody = h("div", { class: "wire-list" });
+    const wiring = h(
+      "details",
+      {
+        class: "sub sub-fold",
+        open: this._wiringOpen ? true : null,
+        on: {
+          toggle: (e) => {
+            this._wiringOpen = e.target.open;
+          },
+        },
+      },
+      [
+        h("summary", { class: "sub-title", text: this._t("sec_wiring") }),
+        D.wiringBody,
+      ],
+    );
+    this._buildWiring(D, name);
+
+    const body = h("div", { class: "detail-body" }, [
+      D.flagsBlock,
+      tiles,
+      dec,
+      history,
+      wiring,
+    ]);
+    detail.appendChild(header);
+    detail.appendChild(body);
+  }
+
+  _section(title, body) {
+    return h("section", { class: "sub" }, [
+      h("div", { class: "sub-title", text: title }),
+      body,
+    ]);
+  }
+
+  /** One key-value cell (small muted caption over a strong value) in a grid. */
+  _kv(parent, label) {
+    const valEl = h("span", { class: "kv-val" });
+    const rowEl = h("div", { class: "kv" }, [
+      h("span", { class: "kv-cap", text: label }),
+      valEl,
+    ]);
+    parent.appendChild(rowEl);
+    return { rowEl, valEl };
+  }
+
+  _buildWiring(D, name) {
+    const room = this._viewByName.get(name) || {};
+    const entities = room.entities || {};
+    for (const role of WIRING_ROLES) {
+      const value = entities[role];
+      const ids = Array.isArray(value) ? value.filter(Boolean) : value ? [value] : [];
+      const label = this._t("role_" + role);
+      if (ids.length === 0) {
+        D.wiringBody.appendChild(
+          h("div", { class: "wire-row muted" }, [
+            h("span", { class: "wire-role", text: label }),
+            h("span", { class: "wire-id", text: this._t("wire_unset") }),
+          ]),
+        );
+        continue;
+      }
+      for (const id of ids) {
+        this._addWireRow(D, label, id);
+      }
+    }
+
+    // Optional future field: per-room diagnostic entities (role -> id/list).
+    const diag = room.diagnosticEntities;
+    if (diag && Object.keys(diag).length) {
+      D.wiringBody.appendChild(
+        h("div", { class: "wire-group-cap", text: this._t("sec_diagnostics") }),
+      );
+      for (const [key, value] of Object.entries(diag)) {
+        const ids = Array.isArray(value) ? value.filter(Boolean) : value ? [value] : [];
+        const roleKey = "role_" + key;
+        const label = roleKey in STR.en ? this._t(roleKey) : key;
+        for (const id of ids) {
+          this._addWireRow(D, label, id);
+        }
+      }
+    }
+  }
+
+  _addWireRow(D, label, id) {
+    const stateEl = h("span", { class: "wire-state" });
+    const badgeEl = h("span", {
+      class: "wire-badge",
+      text: this._t("wire_unavailable"),
+      style: "display:none",
+    });
+    const rowEl = h(
+      "div",
+      {
+        class: "wire-row link",
+        tabindex: "0",
+        title: id,
+        on: {
+          click: () => this._moreInfo(id),
+          keydown: (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              this._moreInfo(id);
+            }
+          },
+        },
+      },
+      [
+        h("span", { class: "wire-role", text: label }),
+        h("span", { class: "wire-id", text: id }),
+        stateEl,
+        badgeEl,
+        this._icon("mdi:open-in-new", "›"),
+      ],
+    );
+    D.rows.push({ entityId: id, stateEl, badgeEl, rowEl });
+    D.wiringBody.appendChild(rowEl);
+  }
+
+  _refreshWiringStates() {
+    const D = this._detail;
+    if (!D || !this._selectedRoom) {
+      return;
+    }
+    const states = (this._hass && this._hass.states) || {};
+    for (const row of D.rows) {
+      if (!row.entityId) {
+        continue;
+      }
+      const st = states[row.entityId];
+      const val = st ? st.state : null;
+      const bad = !st || val === null || UNAVAILABLE_STATES.has(String(val));
+      const unit =
+        st && st.attributes ? st.attributes.unit_of_measurement || "" : "";
+      if (!st) {
+        row.stateEl.textContent = this._t("wire_missing");
+      } else {
+        row.stateEl.textContent = String(val) + (unit && !bad ? " " + unit : "");
+      }
+      row.badgeEl.style.display = bad ? "" : "none";
+      row.rowEl.classList.toggle("wire-bad", bad);
+    }
+  }
+
+  _buildDecision(D) {
+    const body = h("div", { class: "dec" });
+
+    // Controller inputs (a 2-column key-value grid; the dew-exclusion cell is
+    // hidden entirely while there is no reason to show).
+    const gridIn = h("div", { class: "kv-grid" });
+    D.errorEl = this._kv(gridIn, this._t("dec_error")).valEl;
+    D.dewEl = this._kv(gridIn, this._t("dec_dew")).valEl;
+    const dewReason = this._kv(gridIn, this._t("dec_dew_reason"));
+    D.dewReasonEl = dewReason.valEl;
+    D.dewReasonRow = dewReason.rowEl;
+    body.appendChild(gridIn);
+
+    // Signed contribution bars for the four valve terms.
+    D.terms = {};
+    const termsWrap = h("div", { class: "terms" });
+    for (const [key, cap] of [
+      ["pTerm", this._t("term_p")],
+      ["iTerm", this._t("term_i")],
+      ["trendTerm", this._t("term_trend")],
+      ["ffTerm", this._t("term_ff")],
+    ]) {
+      const fill = h("span", { class: "term-fill" });
+      const valEl = h("span", { class: "term-val" });
+      const row = h("div", { class: "term-row" }, [
+        h("span", { class: "term-cap", text: cap }),
+        h("div", { class: "term-track" }, [h("span", { class: "term-mid" }), fill]),
+        valEl,
+      ]);
+      D.terms[key] = { fill, valEl };
+      termsWrap.appendChild(row);
+    }
+    body.appendChild(
+      h("div", { class: "dec-block" }, [
+        h("div", { class: "dec-block-cap", text: this._t("dec_terms") }),
+        termsWrap,
+      ]),
+    );
+
+    // Outputs and limiter state (the throttle cell hides while not cooling).
+    const gridOut = h("div", { class: "kv-grid" });
+    D.rawValveEl = this._kv(gridOut, this._t("dec_raw_valve")).valEl;
+    D.finalValveEl = this._kv(gridOut, this._t("dec_final_valve")).valEl;
+    const throttle = this._kv(gridOut, this._t("dec_throttle"));
+    D.throttleEl = throttle.valEl;
+    D.throttleRow = throttle.rowEl;
+    D.integratorEl = this._kv(gridOut, this._t("dec_integrator")).valEl;
+    D.saturatedEl = this._kv(gridOut, this._t("dec_saturated")).valEl;
+    D.floorEl = this._kv(gridOut, this._t("dec_floor")).valEl;
+    body.appendChild(gridOut);
+
+    D.explanationEl = h("div", { class: "explanation" });
+    body.appendChild(
+      h("div", { class: "dec-block" }, [
+        h("div", { class: "dec-block-cap", text: this._t("dec_explanation") }),
+        D.explanationEl,
+      ]),
+    );
+
+    // Raw report JSON in a collapsed <details> (open state survives polls).
+    D.rawPre = h("pre", { class: "raw-pre" });
+    const details = h("details", { class: "raw" }, [
+      h("summary", { text: this._t("raw_show") }),
+      D.rawPre,
+    ]);
+    body.appendChild(details);
+
+    return this._section(this._t("sec_decision"), body);
+  }
+
+  _updateDetail(r) {
+    const D = this._detail;
+    if (!D) {
+      return;
+    }
+    if (!r) {
+      D.errorEl.textContent = this._t("no_live_room");
+      return;
+    }
+    D.title.textContent = r.name;
+    D.headDot.className = "dot sev-" + r.severity;
+
+    // Stat tiles: measured (+trend), setpoint stepper (+offset), valve, assist.
+    D.statTempVal.textContent = fmt(r.current, 1, "°");
+    D.statTempTrend.textContent =
+      trendArrow(r.trend) + " " + fmt(r.trend, 2, " K/h");
+    D.spVal.textContent = fmt(r.setpoint, 1, " °C");
+    if (r.offset) {
+      D.spOffset.textContent = fmtStr(this._t("card_offset"), {
+        v: signed(r.offset, 1),
+      });
+      D.spOffset.style.display = "";
+    } else {
+      D.spOffset.textContent = "";
+      D.spOffset.style.display = "none";
+    }
+    D.spMinus.disabled = r.offset <= OFFSET_MIN;
+    D.spPlus.disabled = r.offset >= OFFSET_MAX;
+    D.statValveVal.textContent = fmt(r.valve, 0, "%");
+    D.statValveFill.style.width =
+      (r.valve === null ? 0 : clamp(r.valve, 0, 100)) + "%";
+    const assist = this._assistLabel(r);
+    D.statAssist.className = "fast-badge stat-badge " + assist.cls;
+    D.statAssist.textContent = assist.text;
+
+    D.errorEl.textContent = fmt(r.errorC, 2, " K");
+    D.dewEl.textContent = fmt(r.dew, 1, " °C");
+    D.dewReasonEl.textContent = r.dewReason ? this._dewReasonText(r.dewReason) : "—";
+    D.dewReasonRow.style.display = r.dewReason ? "" : "none";
+
+    const terms = {
+      pTerm: r.pTerm,
+      iTerm: r.iTerm,
+      trendTerm: r.trendTerm,
+      ffTerm: r.ffTerm,
+    };
+    const maxAbs = Math.max(
+      0.001,
+      ...Object.values(terms).map((v) => Math.abs(v === null ? 0 : v)),
+    );
+    for (const [key, cell] of Object.entries(D.terms)) {
+      const v = terms[key] === null ? 0 : terms[key];
+      const ratio = clamp(Math.abs(v) / maxAbs, 0, 1);
+      const half = ratio * 50;
+      if (v >= 0) {
+        cell.fill.style.left = "50%";
+        cell.fill.style.width = half + "%";
+        cell.fill.classList.remove("neg");
+      } else {
+        cell.fill.style.left = 50 - half + "%";
+        cell.fill.style.width = half + "%";
+        cell.fill.classList.add("neg");
+      }
+      cell.valEl.textContent = signed(terms[key], 1, "%");
+    }
+
+    D.rawValveEl.textContent = fmt(r.rawValve, 0, "%");
+    D.finalValveEl.textContent = fmt(r.valve, 0, "%");
+    D.throttleEl.textContent =
+      r.throttle === null ? "—" : fmt(r.throttle * 100, 0, "%");
+    D.throttleRow.style.display = r.throttle === null ? "none" : "";
+    D.integratorEl.textContent = r.integratorFrozen
+      ? this._t("integ_frozen")
+      : this._t("integ_active");
+    D.integratorEl.classList.toggle("warn", r.integratorFrozen);
+    D.saturatedEl.textContent = r.saturated ? this._t("yes") : this._t("no");
+    D.saturatedEl.classList.toggle("warn", r.saturated);
+    D.floorEl.textContent = r.valveFloor ? this._t("yes") : this._t("no");
+    D.floorEl.classList.toggle("warn", r.valveFloor);
+
+    D.explanationEl.textContent = r.explanation || "—";
+
+    D.flagsEl.textContent = "";
+    for (const f of r.flags) {
+      D.flagsEl.appendChild(this._chip(f));
+    }
+    D.flagsBlock.style.display = r.flags.length ? "" : "none";
+
+    let raw;
+    try {
+      raw = JSON.stringify(r.report, null, 2);
+    } catch (err) {
+      raw = String(r.report);
+    }
+    D.rawPre.textContent = raw || "{}";
+  }
+
+  // --------------------------------------------------------------------------
+  // Valves tab
+  // --------------------------------------------------------------------------
 
   /** Build the Valves section skeleton (rows populated by `_renderValves`). */
   _buildValvesSection() {
@@ -2025,7 +3065,9 @@ class TortoiseUfhPanel extends HTMLElement {
     }
   }
 
-  // -- Assist tab ----------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // Assist tab
+  // --------------------------------------------------------------------------
 
   /** Build the Assist section skeleton (rows populated by `_renderAssist`). */
   _buildAssistSection() {
@@ -2238,39 +3280,9 @@ class TortoiseUfhPanel extends HTMLElement {
     p.link.title = entityId || "";
   }
 
-  /** Jump to the Tuning tab scoped to a room (the assist "tune" shortcut). */
-  _tuneRoom(name) {
-    this._setActiveTab("tuning");
-    this._ensureTuningLoaded();
-    if (this._tuning) {
-      this._setTuningScope(name);
-    } else {
-      // Payload not loaded yet: remember the desired scope for `_adoptTuning`.
-      this._tuningScope = name;
-    }
-  }
-
-  /** Localised text for a `dew_excluded_reason` code (raw code as fallback). */
-  _dewReasonText(code) {
-    const key = DEW_REASON_KEYS[code];
-    return key ? this._t(key) : String(code);
-  }
-
-  /** Aggregated reason why the safe dew point is unavailable (hero subline). */
-  _dewReasonSummary() {
-    const excluded = this._view.filter((r) => r.dewReason);
-    if (!excluded.length) {
-      return "";
-    }
-    if (excluded.length <= 3) {
-      return excluded
-        .map((r) => r.name + ": " + this._dewReasonText(r.dewReason))
-        .join(" · ");
-    }
-    return fmtStr(this._t("dew_none_collective"), { n: excluded.length });
-  }
-
-  // -- Tuning tab ----------------------------------------------------------
+  // --------------------------------------------------------------------------
+  // Tuning tab
+  // --------------------------------------------------------------------------
 
   /** Build the Tuning section skeleton (populated lazily by `_renderTuning`). */
   _buildTuningSection() {
@@ -2605,1017 +3617,21 @@ class TortoiseUfhPanel extends HTMLElement {
     this._poll();
   }
 
-  /** Press-and-hold repeat with acceleration; keyboard-activated once. */
-  _bindHold(btn, fn) {
-    let timer = null;
-    let delay = 350;
-    const stop = () => {
-      if (timer) {
-        window.clearTimeout(timer);
-        timer = null;
-      }
-    };
-    const repeat = () => {
-      timer = window.setTimeout(() => {
-        fn();
-        delay = Math.max(45, delay * 0.82);
-        repeat();
-      }, delay);
-    };
-    btn.addEventListener("pointerdown", (e) => {
-      if (e.button != null && e.button !== 0) {
-        return;
-      }
-      if (btn.disabled) {
-        return;
-      }
-      fn();
-      delay = 350;
-      stop();
-      repeat();
-    });
-    for (const ev of ["pointerup", "pointerleave", "pointercancel"]) {
-      btn.addEventListener(ev, stop);
-    }
-    btn.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        fn();
-      }
-    });
-  }
-
-  /** Switch the active tab, persist it, and reveal / lazily update its section. */
-  _setActiveTab(tab) {
-    if (!TAB_ORDER.includes(tab)) {
-      return;
-    }
-    if (tab !== this._activeTab) {
-      this._activeTab = tab;
-      this._saveActiveTab(tab);
-    }
-    this._syncTabs();
-  }
-
-  /**
-   * Toggle section visibility + tab ARIA to match `_activeTab`, then update only
-   * the visible section (hidden sections stay stale until shown — lazy).
-   */
-  _syncTabs() {
-    const T = this._tabs;
-    if (!T || !T.sections) {
-      return;
-    }
-    for (const key of TAB_ORDER) {
-      const on = key === this._activeTab;
-      T.sections[key].style.display = on ? "" : "none";
-      const btn = T.btns[key];
-      btn.classList.toggle("active", on);
-      btn.setAttribute("aria-selected", on ? "true" : "false");
-      btn.tabIndex = on ? 0 : -1;
-    }
-    if (this._activeTab === "rooms") {
-      this._reconcileTable();
-    } else if (this._activeTab === "tuning") {
-      this._ensureTuningLoaded();
-    } else if (this._activeTab === "valves") {
-      this._renderValves();
-    } else if (this._activeTab === "assist") {
-      this._renderAssist();
-    }
-  }
-
-  _buildHero() {
-    const H = {};
-
-    // Brand + manage-rooms deep link.
-    const brand = h("div", { class: "brand" }, [
-      this._icon("mdi:tortoise", "🐢"),
-      h("span", { text: "Tortoise-UFH" }),
-    ]);
-    H.manageBtn = h(
-      "button",
-      { class: "ghost-btn", type: "button", on: { click: () => this._manageRooms() } },
-      [this._icon("mdi:cog-outline", "⚙"), h("span", { text: this._t("manage_rooms") })],
-    );
-    const brandRow = h("div", { class: "hero-row brand-row" }, [
-      brand,
-      h("span", { class: "spacer" }),
-      H.manageBtn,
-    ]);
-
-    // Status pill + metrics.
-    H.pillDot = h("span", { class: "pill-dot" });
-    H.pillText = h("span", { class: "pill-text" });
-    H.pill = h("div", { class: "pill" }, [H.pillDot, H.pillText]);
-
-    H.liveVal = h("span", { class: "metric-val" });
-    const liveMetric = h("div", { class: "metric" }, [
-      H.liveVal,
-      h("span", { class: "metric-cap", text: this._t("rooms_live_cap") }),
-    ]);
-
-    H.flagsVal = h("span", { class: "metric-val" });
-    H.flagsMetric = h("div", { class: "metric" }, [
-      H.flagsVal,
-      h("span", { class: "metric-cap", text: this._t("flags_cap") }),
-    ]);
-
-    H.dewVal = h("span", { class: "metric-val" });
-    H.dewSub = h("span", { class: "chip-sub", style: "display:none" });
-    H.dewChip = h("div", { class: "chip chip-dew", style: "display:none" }, [
-      h("div", { class: "chip-main" }, [
-        h("span", { class: "chip-cap", text: this._t("dew_cap") }),
-        H.dewVal,
-      ]),
-      H.dewSub,
-    ]);
-
-    const statusRow = h("div", { class: "hero-row status-row" }, [
-      H.pill,
-      liveMetric,
-      H.flagsMetric,
-      H.dewChip,
-    ]);
-
-    // Controls: home stepper + mode segmented.
-    H.homeMinus = h("button", {
-      class: "step-btn",
-      type: "button",
-      text: "−",
-      on: { click: () => this._nudgeHome(-HOME_STEP) },
-    });
-    H.homeVal = h("span", { class: "step-val" });
-    H.homePlus = h("button", {
-      class: "step-btn",
-      type: "button",
-      text: "+",
-      on: { click: () => this._nudgeHome(HOME_STEP) },
-    });
-    const homeCtl = h("div", { class: "ctl" }, [
-      h("span", { class: "ctl-cap", text: this._t("home_cap") }),
-      h("div", { class: "stepper" }, [H.homeMinus, H.homeVal, H.homePlus]),
-    ]);
-
-    H.modeBtns = {};
-    const seg = h(
-      "div",
-      { class: "seg", role: "group" },
-      MODES.map((m) => {
-        const b = h("button", {
-          class: "seg-btn",
-          type: "button",
-          text: this._modeLabel(m),
-          dataset: { mode: m },
-          on: { click: () => this._setMode(m) },
-        });
-        H.modeBtns[m] = b;
-        return b;
-      }),
-    );
-    const modeCtl = h("div", { class: "ctl" }, [
-      h("span", { class: "ctl-cap", text: this._t("mode_cap") }),
-      seg,
-    ]);
-
-    const ctlRow = h("div", { class: "hero-row ctl-row" }, [homeCtl, modeCtl]);
-
-    this._hero = H;
-    return h("header", { class: "hero" }, [brandRow, statusRow, ctlRow]);
-  }
-
-  // -- Rendering: orchestration -------------------------------------------
-
-  _render() {
-    this._ensureBuilt();
-    this._computeView();
-
-    if (this._els.banner) {
-      this._els.banner.textContent = this._error;
-      this._els.banner.style.display = this._error ? "" : "none";
-    }
-
-    this._updateHero();
-    this._syncTabs();
-    this._syncDetail();
-  }
-
-  // -- Rendering: hero -----------------------------------------------------
-
-  _ageMs() {
-    if (this._lastUpdateMs === null) {
-      return null;
-    }
-    return Math.max(0, Date.now() - this._lastUpdateMs);
-  }
-
-  _ageText(ms) {
-    const totalSec = Math.floor(ms / 1000);
-    if (totalSec < 60) {
-      return fmtStr(this._t("age_sec"), { s: totalSec });
-    }
-    const totalMin = Math.floor(totalSec / 60);
-    if (totalMin < 10) {
-      return fmtStr(this._t("age_min_sec"), { m: totalMin, s: totalSec % 60 });
-    }
-    if (totalMin < 60) {
-      return fmtStr(this._t("age_min"), { m: totalMin });
-    }
-    return fmtStr(this._t("age_hour_min"), {
-      h: Math.floor(totalMin / 60),
-      m: totalMin % 60,
-    });
-  }
-
-  _pillState() {
-    const live = this._live;
-    if (!live) {
-      return { sev: "problem", text: this._t("status_nodata") };
-    }
-    if (live.algorithm_status === "error") {
-      return { sev: "problem", text: this._t("status_error") };
-    }
-    const ageMs = this._ageMs();
-    const stale =
-      live.algorithm_status === "stale" ||
-      live.watchdog_state === "stale" ||
-      (ageMs !== null && ageMs > STALE_AGE_MS);
-    if (stale) {
-      const suffix = ageMs !== null ? " · " + this._ageText(ageMs) : "";
-      return { sev: "warn", text: this._t("status_stale") + suffix };
-    }
-    const age = ageMs !== null ? this._ageText(ageMs) : this._t("age_unknown");
-    return { sev: "ok", text: fmtStr(this._t("status_running"), { age }) };
-  }
-
-  _applyPill() {
-    if (!this._hero) {
-      return;
-    }
-    const { sev, text } = this._pillState();
-    this._hero.pill.className = "pill pill-" + sev;
-    this._hero.pillText.textContent = text;
-    // Tooltip: the exact local timestamp (with seconds) of the last cycle.
-    this._hero.pill.title =
-      this._lastUpdateMs === null
-        ? this._t("age_unknown")
-        : new Date(this._lastUpdateMs).toLocaleString(this._lang, {
-            year: "numeric",
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          });
-  }
-
-  /** 1-second tick: refresh only the age-dependent pill (cheap, no reflow). */
-  _tickAge() {
-    if (this._built) {
-      this._applyPill();
-    }
-  }
-
-  _updateHero() {
-    const H = this._hero;
-    const cfg = this._config || {};
-    const live = this._live || {};
-
-    this._applyPill();
-
-    const total = this._view.length;
-    const liveN = this._view.filter((r) => r.state === STATE_LIVE).length;
-    H.liveVal.textContent = total ? `${liveN}/${total}` : "—";
-
-    const flagN = this._view.reduce((s, r) => s + r.flags.length, 0);
-    H.flagsVal.textContent = String(flagN);
-    H.flagsMetric.classList.toggle("has", flagN > 0);
-
-    // Prefer live.mode: it is refreshed on every poll, whereas config.mode is
-    // only re-fetched on writes / initial load (so it can lag an external
-    // mode change made through the HA mode entity).
-    const mode = pick(live, ["mode"], pick(cfg, ["mode"], "heating"));
-    for (const m of MODES) {
-      H.modeBtns[m].classList.toggle("active", m === mode);
-    }
-
-    // Safe dew point is only meaningful while cooling; the chip stays visible
-    // throughout cooling and, when there is no value, explains why (per room
-    // for a small house, collectively above three rooms).
-    const dew = num(live.global_safe_dew_point_c);
-    if (mode === "cooling") {
-      H.dewChip.style.display = "";
-      if (dew !== null) {
-        H.dewVal.textContent = fmt(dew, 1, " °C");
-        H.dewSub.textContent = "";
-        H.dewSub.style.display = "none";
-        H.dewChip.title = "";
-      } else {
-        H.dewVal.textContent = "—";
-        const reason = this._dewReasonSummary();
-        H.dewSub.textContent = reason;
-        H.dewSub.style.display = reason ? "" : "none";
-        H.dewChip.title = reason;
-      }
+  /** Jump to the Tuning tab scoped to a room (the assist "tune" shortcut). */
+  _tuneRoom(name) {
+    this._setActiveTab("tuning");
+    this._ensureTuningLoaded();
+    if (this._tuning) {
+      this._setTuningScope(name);
     } else {
-      H.dewChip.style.display = "none";
-    }
-
-    const homeTemp = num(cfg.home_setpoint_c);
-    H.homeVal.textContent = fmt(homeTemp, 1, " °C");
-    H.homeMinus.disabled = homeTemp === null || homeTemp <= HOME_MIN;
-    H.homePlus.disabled = homeTemp === null || homeTemp >= HOME_MAX;
-  }
-
-  // -- Rendering: room table ----------------------------------------------
-
-  _reconcileTable() {
-    const tbody = this._els.tbody;
-    const rows = this._view;
-
-    if (rows.length === 0) {
-      for (const [, el] of this._rows) {
-        el.remove();
-      }
-      this._rows.clear();
-      const loading = !this._config && !this._live;
-      this._els.empty.textContent = loading ? this._t("loading") : this._t("no_rooms");
-      this._els.empty.style.display = "";
-      this._els.tableWrap.style.display = "none";
-      return;
-    }
-    this._els.empty.style.display = "none";
-    this._els.tableWrap.style.display = "";
-
-    const desired = new Set(rows.map((r) => r.name));
-    for (const [name, el] of [...this._rows]) {
-      if (!desired.has(name)) {
-        el.remove();
-        this._rows.delete(name);
-      }
-    }
-
-    rows.forEach((r, i) => {
-      let tr = this._rows.get(r.name);
-      if (!tr) {
-        tr = this._buildRow(r.name);
-        this._rows.set(r.name, tr);
-      }
-      const at = tbody.children[i];
-      if (at !== tr) {
-        tbody.insertBefore(tr, at || null);
-      }
-      this._updateRow(tr, r);
-    });
-  }
-
-  _buildRow(name) {
-    const p = {};
-
-    // Column 1: three-state control segment (Off / Shadow / Live).
-    p.stateBtns = {};
-    const seg = h("div", { class: "seg3", role: "group" });
-    for (const meta of STATE_META) {
-      const btn = h(
-        "button",
-        {
-          class: "seg3-btn",
-          type: "button",
-          title: this._t(meta.key),
-          "aria-label": this._t(meta.key),
-          dataset: { state: meta.state },
-          on: {
-            click: (e) => {
-              e.stopPropagation();
-              this._setRoomState(name, meta.state);
-            },
-          },
-        },
-        [this._icon(meta.icon, meta.glyph)],
-      );
-      p.stateBtns[meta.state] = btn;
-      seg.appendChild(btn);
-    }
-    const stateCell = h("td", { class: "col-state" }, [seg]);
-
-    // Column 2: severity dot + name.
-    p.dot = h("span", { class: "dot" });
-    p.name = h("span", { class: "card-name", text: name });
-    const nameCell = h("td", { class: "col-room" }, [
-      h("div", { class: "name-cell" }, [p.dot, p.name]),
-    ]);
-
-    // Column 3: measured room temperature + trend arrow.
-    p.temp = h("span", { class: "meas-val" });
-    p.trend = h("span", { class: "trend" });
-    const measCell = h("td", { class: "col-measured" }, [
-      h("div", { class: "meas-cell" }, [p.temp, p.trend]),
-    ]);
-
-    // Column 4: setpoint + offset annotation.
-    p.spVal = h("span", { class: "sp-val" });
-    p.spOffset = h("span", { class: "cell-sub" });
-    const spCell = h("td", { class: "col-setpoint" }, [
-      h("div", { class: "sp-cell" }, [p.spVal, p.spOffset]),
-    ]);
-
-    // Column 5: error = setpoint - measured (signed, computed in the panel).
-    p.err = h("span", { class: "err-val" });
-    const errCell = h("td", { class: "col-error" }, [p.err]);
-
-    // Column 6: valve percent (no mini-bar here — that stays on the Valves tab).
-    p.valveVal = h("span", { class: "valve-val" });
-    const valveCell = h("td", { class: "col-valve" }, [p.valveVal]);
-
-    // Columns 7-8: loop supply / return temperature, read live from hass.states
-    // (same entities + helper the Valves tab uses; first loop when a room has
-    // several).
-    p.supplyVal = h("span", { class: "meas-val" });
-    const supplyCell = h("td", { class: "col-supply" }, [p.supplyVal]);
-    p.returnVal = h("span", { class: "meas-val" });
-    const returnCell = h("td", { class: "col-return" }, [p.returnVal]);
-
-    // Columns 9-10: fast-source (assist) mode + target temperature.
-    p.assistMode = h("span", { class: "fast-badge" });
-    const assistModeCell = h("td", { class: "col-assist-mode" }, [p.assistMode]);
-    p.assistTemp = h("span", { class: "meas-val" });
-    const assistTempCell = h("td", { class: "col-assist-temp" }, [p.assistTemp]);
-
-    const tr = h(
-      "tr",
-      {
-        tabindex: "0",
-        dataset: { room: name },
-        on: {
-          click: (e) => {
-            if (e.target.closest("button")) {
-              return;
-            }
-            this._select(name);
-          },
-          keydown: (e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              this._select(name);
-            }
-          },
-        },
-      },
-      [
-        stateCell,
-        nameCell,
-        measCell,
-        spCell,
-        errCell,
-        valveCell,
-        supplyCell,
-        returnCell,
-        assistModeCell,
-        assistTempCell,
-      ],
-    );
-    tr._parts = p;
-    return tr;
-  }
-
-  _updateRow(tr, r) {
-    const p = tr._parts;
-
-    tr.classList.toggle("selected", r.name === this._selectedRoom);
-    tr.classList.toggle("off", r.state === STATE_OFF);
-    p.dot.className = "dot sev-" + r.severity;
-
-    // Three-state segment: highlight the active state's button.
-    for (const meta of STATE_META) {
-      p.stateBtns[meta.state].classList.toggle("active", r.state === meta.state);
-    }
-
-    // Measured — the echoed room temperature, never setpoint - error.
-    p.temp.textContent = fmt(r.current, 1, "°");
-    p.trend.textContent = trendArrow(r.trend) + " " + fmt(r.trend, 1, " K/h");
-
-    // Setpoint + offset annotation (shown only when the offset is non-zero).
-    p.spVal.textContent = fmt(r.setpoint, 1, "°");
-    if (r.offset) {
-      p.spOffset.textContent = fmtStr(this._t("card_offset"), {
-        v: signed(r.offset, 1),
-      });
-      p.spOffset.style.display = "";
-    } else {
-      p.spOffset.textContent = "";
-      p.spOffset.style.display = "none";
-    }
-
-    // Error = setpoint - measured (signed K), consistent by construction with
-    // the two adjacent columns.
-    const err =
-      r.setpoint !== null && r.current !== null ? r.setpoint - r.current : null;
-    p.err.textContent = signed(err, 1, " K");
-
-    // Valve percent (value only — the mini-bar stays on the Valves tab).
-    p.valveVal.textContent = fmt(r.valve, 0, "%");
-
-    // Loop supply / return, read live from hass.states (first loop when a
-    // room has several — the full per-loop breakdown lives on the Valves tab).
-    const primaryLoop = this._roomLoops(r)[0] || null;
-    p.supplyVal.textContent = fmt(
-      primaryLoop ? this._stateNum(primaryLoop.supplyId) : null,
-      1,
-      "°",
-    );
-    p.returnVal.textContent = fmt(
-      primaryLoop ? this._stateNum(primaryLoop.returnId) : null,
-      1,
-      "°",
-    );
-
-    // Assist mode + target temperature (split from the old combined badge).
-    const assistMode = this._assistModeLabel(r);
-    p.assistMode.className = "fast-badge " + assistMode.cls;
-    p.assistMode.textContent = assistMode.text;
-    const assistActive = r.fastKind !== "none" && r.fastOn && r.fastMode !== "off";
-    p.assistTemp.textContent = assistActive ? fmt(r.fastTarget, 1, "°") : "—";
-  }
-
-  _chip(code) {
-    return h("span", {
-      class: "chip chip-" + this._flagSev(code),
-      text: this._flagLabel(code),
-    });
-  }
-
-  // -- Rendering: room detail ---------------------------------------------
-
-  /** True when the detail renders as a fixed overlay drawer (narrow viewport). */
-  _isOverlay() {
-    return !!(
-      window.matchMedia &&
-      window.matchMedia(`(max-width: ${OVERLAY_MAX_PX}px)`).matches
-    );
-  }
-
-  _select(name) {
-    this._selectedRoom = name;
-    this._render();
-    // Side-by-side layout: keep the sticky column in view. The overlay drawer
-    // is fixed, so scrolling would only jump the page behind it.
-    if (!this._isOverlay() && this._els.detail && this._els.detail.scrollIntoView) {
-      this._els.detail.scrollIntoView({ block: "nearest" });
+      // Payload not loaded yet: remember the desired scope for `_adoptTuning`.
+      this._tuningScope = name;
     }
   }
 
-  _deselect() {
-    const prev = this._selectedRoom;
-    const detail = this._els && this._els.detail;
-    const active = this.shadowRoot ? this.shadowRoot.activeElement : null;
-    const hadFocus = !!(detail && active && detail.contains(active));
-    this._selectedRoom = null;
-    this._render();
-    // Hand focus back to the room's table row when the close came from inside
-    // the inspector (keyboard flow); an outside click keeps its own focus.
-    if (hadFocus && prev) {
-      const row = this._rows.get(prev);
-      if (row && row.isConnected) {
-        row.focus();
-      }
-    }
-  }
-
-  _syncDetail() {
-    const detail = this._els.detail;
-    if (!this._selectedRoom) {
-      detail.style.display = "none";
-      this._els.layout.classList.remove("has-detail");
-      this._detailRoom = null;
-      this._disconnectChartRO();
-      return;
-    }
-    detail.style.display = "";
-    this._els.layout.classList.add("has-detail");
-
-    const fresh = this._detailRoom !== this._selectedRoom;
-    if (fresh) {
-      this._buildDetail(this._selectedRoom);
-      this._detailRoom = this._selectedRoom;
-    }
-    const r = this._viewByName.get(this._selectedRoom);
-    this._updateDetail(r);
-    this._refreshWiringStates();
-    this._refreshHistory();
-    this._updateLegendValues();
-    // Overlay drawer: move focus into the (role=dialog) inspector on open so
-    // Escape and screen readers land in the right place — never on a poll.
-    if (fresh && this._isOverlay()) {
-      detail.focus({ preventScroll: true });
-    }
-  }
-
-  _buildDetail(name) {
-    const D = { rows: [] };
-    // Publish the new refs before building sections: `_buildHistory` kicks off
-    // an async fetch that resolves against `this._detail.history`.
-    this._detail = D;
-    const detail = this._els.detail;
-    detail.textContent = "";
-    detail.setAttribute("aria-label", name);
-
-    // Sticky header: severity dot + room name + close.
-    D.headDot = h("span", { class: "dot" });
-    D.title = h("span", { class: "detail-title", text: name });
-    const close = h(
-      "button",
-      {
-        class: "ghost-btn detail-close",
-        type: "button",
-        title: this._t("detail_close"),
-        "aria-label": this._t("detail_close"),
-        on: { click: () => this._deselect() },
-      },
-      [this._icon("mdi:close", "✕")],
-    );
-    const header = h("div", { class: "detail-head" }, [
-      D.headDot,
-      D.title,
-      h("span", { class: "spacer" }),
-      close,
-    ]);
-
-    // Active flags surface first — they explain everything below them.
-    D.flagsEl = h("div", { class: "chips" });
-    D.flagsBlock = h("div", { class: "detail-flags", style: "display:none" }, [
-      D.flagsEl,
-    ]);
-
-    // Key numbers as a 2×2 tile grid: measured (+trend), setpoint (the offset
-    // stepper lives here), valve (+bar) and the fast-source command.
-    D.statTempVal = h("span", { class: "stat-val" });
-    D.statTempTrend = h("span", { class: "stat-sub" });
-    D.spMinus = h("button", {
-      class: "step-btn",
-      type: "button",
-      text: "−",
-      on: { click: () => this._nudgeOffset(name, -OFFSET_STEP) },
-    });
-    D.spVal = h("span", { class: "step-val" });
-    D.spPlus = h("button", {
-      class: "step-btn",
-      type: "button",
-      text: "+",
-      on: { click: () => this._nudgeOffset(name, OFFSET_STEP) },
-    });
-    D.spOffset = h("span", { class: "stat-sub" });
-    D.statValveVal = h("span", { class: "stat-val" });
-    D.statValveFill = h("span", { class: "valve-fill" });
-    D.statAssist = h("span", { class: "fast-badge stat-badge" });
-    const tiles = h("div", { class: "stat-tiles" }, [
-      h("div", { class: "stat-tile" }, [
-        h("span", { class: "stat-cap", text: this._t("th_measured") }),
-        D.statTempVal,
-        D.statTempTrend,
-      ]),
-      h("div", { class: "stat-tile" }, [
-        h("span", { class: "stat-cap", text: this._t("card_setpoint") }),
-        h("div", { class: "stepper" }, [D.spMinus, D.spVal, D.spPlus]),
-        D.spOffset,
-      ]),
-      h("div", { class: "stat-tile" }, [
-        h("span", { class: "stat-cap", text: this._t("th_valve") }),
-        D.statValveVal,
-        h("div", { class: "valve-track stat-track" }, [D.statValveFill]),
-      ]),
-      h("div", { class: "stat-tile" }, [
-        h("span", { class: "stat-cap", text: this._t("dec_fast") }),
-        D.statAssist,
-      ]),
-    ]);
-
-    // Section: controller decision.
-    const dec = this._buildDecision(D);
-
-    // Section: history charts, mounted in `.history-mount[data-room]`.
-    const historyMount = h("div", {
-      class: "history-mount",
-      dataset: { room: name },
-    });
-    this._buildHistory(D, name, historyMount);
-    const history = this._section(this._t("sec_history"), historyMount);
-
-    // Section: wiring — reference material, foldable, at the bottom; the
-    // disclosure state persists across room switches (instance-level).
-    D.wiringBody = h("div", { class: "wire-list" });
-    const wiring = h(
-      "details",
-      {
-        class: "sub sub-fold",
-        open: this._wiringOpen ? true : null,
-        on: {
-          toggle: (e) => {
-            this._wiringOpen = e.target.open;
-          },
-        },
-      },
-      [
-        h("summary", { class: "sub-title", text: this._t("sec_wiring") }),
-        D.wiringBody,
-      ],
-    );
-    this._buildWiring(D, name);
-
-    const body = h("div", { class: "detail-body" }, [
-      D.flagsBlock,
-      tiles,
-      dec,
-      history,
-      wiring,
-    ]);
-    detail.appendChild(header);
-    detail.appendChild(body);
-  }
-
-  _section(title, body) {
-    return h("section", { class: "sub" }, [
-      h("div", { class: "sub-title", text: title }),
-      body,
-    ]);
-  }
-
-  _buildWiring(D, name) {
-    const room = this._viewByName.get(name) || {};
-    const entities = room.entities || {};
-    for (const role of WIRING_ROLES) {
-      const value = entities[role];
-      const ids = Array.isArray(value) ? value.filter(Boolean) : value ? [value] : [];
-      const label = this._t("role_" + role);
-      if (ids.length === 0) {
-        D.wiringBody.appendChild(
-          h("div", { class: "wire-row muted" }, [
-            h("span", { class: "wire-role", text: label }),
-            h("span", { class: "wire-id", text: this._t("wire_unset") }),
-          ]),
-        );
-        continue;
-      }
-      for (const id of ids) {
-        this._addWireRow(D, label, id);
-      }
-    }
-
-    // Optional future field: per-room diagnostic entities (role -> id/list).
-    const diag = room.diagnosticEntities;
-    if (diag && Object.keys(diag).length) {
-      D.wiringBody.appendChild(
-        h("div", { class: "wire-group-cap", text: this._t("sec_diagnostics") }),
-      );
-      for (const [key, value] of Object.entries(diag)) {
-        const ids = Array.isArray(value) ? value.filter(Boolean) : value ? [value] : [];
-        const roleKey = "role_" + key;
-        const label = roleKey in STR.en ? this._t(roleKey) : key;
-        for (const id of ids) {
-          this._addWireRow(D, label, id);
-        }
-      }
-    }
-  }
-
-  _addWireRow(D, label, id) {
-    const stateEl = h("span", { class: "wire-state" });
-    const badgeEl = h("span", {
-      class: "wire-badge",
-      text: this._t("wire_unavailable"),
-      style: "display:none",
-    });
-    const rowEl = h(
-      "div",
-      {
-        class: "wire-row link",
-        tabindex: "0",
-        title: id,
-        on: {
-          click: () => this._moreInfo(id),
-          keydown: (e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              this._moreInfo(id);
-            }
-          },
-        },
-      },
-      [
-        h("span", { class: "wire-role", text: label }),
-        h("span", { class: "wire-id", text: id }),
-        stateEl,
-        badgeEl,
-        this._icon("mdi:open-in-new", "›"),
-      ],
-    );
-    D.rows.push({ entityId: id, stateEl, badgeEl, rowEl });
-    D.wiringBody.appendChild(rowEl);
-  }
-
-  _refreshWiringStates() {
-    const D = this._detail;
-    if (!D || !this._selectedRoom) {
-      return;
-    }
-    const states = (this._hass && this._hass.states) || {};
-    for (const row of D.rows) {
-      if (!row.entityId) {
-        continue;
-      }
-      const st = states[row.entityId];
-      const val = st ? st.state : null;
-      const bad = !st || val === null || UNAVAILABLE_STATES.has(String(val));
-      const unit =
-        st && st.attributes ? st.attributes.unit_of_measurement || "" : "";
-      if (!st) {
-        row.stateEl.textContent = this._t("wire_missing");
-      } else {
-        row.stateEl.textContent = String(val) + (unit && !bad ? " " + unit : "");
-      }
-      row.badgeEl.style.display = bad ? "" : "none";
-      row.rowEl.classList.toggle("wire-bad", bad);
-    }
-  }
-
-  _buildDecision(D) {
-    const body = h("div", { class: "dec" });
-
-    // Controller inputs (a 2-column key-value grid; the dew-exclusion cell is
-    // hidden entirely while there is no reason to show).
-    const gridIn = h("div", { class: "kv-grid" });
-    D.errorEl = this._kv(gridIn, this._t("dec_error")).valEl;
-    D.dewEl = this._kv(gridIn, this._t("dec_dew")).valEl;
-    const dewReason = this._kv(gridIn, this._t("dec_dew_reason"));
-    D.dewReasonEl = dewReason.valEl;
-    D.dewReasonRow = dewReason.rowEl;
-    body.appendChild(gridIn);
-
-    // Signed contribution bars for the four valve terms.
-    D.terms = {};
-    const termsWrap = h("div", { class: "terms" });
-    for (const [key, cap] of [
-      ["pTerm", this._t("term_p")],
-      ["iTerm", this._t("term_i")],
-      ["trendTerm", this._t("term_trend")],
-      ["ffTerm", this._t("term_ff")],
-    ]) {
-      const fill = h("span", { class: "term-fill" });
-      const valEl = h("span", { class: "term-val" });
-      const row = h("div", { class: "term-row" }, [
-        h("span", { class: "term-cap", text: cap }),
-        h("div", { class: "term-track" }, [h("span", { class: "term-mid" }), fill]),
-        valEl,
-      ]);
-      D.terms[key] = { fill, valEl };
-      termsWrap.appendChild(row);
-    }
-    body.appendChild(
-      h("div", { class: "dec-block" }, [
-        h("div", { class: "dec-block-cap", text: this._t("dec_terms") }),
-        termsWrap,
-      ]),
-    );
-
-    // Outputs and limiter state (the throttle cell hides while not cooling).
-    const gridOut = h("div", { class: "kv-grid" });
-    D.rawValveEl = this._kv(gridOut, this._t("dec_raw_valve")).valEl;
-    D.finalValveEl = this._kv(gridOut, this._t("dec_final_valve")).valEl;
-    const throttle = this._kv(gridOut, this._t("dec_throttle"));
-    D.throttleEl = throttle.valEl;
-    D.throttleRow = throttle.rowEl;
-    D.integratorEl = this._kv(gridOut, this._t("dec_integrator")).valEl;
-    D.saturatedEl = this._kv(gridOut, this._t("dec_saturated")).valEl;
-    D.floorEl = this._kv(gridOut, this._t("dec_floor")).valEl;
-    body.appendChild(gridOut);
-
-    D.explanationEl = h("div", { class: "explanation" });
-    body.appendChild(
-      h("div", { class: "dec-block" }, [
-        h("div", { class: "dec-block-cap", text: this._t("dec_explanation") }),
-        D.explanationEl,
-      ]),
-    );
-
-    // Raw report JSON in a collapsed <details> (open state survives polls).
-    D.rawPre = h("pre", { class: "raw-pre" });
-    const details = h("details", { class: "raw" }, [
-      h("summary", { text: this._t("raw_show") }),
-      D.rawPre,
-    ]);
-    body.appendChild(details);
-
-    return this._section(this._t("sec_decision"), body);
-  }
-
-  /** One key-value cell (small muted caption over a strong value) in a grid. */
-  _kv(parent, label) {
-    const valEl = h("span", { class: "kv-val" });
-    const rowEl = h("div", { class: "kv" }, [
-      h("span", { class: "kv-cap", text: label }),
-      valEl,
-    ]);
-    parent.appendChild(rowEl);
-    return { rowEl, valEl };
-  }
-
-  _updateDetail(r) {
-    const D = this._detail;
-    if (!D) {
-      return;
-    }
-    if (!r) {
-      D.errorEl.textContent = this._t("no_live_room");
-      return;
-    }
-    D.title.textContent = r.name;
-    D.headDot.className = "dot sev-" + r.severity;
-
-    // Stat tiles: measured (+trend), setpoint stepper (+offset), valve, assist.
-    D.statTempVal.textContent = fmt(r.current, 1, "°");
-    D.statTempTrend.textContent =
-      trendArrow(r.trend) + " " + fmt(r.trend, 2, " K/h");
-    D.spVal.textContent = fmt(r.setpoint, 1, " °C");
-    if (r.offset) {
-      D.spOffset.textContent = fmtStr(this._t("card_offset"), {
-        v: signed(r.offset, 1),
-      });
-      D.spOffset.style.display = "";
-    } else {
-      D.spOffset.textContent = "";
-      D.spOffset.style.display = "none";
-    }
-    D.spMinus.disabled = r.offset <= OFFSET_MIN;
-    D.spPlus.disabled = r.offset >= OFFSET_MAX;
-    D.statValveVal.textContent = fmt(r.valve, 0, "%");
-    D.statValveFill.style.width =
-      (r.valve === null ? 0 : clamp(r.valve, 0, 100)) + "%";
-    const assist = this._assistLabel(r);
-    D.statAssist.className = "fast-badge stat-badge " + assist.cls;
-    D.statAssist.textContent = assist.text;
-
-    D.errorEl.textContent = fmt(r.errorC, 2, " K");
-    D.dewEl.textContent = fmt(r.dew, 1, " °C");
-    D.dewReasonEl.textContent = r.dewReason ? this._dewReasonText(r.dewReason) : "—";
-    D.dewReasonRow.style.display = r.dewReason ? "" : "none";
-
-    const terms = {
-      pTerm: r.pTerm,
-      iTerm: r.iTerm,
-      trendTerm: r.trendTerm,
-      ffTerm: r.ffTerm,
-    };
-    const maxAbs = Math.max(
-      0.001,
-      ...Object.values(terms).map((v) => Math.abs(v === null ? 0 : v)),
-    );
-    for (const [key, cell] of Object.entries(D.terms)) {
-      const v = terms[key] === null ? 0 : terms[key];
-      const ratio = clamp(Math.abs(v) / maxAbs, 0, 1);
-      const half = ratio * 50;
-      if (v >= 0) {
-        cell.fill.style.left = "50%";
-        cell.fill.style.width = half + "%";
-        cell.fill.classList.remove("neg");
-      } else {
-        cell.fill.style.left = 50 - half + "%";
-        cell.fill.style.width = half + "%";
-        cell.fill.classList.add("neg");
-      }
-      cell.valEl.textContent = signed(terms[key], 1, "%");
-    }
-
-    D.rawValveEl.textContent = fmt(r.rawValve, 0, "%");
-    D.finalValveEl.textContent = fmt(r.valve, 0, "%");
-    D.throttleEl.textContent =
-      r.throttle === null ? "—" : fmt(r.throttle * 100, 0, "%");
-    D.throttleRow.style.display = r.throttle === null ? "none" : "";
-    D.integratorEl.textContent = r.integratorFrozen
-      ? this._t("integ_frozen")
-      : this._t("integ_active");
-    D.integratorEl.classList.toggle("warn", r.integratorFrozen);
-    D.saturatedEl.textContent = r.saturated ? this._t("yes") : this._t("no");
-    D.saturatedEl.classList.toggle("warn", r.saturated);
-    D.floorEl.textContent = r.valveFloor ? this._t("yes") : this._t("no");
-    D.floorEl.classList.toggle("warn", r.valveFloor);
-
-    D.explanationEl.textContent = r.explanation || "—";
-
-    D.flagsEl.textContent = "";
-    for (const f of r.flags) {
-      D.flagsEl.appendChild(this._chip(f));
-    }
-    D.flagsBlock.style.display = r.flags.length ? "" : "none";
-
-    let raw;
-    try {
-      raw = JSON.stringify(r.report, null, 2);
-    } catch (err) {
-      raw = String(r.report);
-    }
-    D.rawPre.textContent = raw || "{}";
-  }
-
-  // -- Rendering: detail history chart ------------------------------------
+  // --------------------------------------------------------------------------
+  // History & charts
+  // --------------------------------------------------------------------------
 
   /**
    * Build the history section UI (window switch, legend, scroll+SVG holder,
