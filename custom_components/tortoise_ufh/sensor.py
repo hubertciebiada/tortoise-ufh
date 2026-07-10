@@ -51,6 +51,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_ROOM_NAME, CONF_ROOMS
 from .coordinator import CoordinatorData, TortoiseUfhCoordinator
+from .device import hub_device_info, room_device_info, room_slug
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -364,12 +365,12 @@ class TortoiseUfhSensorEntity(CoordinatorEntity[TortoiseUfhCoordinator], SensorE
         self._room_name = room_name
 
         if room_name is not None:
-            safe_room = room_name.lower().replace(" ", "_")
-            self._attr_unique_id = f"{entry_id}_{safe_room}_{description.key}"
-            self._attr_name = f"{room_name} {description.key.replace('_', ' ')}"
+            slug = room_slug(room_name)
+            self._attr_unique_id = f"{entry_id}_{slug}_{description.key}"
+            self._attr_device_info = room_device_info(entry_id, room_name)
         else:
             self._attr_unique_id = f"{entry_id}_{description.key}"
-            self._attr_name = f"Tortoise-UFH {description.key.replace('_', ' ')}"
+            self._attr_device_info = hub_device_info(entry_id)
 
     @property
     def native_value(self) -> Any:

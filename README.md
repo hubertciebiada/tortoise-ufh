@@ -215,6 +215,20 @@ entities, and the same actions are available as the `set_home_temperature`,
 `set_room_offset` and `set_mode` services and over the panel WebSocket API. No YAML editing
 is required. A `dashboard_tortoise_ufh.yaml` Lovelace template ships as a fallback.
 
+### Devices and entity naming
+
+Since v0.5.0 every room is a **device** in Home Assistant (model "Room zone", linked to a
+per-entry "UFH controller" hub device that carries the global entities), so rooms can be
+assigned to HA **areas** and browsed on their device page. Entities are named through
+Home Assistant's translation system (`has_entity_name` + `translation_key`), so entity
+names follow your HA language (English and Polish ship with the integration).
+
+Upgrading installations keep their existing entity ids — entities are matched by their
+unchanged `unique_id` in the registry. **New** installations derive entity ids from the
+device + translated-name convention, so a few ids differ from pre-0.5.0 installs (e.g.
+`sensor.salon_dew_point` instead of `sensor.salon_room_dew_point`); resolve entities via
+the UI pickers rather than hard-coding pre-0.5.0 ids.
+
 ---
 
 ## Control state: off / shadow / live (per room)
@@ -247,7 +261,11 @@ rooms drive hardware.**
 > old `participates` flag, per-room `live_control` toggles and the global kill switch are
 > folded into the new per-room control state (`participates == false` becomes `off`). The
 > `switch.tortoise_ufh_kill_switch` and `switch.*_live_control` entities are removed and
-> replaced by `select.*_control_state`.
+> replaced by `select.*_control_state`. v0.5.0 additionally retires the redundant
+> `binary_sensor.*_live_control` (it merely mirrored `control_state == "live"`; orphaned
+> registry entries are cleaned up on setup) and drops the transitional
+> `live_control_enabled` field from the `tortoise_ufh/get_live` websocket payload — read
+> `control_state` instead.
 
 ---
 

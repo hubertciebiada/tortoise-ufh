@@ -80,9 +80,10 @@ tortoise-ufh/
     tuning.py                        # controller-knob introspection helpers (annex 2026-07-10)
     config_flow.py                   # multi-step wizard + options-flow menu (selectors)
     entity_validator.py              # hardware-agnostic unit validation
+    device.py                        # DeviceInfo helpers: room + hub devices (v0.5.0)
     number.py                        # global home-temp + per-room offset (writable)
     sensor.py                        # per-room report/diagnostics + GLOBAL safe dew-point sensor
-    binary_sensor.py                 # per-room flags (sensor_lost, saturated, live/shadow, safety)
+    binary_sensor.py                 # per-room flags (sensor_lost, saturated, condensation)
     select.py                        # per-room control-state select (off / shadow / live)
     websocket.py                     # panel API commands (config/live/setters + room state + tuning)
     panel.py                         # register sidebar panel + static path for the JS module
@@ -724,11 +725,20 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   `fast_source_mode` and `explanation`) all `EntityCategory.DIAGNOSTIC`; **one GLOBAL
   sensor `global_safe_dew_point`** (°C) = coordinator's `global_safe_dew_point_c` — the value the owner
   pipes to the HP; plus global `algorithm_status`, `last_update` (TIMESTAMP), `watchdog_status`.
-- **`binary_sensor.py`**: per-room `sensor_lost`, `output_saturated`, `s2_condensation_active`,
-  `live_control` (RUNNING device class; derived, on when state == live). **`select.py`**: one per-room
+- **`binary_sensor.py`**: per-room `sensor_lost`, `output_saturated`, `s2_condensation_active`.
+  *(The derived per-room `live_control` binary sensor was retired in v0.5.0 — redundant with the
+  control-state select; orphaned registry entries are swept on setup by
+  `__init__._async_purge_retired_entities`, no entry-version bump.)* **`select.py`**: one per-room
   `control_state` select (`off` / `shadow` / `live`, `translation_key="control_state"`,
   `EntityCategory.CONFIG`); `async_select_option` → `coordinator.set_room_state`. This native select
   replaced the retired global kill-switch and per-room `live_control` switch (both purged by migration).
+- **Devices & entity naming (v0.5.0, GH #3)**: helpers in **`device.py`** — every room is a device
+  (`(DOMAIN, f"{entry_id}_{room_slug}")`, name = room name, model "Room zone", `via_device` → hub), plus
+  one per-entry hub device (`(DOMAIN, entry_id)`, name "Tortoise-UFH", model "UFH controller") carrying
+  the global entities. NO platform sets `_attr_name`; every entity is `has_entity_name = True` and named
+  via its `translation_key` (full EN/PL parity in `strings.json` / `translations/{en,pl}.json`).
+  **`unique_id` templates are frozen** (`{entry_id}[_{room_slug}]_{key}`) — upgrades keep entity ids via
+  the registry; only new installs derive ids from device + translated name.
 - **`config_flow.py`**: multi-step wizard with selectors (blueprint §2 pattern). Valve selector uses
   `EntitySelectorConfig(domain=["number", "valve"])` **multiple=True** (a room has 1..n valves;
   both `number`- and `valve`-domain actuators are accepted — see the coordinator's per-domain

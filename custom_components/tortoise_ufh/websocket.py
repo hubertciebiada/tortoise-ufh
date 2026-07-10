@@ -247,10 +247,8 @@ class LiveRoomView:
         setpoint_c: The effective target temperature in degrees Celsius used
             this cycle (home temperature + room offset).
         control_state: The room's control state (one of :data:`ROOM_STATES`:
-            ``off`` / ``shadow`` / ``live``).
-        live_control_enabled: Whether the room is in live control; a derived
-            convenience equal to ``control_state == "live"``, retained for one
-            release for backward compatibility with the panel.
+            ``off`` / ``shadow`` / ``live``). The formerly duplicated
+            ``live_control_enabled`` convenience flag was removed in v0.5.0.
 
     Raises:
         ValueError: If ``name`` is empty, ``setpoint_c`` is not finite, or
@@ -261,7 +259,6 @@ class LiveRoomView:
     outputs: dict[str, Any]
     setpoint_c: float
     control_state: str
-    live_control_enabled: bool
 
     def __post_init__(self) -> None:
         """Validate the live-room view fields."""
@@ -283,7 +280,6 @@ class LiveRoomView:
         merged: dict[str, Any] = dict(self.outputs)
         merged["setpoint_c"] = self.setpoint_c
         merged["control_state"] = self.control_state
-        merged["live_control_enabled"] = self.live_control_enabled
         return merged
 
 
@@ -640,7 +636,6 @@ def ws_get_live(
             outputs=runtime.outputs.to_dict(),
             setpoint_c=runtime.setpoint_c,
             control_state=coordinator.get_room_state(name),
-            live_control_enabled=runtime.live_control_enabled,
         )
         for name, runtime in data.rooms.items()
     ]

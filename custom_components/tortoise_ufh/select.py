@@ -34,6 +34,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_ROOM_NAME, CONF_ROOMS, ROOM_STATES
 from .coordinator import TortoiseUfhCoordinator
+from .device import room_device_info, room_slug
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -129,9 +130,9 @@ class TortoiseUfhControlStateSelect(
         self.entity_description = description
         self._room_name = room_name
 
-        safe_room = room_name.lower().replace(" ", "_")
-        self._attr_unique_id = f"{entry_id}_{safe_room}_{description.key}"
-        self._attr_name = f"{room_name} {description.key.replace('_', ' ')}"
+        slug = room_slug(room_name)
+        self._attr_unique_id = f"{entry_id}_{slug}_{description.key}"
+        self._attr_device_info = room_device_info(entry_id, room_name)
 
     @property
     def current_option(self) -> str:

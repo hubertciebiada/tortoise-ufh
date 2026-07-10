@@ -16,8 +16,8 @@
           "room_name": "Room name",
           "room_area": "Floor area (m²)",
           "fast_source_kind": "Fast source (split / heater)",
-          "cooling_enabled": "Participates in floor cooling",
           "has_fast_source": "This room has a fast auxiliary source",
+          "cooling_enabled": "Participates in floor cooling",
           "add_another": "Add another room"
         }
       },
@@ -190,12 +190,61 @@
         }
       }
     },
+    "number": {
+      "home_temperature": {
+        "name": "Home temperature"
+      },
+      "offset": {
+        "name": "Setpoint offset"
+      }
+    },
     "sensor": {
+      "recommended_valve": {
+        "name": "Recommended valve position"
+      },
+      "error_c": {
+        "name": "Control error"
+      },
+      "trend_c_per_h": {
+        "name": "Temperature trend"
+      },
       "i_term": {
         "name": "Integral term (valve %)"
       },
       "trend_term": {
         "name": "Trend-damping term (valve %)"
+      },
+      "room_dew_point": {
+        "name": "Dew point"
+      },
+      "fast_source_mode": {
+        "name": "Fast-source mode"
+      },
+      "explanation": {
+        "name": "Explanation"
+      },
+      "global_safe_dew_point": {
+        "name": "Global safe dew point"
+      },
+      "algorithm_status": {
+        "name": "Algorithm status"
+      },
+      "last_update": {
+        "name": "Last update"
+      },
+      "watchdog_status": {
+        "name": "Watchdog status"
+      }
+    },
+    "binary_sensor": {
+      "sensor_lost": {
+        "name": "Sensor lost"
+      },
+      "output_saturated": {
+        "name": "Output saturated"
+      },
+      "s2_condensation_active": {
+        "name": "Condensation protection active"
       }
     }
   },

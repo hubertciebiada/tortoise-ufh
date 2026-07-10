@@ -1267,7 +1267,6 @@ class TortoiseUfhPanel extends HTMLElement {
     });
     if (this._live && this._live.rooms && this._live.rooms[room]) {
       const lr = { ...this._live.rooms[room], control_state: state };
-      lr.live_control_enabled = state === STATE_LIVE;
       this._live = {
         ...this._live,
         rooms: { ...this._live.rooms, [room]: lr },

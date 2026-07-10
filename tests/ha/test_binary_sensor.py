@@ -1,10 +1,12 @@
 """Integration tests for the Tortoise-UFH per-room diagnostic binary sensors.
 
-Asserts the four per-room binary sensors exist for both configured rooms, that
+Asserts the three per-room binary sensors exist for both configured rooms, that
 they read ``off`` while every source is fresh, and that losing a room's
 temperature sensor (once past the stale-cache window) flips that room's
 ``sensor_lost`` problem sensor on while the coordinator safe-degrades the room:
-valve frozen at its last position and the fast source forced off.
+valve frozen at its last position and the fast source forced off. The former
+``live_control`` binary sensor was retired in v0.5.0 (covered by the
+control-state select); its absence is pinned here.
 """
 
 from __future__ import annotations
@@ -24,7 +26,6 @@ _KEYS = (
     "sensor_lost",
     "output_saturated",
     "s2_condensation_active",
-    "live_control",
 )
 
 
@@ -38,13 +39,15 @@ def _entity_id(hass: HomeAssistant, entry_id: str, room: str, key: str) -> str |
 async def test_per_room_binary_sensors_exist(
     hass: HomeAssistant, setup_integration
 ) -> None:
-    """All four diagnostic binary sensors are created for both rooms."""
+    """All three diagnostic binary sensors are created for both rooms."""
     entry = setup_integration
     for room in _ROOMS:
         for key in _KEYS:
             entity_id = _entity_id(hass, entry.entry_id, room, key)
             assert entity_id is not None, f"missing {room} {key}"
             assert hass.states.get(entity_id) is not None
+        # The retired live_control binary sensor is never created any more.
+        assert _entity_id(hass, entry.entry_id, room, "live_control") is None
 
 
 async def test_all_fresh_sensor_lost_off(

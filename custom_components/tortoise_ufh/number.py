@@ -46,6 +46,7 @@ from .const import (
     ROOM_OFFSET_STEP_C,
 )
 from .coordinator import TortoiseUfhCoordinator
+from .device import hub_device_info, room_device_info, room_slug
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -229,14 +230,13 @@ class TortoiseUfhNumberEntity(CoordinatorEntity[TortoiseUfhCoordinator], NumberE
         self.entity_description = description
         self._room_name = room_name
 
-        pretty_key = description.key.replace("_", " ")
         if room_name is None:
             self._attr_unique_id = f"{entry_id}_{description.key}"
-            self._attr_name = f"Tortoise-UFH {pretty_key}"
+            self._attr_device_info = hub_device_info(entry_id)
         else:
-            safe_room = room_name.lower().replace(" ", "_")
-            self._attr_unique_id = f"{entry_id}_{safe_room}_{description.key}"
-            self._attr_name = f"{room_name} {pretty_key}"
+            slug = room_slug(room_name)
+            self._attr_unique_id = f"{entry_id}_{slug}_{description.key}"
+            self._attr_device_info = room_device_info(entry_id, room_name)
 
     @property
     def native_value(self) -> float:

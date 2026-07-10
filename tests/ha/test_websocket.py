@@ -156,12 +156,10 @@ async def test_get_live_returns_outputs_and_dew_point(
         assert "explanation" in room["report"]
         assert isinstance(room["report"]["flags"], list)
         assert "fast_source" in room
-        # Canonical control state plus the derived convenience flag.
+        # Canonical control state; the transitional live_control_enabled
+        # convenience flag was removed in v0.5.0.
         assert room["control_state"] in ROOM_STATES
-        assert "live_control_enabled" in room
-        assert room["live_control_enabled"] == (
-            room["control_state"] == ROOM_STATE_LIVE
-        )
+        assert "live_control_enabled" not in room
     # Effective setpoint is home + the room's configured offset.
     assert rooms["Salon"]["setpoint_c"] == _coordinator(hass).get_room_setpoint("Salon")
     assert rooms["Salon"]["setpoint_c"] == 21.0

@@ -12,20 +12,24 @@
 #      "Raw configuration editor".
 #   3. Paste the contents below (everything under `title:`), then Save.
 #
-# ENTITY IDS: Home Assistant derives each id from the entity's friendly name.
-#   Global (fixed ids):
+# ENTITY IDS: Home Assistant derives each id from "<device> <entity name>"
+# (since v0.5.0: room device + translated entity name; ids below are the
+# English defaults for a NEW install — installs upgraded from pre-0.5.0 keep
+# their old ids via the registry).
+#   Global (hub device "Tortoise-UFH"):
 #             number.tortoise_ufh_home_temperature
 #             sensor.tortoise_ufh_global_safe_dew_point   (°C)
 #             sensor.tortoise_ufh_algorithm_status
 #             sensor.tortoise_ufh_watchdog_status
-#   Per room the id is "<room>_<key>" (<room> = slug of the configured room
-#   name, no tortoise_ufh_ prefix), e.g. for a room named "Living room":
-#             select.living_room_control_state      (off/shadow/live)
-#             number.living_room_offset             (K, -5..+5)
-#             sensor.living_room_recommended_valve  (%)
+#   Per room the id is "<room>_<name>" (<room> = slug of the room device,
+#   no tortoise_ufh_ prefix), e.g. for a room named "Living room":
+#             select.living_room_control_state               (off/shadow/live)
+#             number.living_room_setpoint_offset             (K, -5..+5)
+#             sensor.living_room_recommended_valve_position  (%)
 #             sensor.living_room_fast_source_mode
-#             sensor.living_room_error_c            (°C; also _trend_c_per_h,
-#                                                    _i_term, _trend_term, ...)
+#             sensor.living_room_control_error               (°C; also
+#               _temperature_trend, _integral_term_valve,
+#               _trend_damping_term_valve, _dew_point, ...)
 # The integration creates NO room-temperature sensor of its own — the
 # "temperature" entities below (sensor.living_room_temp, sensor.bathroom_temp)
 # stand for the SOURCE sensors you mapped in the config flow; substitute yours.
@@ -73,9 +77,9 @@
 #             name: Control (off/shadow/live)
 #           - entity: sensor.living_room_temp
 #             name: Temp (°C)
-#           - entity: number.living_room_offset
+#           - entity: number.living_room_setpoint_offset
 #             name: Offset (K)
-#           - entity: sensor.living_room_recommended_valve
+#           - entity: sensor.living_room_recommended_valve_position
 #             name: Valve (%)
 #           - entity: sensor.living_room_fast_source_mode
 #             name: Fast source
@@ -87,7 +91,7 @@
 #         entities:
 #           - entity: sensor.living_room_temp
 #             name: Temperature (°C)
-#           - entity: sensor.living_room_recommended_valve
+#           - entity: sensor.living_room_recommended_valve_position
 #             name: Recommended valve (%)
 #
 #       # ---------------------------------------------------------------------
@@ -102,9 +106,9 @@
 #             name: Control (off/shadow/live)
 #           - entity: sensor.bathroom_temp
 #             name: Temp (°C)
-#           - entity: number.bathroom_offset
+#           - entity: number.bathroom_setpoint_offset
 #             name: Offset (K)
-#           - entity: sensor.bathroom_recommended_valve
+#           - entity: sensor.bathroom_recommended_valve_position
 #             name: Valve (%)
 #           - entity: sensor.bathroom_fast_source_mode
 #             name: Fast source
@@ -116,7 +120,7 @@
 #         entities:
 #           - entity: sensor.bathroom_temp
 #             name: Temperature (°C)
-#           - entity: sensor.bathroom_recommended_valve
+#           - entity: sensor.bathroom_recommended_valve_position
 #             name: Recommended valve (%)
 #
 #   # =======================================================================
@@ -138,11 +142,11 @@
 #         hours_to_show: 24
 #         refresh_interval: 300
 #         entities:
-#           - entity: number.living_room_offset
+#           - entity: number.living_room_setpoint_offset
 #             name: Room offset (K)
 #           - entity: sensor.living_room_temp
 #             name: Temperature (°C)
-#           - entity: sensor.living_room_recommended_valve
+#           - entity: sensor.living_room_recommended_valve_position
 #             name: Recommended valve (%)
 #
 #       - type: statistics-graph
@@ -152,13 +156,13 @@
 #           - mean
 #         chart_type: line
 #         entities:
-#           - entity: sensor.living_room_error_c
+#           - entity: sensor.living_room_control_error
 #             name: Error (°C)
-#           - entity: sensor.living_room_trend_c_per_h
+#           - entity: sensor.living_room_temperature_trend
 #             name: Trend (°C/h)
-#           - entity: sensor.living_room_i_term
+#           - entity: sensor.living_room_integral_term_valve
 #             name: Integral term (%)
-#           - entity: sensor.living_room_trend_term
+#           - entity: sensor.living_room_trend_damping_term_valve
 #             name: Trend-damping term (%)
 #
 #       # --- ROOM: Bathroom ------------------------------------------------
@@ -167,11 +171,11 @@
 #         hours_to_show: 24
 #         refresh_interval: 300
 #         entities:
-#           - entity: number.bathroom_offset
+#           - entity: number.bathroom_setpoint_offset
 #             name: Room offset (K)
 #           - entity: sensor.bathroom_temp
 #             name: Temperature (°C)
-#           - entity: sensor.bathroom_recommended_valve
+#           - entity: sensor.bathroom_recommended_valve_position
 #             name: Recommended valve (%)
 #
 #       - type: statistics-graph
@@ -181,11 +185,11 @@
 #           - mean
 #         chart_type: line
 #         entities:
-#           - entity: sensor.bathroom_error_c
+#           - entity: sensor.bathroom_control_error
 #             name: Error (°C)
-#           - entity: sensor.bathroom_trend_c_per_h
+#           - entity: sensor.bathroom_temperature_trend
 #             name: Trend (°C/h)
-#           - entity: sensor.bathroom_i_term
+#           - entity: sensor.bathroom_integral_term_valve
 #             name: Integral term (%)
-#           - entity: sensor.bathroom_trend_term
+#           - entity: sensor.bathroom_trend_damping_term_valve
 #             name: Trend-damping term (%)

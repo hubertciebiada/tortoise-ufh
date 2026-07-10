@@ -43,9 +43,10 @@ def _serialize_coordinator_data(
     Mirrors the websocket ``get_live`` serialization (``LiveResult`` /
     ``LiveRoomView``): the core :meth:`~tortoise_ufh.models.RoomOutputs.to_dict`
     already maps every enum to its value and preserves ``None``, and the
-    HA-layer ``setpoint_c`` / ``live_control_enabled`` are merged onto each
-    room. The per-room ``report`` therefore carries ``i_term``, ``trend_term``
-    and ``integrator_frozen`` as plain primitives. Every value is JSON-safe.
+    HA-layer ``setpoint_c`` is merged onto each room (the per-room control
+    state is already dumped verbatim via ``entry.options``). The per-room
+    ``report`` therefore carries ``i_term``, ``trend_term`` and
+    ``integrator_frozen`` as plain primitives. Every value is JSON-safe.
 
     Args:
         data: The coordinator's current :class:`CoordinatorData`, or ``None``
@@ -66,7 +67,6 @@ def _serialize_coordinator_data(
             name: {
                 **runtime.outputs.to_dict(),
                 "setpoint_c": runtime.setpoint_c,
-                "live_control_enabled": runtime.live_control_enabled,
             }
             for name, runtime in data.rooms.items()
         },

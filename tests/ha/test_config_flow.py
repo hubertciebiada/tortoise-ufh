@@ -451,7 +451,8 @@ async def test_options_flow_edit_room(
 async def test_options_flow_remove_room_cleans_registry(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
-    """Removing a room drops it from CONF_ROOMS and deletes its entities."""
+    """Removing a room drops it from CONF_ROOMS, its entities and its device."""
+    from homeassistant.helpers import device_registry as dr
     from homeassistant.helpers import entity_registry as er
 
     entry = setup_integration
@@ -516,6 +517,21 @@ async def test_options_flow_remove_room_cleans_registry(
     room_state = entry.options.get(CONF_ROOM_STATE, {})
     assert "Lazienka" not in room_state
     assert room_state.get("Salon") == ROOM_STATE_SHADOW
+
+    # The removed room's device is gone too; Salon's device survives.
+    device_registry = dr.async_get(hass)
+    assert (
+        device_registry.async_get_device(
+            identifiers={(DOMAIN, f"{entry.entry_id}_lazienka")}
+        )
+        is None
+    )
+    assert (
+        device_registry.async_get_device(
+            identifiers={(DOMAIN, f"{entry.entry_id}_salon")}
+        )
+        is not None
+    )
 
 
 async def test_options_flow_remove_last_room_blocked(

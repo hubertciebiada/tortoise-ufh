@@ -190,12 +190,61 @@
         }
       }
     },
+    "number": {
+      "home_temperature": {
+        "name": "Temperatura domu"
+      },
+      "offset": {
+        "name": "Korekta nastawy"
+      }
+    },
     "sensor": {
+      "recommended_valve": {
+        "name": "Zalecane otwarcie zaworu"
+      },
+      "error_c": {
+        "name": "Uchyb regulacji"
+      },
+      "trend_c_per_h": {
+        "name": "Trend temperatury"
+      },
       "i_term": {
         "name": "Człon całkujący (% zaworu)"
       },
       "trend_term": {
         "name": "Człon tłumienia trendu (% zaworu)"
+      },
+      "room_dew_point": {
+        "name": "Punkt rosy"
+      },
+      "fast_source_mode": {
+        "name": "Tryb szybkiego źródła"
+      },
+      "explanation": {
+        "name": "Wyjaśnienie decyzji"
+      },
+      "global_safe_dew_point": {
+        "name": "Globalny bezpieczny punkt rosy"
+      },
+      "algorithm_status": {
+        "name": "Status algorytmu"
+      },
+      "last_update": {
+        "name": "Ostatnia aktualizacja"
+      },
+      "watchdog_status": {
+        "name": "Status watchdoga"
+      }
+    },
+    "binary_sensor": {
+      "sensor_lost": {
+        "name": "Utrata czujnika"
+      },
+      "output_saturated": {
+        "name": "Nasycenie wyjścia"
+      },
+      "s2_condensation_active": {
+        "name": "Aktywna ochrona przed kondensacją"
       }
     }
   },

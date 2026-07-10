@@ -419,3 +419,33 @@ operations was preserved by extracting code verbatim).
   no touching `simulator.py` (dense seeded numeric path), no Protocol layers
   between coordinator and reader/writer (one consumer, one implementation),
   no splitting of the panel into files, no renames of public symbols.
+
+---
+
+## 10. Revision — per-room devices, translated entity names, `live_control` cleanup (2026-07-10, v0.5.0)
+
+> **Breaking (minor).** No config-entry migration needed (data/options schema untouched;
+> entry stays at version 2). Recorded 2026-07-10; resolves GH issue #3 and finishes the
+> `live_control_enabled` deprecation announced with the v2 control-state refactor.
+
+- **Devices.** Every configured room is now a HA **device**: identifier
+  `(DOMAIN, f"{entry_id}_{room_slug}")` (the same frozen slug every per-room `unique_id`
+  uses), name = room name, manufacturer "Tortoise-UFH", model "Room zone", `via_device` →
+  a per-entry **hub device** `(DOMAIN, entry_id)` (name "Tortoise-UFH", model
+  "UFH controller") that carries the global entities (home temperature, global safe dew
+  point, algorithm/watchdog status, last update). Rooms can be assigned to HA areas.
+  Helpers live in the new adapter module `device.py`.
+- **Entity naming via translations (GH #3).** Platforms no longer set `_attr_name` (which
+  silently overrode `translation_key`, leaving the name translations dead); every entity
+  is `has_entity_name = True` + `translation_key`, with full EN/PL name parity in
+  `strings.json` / `translations/{en,pl}.json`. **`unique_id` formats are unchanged**, so
+  upgraded installs keep their entity ids via the registry; only NEW installs derive ids
+  from the device + translated-name convention (a few ids differ from pre-0.5.0, e.g.
+  `sensor.<room>_dew_point` vs `sensor.<room>_room_dew_point`).
+- **`live_control` fully retired.** The per-room `binary_sensor.*_live_control` (a pure
+  mirror of `control_state == "live"`) is gone; orphaned registry entries are swept on
+  every setup (`__init__._async_purge_retired_entities` — registry hygiene only, no entry
+  version bump). The transitional `live_control_enabled` field is removed from the
+  `tortoise_ufh/get_live` websocket payload and the diagnostics dump; consumers read the
+  canonical `control_state`. The coordinator-internal `RoomRuntime.live_control_enabled`
+  write-gate flag stays (never part of the external contract).

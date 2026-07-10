@@ -303,7 +303,6 @@
           },
           report,
           setpoint_c: over.setpoint_c ?? 21.5,
-          live_control_enabled: over.live_control_enabled ?? true,
         };
       }
 
@@ -315,7 +314,6 @@
           Salon: liveRoom({
             valve_position_pct: 62,
             setpoint_c: 21.5,
-            live_control_enabled: true,
             fast_source: { on: true, mode: "heating", target_temperature_c: 23.0 },
             report: {
               error_c: 0.6,
@@ -339,7 +337,6 @@
           Kuchnia: liveRoom({
             valve_position_pct: 0,
             setpoint_c: 21.0,
-            live_control_enabled: false,
             report: {
               error_c: null,
               trend_c_per_h: null,
@@ -359,7 +356,6 @@
               ? {
                   valve_position_pct: 12,
                   setpoint_c: 22.5,
-                  live_control_enabled: true,
                   report: {
                     error_c: -0.4,
                     trend_c_per_h: -0.1,
@@ -379,7 +375,6 @@
               : {
                   valve_position_pct: 100,
                   setpoint_c: 22.5,
-                  live_control_enabled: true,
                   report: {
                     error_c: 1.8,
                     trend_c_per_h: 0.05,
@@ -399,12 +394,10 @@
                 },
           ),
         };
-        // Inject the canonical three-state control + its derived boolean from
-        // the shared room-state map (mirrors LiveRoomView.to_dict).
+        // Inject the canonical three-state control from the shared room-state
+        // map (mirrors LiveRoomView.to_dict).
         for (const [name, lr] of Object.entries(rooms)) {
-          const st = state.roomStates[name] || "shadow";
-          lr.control_state = st;
-          lr.live_control_enabled = st === "live";
+          lr.control_state = state.roomStates[name] || "shadow";
         }
         return {
           rooms,

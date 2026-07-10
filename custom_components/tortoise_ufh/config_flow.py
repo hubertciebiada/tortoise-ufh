@@ -1291,7 +1291,7 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
     def _async_cleanup_room_entities(
         self, removed_name: str, all_room_names: list[str]
     ) -> None:
-        """Delete the entry's entity-registry entries for a removed room.
+        """Delete a removed room's entity-registry entries and its device.
 
         Attributes each of the entry's registry entries to the room whose slug
         (``name.lower().replace(" ", "_")``) is the longest ``"{slug}_"`` prefix
@@ -1299,6 +1299,9 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         the removed room. This disambiguates slug-prefix collisions ("Salon" vs
         "Salon 2"); global entities are protected by :data:`_GLOBAL_UNIQUE_ID_KEYS`
         so a room named e.g. "Home" never deletes the global ``home_temperature``.
+        Finally the room's now-empty device (identifier
+        ``(DOMAIN, f"{entry_id}_{slug}")`` — see ``device.py``) is removed so no
+        orphaned device lingers in the registry.
 
         Removing a currently-loaded entity's registry entry tears the live entity
         down cleanly; the reload that follows re-creates only the surviving rooms.
@@ -1308,6 +1311,7 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
             all_room_names: Every room name (removed + remaining) for longest-slug
                 disambiguation.
         """
+        from homeassistant.helpers import device_registry as dr
         from homeassistant.helpers import entity_registry as er
 
         registry = er.async_get(self.hass)
@@ -1332,6 +1336,13 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                     best_slug = slug
             if best_slug is not None and best_slug == removed_slug:
                 registry.async_remove(reg_entry.entity_id)
+
+        device_registry = dr.async_get(self.hass)
+        device = device_registry.async_get_device(
+            identifiers={(DOMAIN, f"{entry.entry_id}_{removed_slug}")}
+        )
+        if device is not None:
+            device_registry.async_remove_device(device.id)
 
     async def _async_prune_room_setpoint(self, removed_name: str) -> None:
         """Drop the removed room's offset from the private setpoint Store.

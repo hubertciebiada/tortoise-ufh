@@ -1,6 +1,6 @@
 """Per-room diagnostic binary sensors for the Tortoise-UFH integration.
 
-Publishes four per-room binary sensors, all read strictly from the
+Publishes three per-room binary sensors, all read strictly from the
 coordinator's typed :class:`~.coordinator.CoordinatorData`:
 
 * ``sensor_lost`` (device class ``PROBLEM``) — the room temperature reading was
@@ -8,10 +8,14 @@ coordinator's typed :class:`~.coordinator.CoordinatorData`:
 * ``output_saturated`` — the computed valve position hit a 0 % or 100 % bound.
 * ``s2_condensation_active`` (device class ``PROBLEM``) — the per-room S2
   dew-point protection fully throttled floor cooling to avoid condensation.
-* ``live_control`` (device class ``RUNNING``) — the room is in live control
-  (commands written to actuators) rather than shadow / dry-run.
 
-Every sensor is ``EntityCategory.DIAGNOSTIC`` and read-only. The entities are
+The former ``live_control`` binary sensor was retired in v0.5.0 — it merely
+mirrored ``control_state == "live"`` and is fully covered by the per-room
+control-state select; orphaned registry entries are purged on setup
+(``__init__._async_purge_retired_entities``).
+
+Every sensor is ``EntityCategory.DIAGNOSTIC`` and read-only, joins its room's
+device and is named via ``translation_key``. The entities are
 description-driven: each :class:`TortoiseUfhBinarySensorEntityDescription`
 carries a ``value_fn`` that maps a room's
 :class:`~.coordinator.RoomRuntime` to a boolean (or ``None`` when the room is
@@ -36,6 +40,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_ROOM_NAME, CONF_ROOMS
 from .coordinator import RoomRuntime, TortoiseUfhCoordinator
+from .device import room_device_info, room_slug
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -101,18 +106,6 @@ def _s2_condensation_active(runtime: RoomRuntime) -> bool:
     return _FLAG_S2_CONDENSATION in runtime.report.flags
 
 
-def _live_control(runtime: RoomRuntime) -> bool:
-    """Return whether the room is in live control (writing commands).
-
-    Args:
-        runtime: The room's runtime payload.
-
-    Returns:
-        The runtime's ``live_control_enabled`` flag.
-    """
-    return runtime.live_control_enabled
-
-
 # Per-room binary-sensor descriptions.
 ROOM_BINARY_SENSORS: tuple[TortoiseUfhBinarySensorEntityDescription, ...] = (
     TortoiseUfhBinarySensorEntityDescription(
@@ -134,13 +127,6 @@ ROOM_BINARY_SENSORS: tuple[TortoiseUfhBinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_s2_condensation_active,
-    ),
-    TortoiseUfhBinarySensorEntityDescription(
-        key="live_control",
-        translation_key="live_control",
-        device_class=BinarySensorDeviceClass.RUNNING,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=_live_control,
     ),
 )
 
@@ -218,9 +204,9 @@ class TortoiseUfhBinarySensorEntity(
         self.entity_description = description
         self._room_name = room_name
 
-        safe_room = room_name.lower().replace(" ", "_")
-        self._attr_unique_id = f"{entry_id}_{safe_room}_{description.key}"
-        self._attr_name = f"{room_name} {description.key.replace('_', ' ')}"
+        slug = room_slug(room_name)
+        self._attr_unique_id = f"{entry_id}_{slug}_{description.key}"
+        self._attr_device_info = room_device_info(entry_id, room_name)
 
     @property
     def is_on(self) -> bool | None:

@@ -77,6 +77,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: TortoiseUfhConfigEntry) 
 
     entry.runtime_data = RuntimeData(coordinator=coordinator)
 
+    _async_purge_retired_entities(hass, entry)
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Reload the whole entry when options that need a rebuild change (controller
@@ -99,6 +101,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: TortoiseUfhConfigEntry) 
         _LOGGER.debug("Registered Tortoise-UFH panel, websocket commands, and services")
 
     return True
+
+
+def _async_purge_retired_entities(
+    hass: HomeAssistant, entry: TortoiseUfhConfigEntry
+) -> None:
+    """Remove registry entries of entities retired by later releases.
+
+    v0.5.0 retired the per-room ``live_control`` binary sensor (it merely
+    mirrored ``control_state == "live"``, fully covered by the control-state
+    select). The platform no longer creates it, so on upgrade its registry
+    entries would linger as orphans — sweep them here on every setup. This is
+    plain registry hygiene keyed on the frozen unique-id suffix; it needs no
+    config-entry version bump (unlike the v1 -> v2 data migration).
+
+    Args:
+        hass: The Home Assistant instance.
+        entry: The config entry whose orphaned entities are purged.
+    """
+    from homeassistant.helpers import entity_registry as er
+
+    registry = er.async_get(hass)
+    for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if reg_entry.domain == "binary_sensor" and reg_entry.unique_id.endswith(
+            "_live_control"
+        ):
+            registry.async_remove(reg_entry.entity_id)
+            _LOGGER.debug(
+                "Purged retired live_control binary sensor %s", reg_entry.entity_id
+            )
 
 
 async def async_migrate_entry(
