@@ -1,9 +1,12 @@
-"""Unit-only pytest fixtures for the Tortoise-UFH core test suite.
+"""Unit-only pytest fixtures and shared helpers for the Tortoise-UFH core suite.
 
 These fixtures are scoped to ``tests/unit`` and are deliberately fast and
 deterministic. All randomness is drawn from a seeded generator (seed 42) so
 unit tests are perfectly reproducible, and the RC model uses a short time step
-(``dt = 10 s``) for rapid convergence in short unit-test horizons.
+(``dt = 10 s``) for rapid convergence in short unit-test horizons. The module
+also hosts :func:`make_inputs`, the plain (non-fixture) ``RoomInputs`` builder
+shared by the controller test modules (``test_controller.py``,
+``test_controller_safety.py``, ``test_fast_source.py``).
 
 Units: temperatures in degC, capacitances in J/K, resistances in K/W, time in
 seconds. This module never imports ``homeassistant``.
@@ -15,6 +18,12 @@ import numpy as np
 import pytest
 from numpy.random import Generator
 
+from custom_components.tortoise_ufh.core.models import (
+    FastSourceKind,
+    LoopInput,
+    Mode,
+    RoomInputs,
+)
 from custom_components.tortoise_ufh.core.rc_model import ModelOrder, RCModel, RCParams
 
 
@@ -58,3 +67,45 @@ def short_dt_model() -> RCModel:
         has_split=False,
     )
     return RCModel(params, ModelOrder.THREE, dt=10.0)
+
+
+def make_inputs(
+    *,
+    mode: Mode = Mode.HEATING,
+    setpoint_c: float = 21.0,
+    room_temperature_c: float | None = 20.0,
+    humidity_pct: float | None = None,
+    outdoor_temperature_c: float | None = None,
+    loops: tuple[LoopInput, ...] = (),
+    fast_source_kind: FastSourceKind = FastSourceKind.NONE,
+    hp_active_for_ufh: bool | None = None,
+    cooling_enabled: bool = True,
+) -> RoomInputs:
+    """Build a :class:`RoomInputs` with test-friendly keyword defaults.
+
+    Args:
+        mode: Operating mode. Defaults to ``HEATING``.
+        setpoint_c: Target temperature [degC]. Defaults to 21.0.
+        room_temperature_c: Measured room temperature [degC], or ``None``.
+        humidity_pct: Relative humidity [%], or ``None``.
+        outdoor_temperature_c: Outdoor temperature [degC], or ``None``.
+        loops: UFH loop probes/valve feedback.
+        fast_source_kind: Kind of fast source available.
+        hp_active_for_ufh: Heat-pump availability for UFH (freeze flag), or
+            ``None``.
+        cooling_enabled: Whether the room participates in cooling.
+
+    Returns:
+        A validated :class:`RoomInputs`.
+    """
+    return RoomInputs(
+        mode=mode,
+        setpoint_c=setpoint_c,
+        room_temperature_c=room_temperature_c,
+        humidity_pct=humidity_pct,
+        outdoor_temperature_c=outdoor_temperature_c,
+        loops=loops,
+        fast_source_kind=fast_source_kind,
+        hp_active_for_ufh=hp_active_for_ufh,
+        cooling_enabled=cooling_enabled,
+    )
