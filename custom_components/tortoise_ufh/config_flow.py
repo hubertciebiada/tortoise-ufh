@@ -69,6 +69,7 @@ from .const import (
     CONF_ROOM_NAME,
     CONF_ROOM_OFFSET,
     CONF_ROOM_STATE,
+    CONF_ROOM_TUNING,
     CONF_ROOMS,
     CONTROLLER_BOOL_KNOB,
     CONTROLLER_NUMBER_KNOBS,
@@ -89,6 +90,7 @@ from .const import (
     VALID_TEMP_UNITS,
 )
 from .core.config import ControllerConfig
+from .device import room_slug
 from .entity_validator import EntityValidator
 from .tuning import global_controller
 
@@ -188,13 +190,15 @@ class RoomDefinition:
         fast_source_group: Optional multisplit outdoor-unit group key (K4,
             2026-07-12) — rooms sharing one physical outdoor unit carry the
             same generic label (e.g. ``"outdoor_unit_a"``) and are
-            direction-arbitrated by the core. Must be empty when the room has
-            no fast source.
+            direction-arbitrated by the core. Only splits share an outdoor
+            unit, so :meth:`as_dict` SILENTLY drops the group for any other
+            kind (D2, 2026-07-12 — consistent with how ``has_fast_source=False``
+            already cleared it; previously a heater + group raised a
+            ``ValueError`` surfaced as an unexplained generic form error).
 
     Raises:
-        ValueError: If the name is empty, the area is non-positive, the
-            fast-source kind is inconsistent with ``has_fast_source``, or a
-            group is set without a fast source.
+        ValueError: If the name is empty, the area is non-positive, or the
+            fast-source kind is inconsistent with ``has_fast_source``.
     """
 
     name: str
@@ -224,22 +228,25 @@ class RoomDefinition:
         if not self.has_fast_source and self.fast_source_kind != FAST_SOURCE_KIND_NONE:
             msg = "fast_source_kind must be 'none' when has_fast_source is False"
             raise ValueError(msg)
-        if self.fast_source_group and self.fast_source_kind != FAST_SOURCE_KIND_SPLIT:
-            # Only splits share a multisplit outdoor unit; a heater in a
-            # direction-arbitrated group is physically meaningless (review
-            # 2026-07-12). Subsumes the has_fast_source=False case too.
-            msg = "fast_source_group requires fast_source_kind='split'"
-            raise ValueError(msg)
 
     def as_dict(self) -> dict[str, Any]:
-        """Serialise to the room base dict stored under ``CONF_ROOMS``."""
+        """Serialise to the room base dict stored under ``CONF_ROOMS``.
+
+        Only splits share a multisplit outdoor unit, so the group key is
+        SILENTLY normalised to ``""`` for any other kind (D2, 2026-07-12) —
+        exactly like the flow already cleared it for ``has_fast_source=False``.
+        """
         return {
             CONF_ROOM_NAME: self.name.strip(),
             CONF_ROOM_AREA: self.area_m2,
             CONF_HAS_FAST_SOURCE: self.has_fast_source,
             CONF_FAST_SOURCE_KIND: self.fast_source_kind,
             CONF_COOLING_ENABLED: self.cooling_enabled,
-            CONF_FAST_SOURCE_GROUP: self.fast_source_group.strip(),
+            CONF_FAST_SOURCE_GROUP: (
+                self.fast_source_group.strip()
+                if self.fast_source_kind == FAST_SOURCE_KIND_SPLIT
+                else ""
+            ),
         }
 
 
@@ -699,6 +706,15 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "empty_room_name"
             elif any(r[CONF_ROOM_NAME] == name for r in self._rooms):
                 errors["base"] = "duplicate_room_name"
+            elif any(
+                room_slug(str(r[CONF_ROOM_NAME])) == room_slug(name)
+                for r in self._rooms
+            ):
+                # K10 (2026-07-12): unique ids and device identifiers are
+                # built from the SLUG (lower + spaces->underscores), so
+                # "Salon" / "salon" would collide in the registry and
+                # remove-room would delete BOTH rooms' entities.
+                errors["base"] = "duplicate_room_slug"
 
             room: RoomDefinition | None = None
             if not errors:
@@ -1025,6 +1041,13 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 errors["base"] = "empty_room_name"
             elif any(str(r[CONF_ROOM_NAME]) == name for r in rooms):
                 errors["base"] = "duplicate_room_name"
+            elif any(
+                room_slug(str(r[CONF_ROOM_NAME])) == room_slug(name) for r in rooms
+            ):
+                # K10 (2026-07-12): see the wizard's rooms step — slug
+                # collisions collide unique ids and make remove-room delete
+                # both rooms' entities.
+                errors["base"] = "duplicate_room_slug"
 
             room: RoomDefinition | None = None
             if not errors:
@@ -1263,7 +1286,20 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                     for name, value in entry.options.get(CONF_ROOM_STATE, {}).items()
                     if name != removed_name
                 }
-                new_options = {**entry.options, CONF_ROOM_STATE: room_state}
+                # K8 (2026-07-12): prune the removed room's sparse tuning
+                # override too (symmetric with the state map and the setpoint
+                # Store) — a NEW room reusing the name silently inherited the
+                # old room's kp/ki otherwise.
+                room_tuning = {
+                    name: value
+                    for name, value in entry.options.get(CONF_ROOM_TUNING, {}).items()
+                    if name != removed_name
+                }
+                new_options = {
+                    **entry.options,
+                    CONF_ROOM_STATE: room_state,
+                    CONF_ROOM_TUNING: room_tuning,
+                }
                 return self._save_rooms(remaining, options=new_options)
 
         names = [str(r[CONF_ROOM_NAME]) for r in rooms]
@@ -1295,8 +1331,8 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         Args:
             rooms: The full replacement room list for ``entry.data``.
             options: Replacement ``entry.options`` when a leaf also changed them
-                (e.g. remove-room pruning ``live_control``); ``None`` keeps the
-                current options unchanged.
+                (e.g. remove-room pruning the room's control state and sparse
+                tuning override); ``None`` keeps the current options unchanged.
 
         Returns:
             The terminal ``CREATE_ENTRY`` flow result.
@@ -1389,9 +1425,16 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         """Drop the removed room's offset from the private setpoint Store.
 
         The per-room offset persists in a coordinator-owned
-        :class:`~homeassistant.helpers.storage.Store` keyed by room name. A
-        rebuilt coordinator already ignores offsets for unknown rooms, so this is
-        a best-effort tidy-up; any failure is logged and swallowed.
+        :class:`~homeassistant.helpers.storage.Store` keyed by room name.
+        When the entry is loaded, the prune goes through the coordinator's
+        OWN Store instance (D9, 2026-07-12:
+        :meth:`~coordinator.TortoiseUfhCoordinator.async_prune_room_setpoint`),
+        which also flushes any pending delayed save — a second, parallel
+        ``Store`` object used to lose this update to the coordinator's
+        1-second delay-save. The standalone-Store path remains as the
+        fallback for an unloaded entry. A rebuilt coordinator already ignores
+        offsets for unknown rooms, so this is a best-effort tidy-up; any
+        failure is logged and swallowed.
 
         Args:
             removed_name: The name of the room being removed.
@@ -1399,12 +1442,16 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         from homeassistant.helpers.storage import Store
 
         entry = self.config_entry
-        store: Store[dict[str, Any]] = Store(
-            self.hass,
-            _SETPOINT_STORE_VERSION,
-            f"{DOMAIN}.setpoints.{entry.entry_id}",
-        )
         try:
+            runtime = getattr(entry, "runtime_data", None)
+            if runtime is not None:
+                await runtime.coordinator.async_prune_room_setpoint(removed_name)
+                return
+            store: Store[dict[str, Any]] = Store(
+                self.hass,
+                _SETPOINT_STORE_VERSION,
+                f"{DOMAIN}.setpoints.{entry.entry_id}",
+            )
             stored = await store.async_load()
             if not stored:
                 return

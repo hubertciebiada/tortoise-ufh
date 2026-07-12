@@ -204,3 +204,45 @@ async def test_retired_live_control_purged_on_setup(
         )
         is None
     )
+
+
+async def test_hub_device_registered_before_platforms(
+    hass: HomeAssistant, register_sources: None, mock_entry: MockConfigEntry
+) -> None:
+    """K11 (2026-07-12): the hub exists before any via_device references it.
+
+    Room devices link to the hub via ``via_device``; since HA 2025.x adding
+    an entity whose ``via_device`` target is missing from the registry logs a
+    "will stop working" deprecation. ``async_setup_entry`` now registers the
+    hub explicitly BEFORE forwarding the entity platforms, so the reference
+    is always valid and no such warning is emitted during setup.
+    """
+    import logging
+
+    class _ViaDeviceWarnings(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__(level=logging.WARNING)
+            self.records: list[str] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            message = record.getMessage()
+            if "via_device" in message or "via device" in message:
+                self.records.append(message)
+
+    handler = _ViaDeviceWarnings()
+    logging.getLogger().addHandler(handler)
+    try:
+        assert await hass.config_entries.async_setup(mock_entry.entry_id)
+        await hass.async_block_till_done()
+    finally:
+        logging.getLogger().removeHandler(handler)
+
+    registry = dr.async_get(hass)
+    hub = registry.async_get_device(identifiers={(DOMAIN, mock_entry.entry_id)})
+    assert hub is not None
+    assert hub.model == HUB_MODEL
+    for room in _ROOMS:
+        device = _room_device(hass, mock_entry.entry_id, room)
+        assert device is not None
+        assert device.via_device_id == hub.id
+    assert handler.records == []

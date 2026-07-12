@@ -184,6 +184,7 @@
         "sensor.lazienka_rh": { state: "68", attributes: { unit_of_measurement: "%" } },
         "number.lazienka_valve": { state: "18", attributes: { unit_of_measurement: "%" } },
         "sensor.lazienka_supply": { state: "17.2", attributes: { unit_of_measurement: "°C" } },
+        "climate.lazienka_split": { state: "off", attributes: {} },
         // Diagnostic (future field) — the integration's own output sensors.
         "sensor.tortoise_salon_recommended_valve": {
           state: "62",
@@ -206,6 +207,8 @@
               cooling_enabled: true,
               control_state: state.roomStates["Salon"],
               fast_source_kind: "split",
+              // K9 (v0.6.1): the multisplit group key flows in get_config.
+              fast_source_group: "outdoor_unit_a",
               entities: {
                 entity_temp_room: "sensor.salon_temp",
                 entity_humidity: "sensor.salon_rh",
@@ -233,6 +236,7 @@
               cooling_enabled: false,
               control_state: state.roomStates["Kuchnia"],
               fast_source_kind: "none",
+              fast_source_group: "",
               entities: {
                 entity_temp_room: "sensor.kuchnia_temp",
                 entity_humidity: "sensor.kuchnia_rh",
@@ -249,7 +253,10 @@
               offset_c: 1.5,
               cooling_enabled: true,
               control_state: state.roomStates["Łazienka"],
-              fast_source_kind: "none",
+              // Shares the outdoor unit with the Salon split (K9): the
+              // cooling scenario exercises the group-conflict chip/column.
+              fast_source_kind: "split",
+              fast_source_group: "outdoor_unit_a",
               entities: {
                 entity_temp_room: "sensor.lazienka_temp",
                 entity_humidity: "sensor.lazienka_rh",
@@ -257,7 +264,7 @@
                 entity_valves: ["number.lazienka_valve"],
                 entity_supply: ["sensor.lazienka_supply"],
                 entity_return: [],
-                entity_fast_source: null,
+                entity_fast_source: "climate.lazienka_split",
               },
               diagnostic_entities: {
                 recommended_valve: "sensor.tortoise_lazienka_recommended_valve",
@@ -284,9 +291,12 @@
             saturated: false,
             dew_throttle_factor: 1.0,
             integrator_frozen: false,
-            // Additive F5 report fields — always present in the real WS payload
-            // (RoomReport.to_dict): why the room is excluded from the global
-            // safe dew point, and the fast-source min ON/OFF dwell remaining.
+            // Additive report fields — always present in the real WS payload
+            // (RoomReport.to_dict): the echoed measured temperature (the
+            // panel renders THIS, never a setpoint-error reconstruction),
+            // why the room is excluded from the global safe dew point, and
+            // the fast-source min ON/OFF dwell remaining.
+            room_temperature_c: null,
             dew_excluded_reason: null,
             fast_dwell_remaining_s: null,
             flags: [],
@@ -314,11 +324,14 @@
           Salon: liveRoom({
             valve_position_pct: 62,
             setpoint_c: 21.5,
-            fast_source: { on: true, mode: "heating", target_temperature_c: 23.0 },
+            fast_source: cooling
+              ? { on: true, mode: "cooling", target_temperature_c: 20.5 }
+              : { on: true, mode: "heating", target_temperature_c: 23.0 },
             report: {
               error_c: 0.6,
               trend_c_per_h: 0.25,
               room_dew_point_c: 9.4,
+              room_temperature_c: 20.9,
               p_term: 24.0,
               i_term: 30.5,
               trend_term: -8.2,
@@ -341,6 +354,7 @@
               error_c: null,
               trend_c_per_h: null,
               room_dew_point_c: null,
+              room_temperature_c: null, // sensor lost: the panel shows "—"
               raw_valve_pct: 0.0,
               integrator_frozen: true,
               // cooling_enabled=false → "cooling_disabled" outranks the lost
@@ -356,10 +370,16 @@
               ? {
                   valve_position_pct: 12,
                   setpoint_c: 22.5,
+                  // K9 scenario: the bathroom sits slightly BELOW its target
+                  // (error -0.4 → its split asked to HEAT) while the shared
+                  // outdoor unit cools with the Salon — it lost the group
+                  // arbitration: split OFF + the conflict flag.
+                  fast_source: { on: false, mode: "off", target_temperature_c: null },
                   report: {
                     error_c: -0.4,
                     trend_c_per_h: -0.1,
                     room_dew_point_c: 17.4,
+                    room_temperature_c: 22.9,
                     p_term: -8.0,
                     i_term: -12.0,
                     trend_term: 3.0,
@@ -367,18 +387,24 @@
                     raw_valve_pct: 40.0,
                     dew_throttle_factor: 0.3,
                     saturated: false,
-                    flags: ["s2_condensation"],
+                    flags: ["s2_throttle", "fast_source_group_conflict"],
                     explanation:
-                      "Chłodzenie dławione (0.3) — punkt rosy 17.4°C blisko temperatury zasilania.",
+                      "Chłodzenie dławione (0.3) — punkt rosy 17.4°C blisko temperatury zasilania. Split przegrał arbitraż grupy.",
                   },
                 }
               : {
                   valve_position_pct: 100,
                   setpoint_c: 22.5,
+                  fast_source: {
+                    on: true,
+                    mode: "heating",
+                    target_temperature_c: 23.5,
+                  },
                   report: {
                     error_c: 1.8,
                     trend_c_per_h: 0.05,
                     room_dew_point_c: 15.1,
+                    room_temperature_c: 20.7,
                     p_term: 72.0,
                     i_term: 40.0,
                     trend_term: -2.0,
@@ -387,7 +413,6 @@
                     saturated: true,
                     // Heating mode → excluded from the cooling safe dew point.
                     dew_excluded_reason: "not_cooling_mode",
-                    flags: ["saturated"],
                     explanation:
                       "Duży uchyb dodatni — zawór nasycony na 100% (żądanie surowe 120%).",
                   },
@@ -406,6 +431,8 @@
           watchdog_state: stale ? "stale" : "ok",
           last_update_timestamp: new Date(nowMs).toISOString(),
           mode: cooling ? "cooling" : "heating",
+          // Building-level staleness counter (safety-F13): Kuchnia is lost.
+          sensor_lost_rooms: 1,
         };
       }
 
@@ -482,7 +509,8 @@
       const logEl = document.getElementById("log");
 
       // --- Sample get_tuning (matches TuningResult.to_dict) -----------------
-      // Ranges mirror const.CONTROLLER_NUMBER_KNOBS + the boolean knob.
+      // Ranges mirror const.CONTROLLER_NUMBER_KNOBS + the boolean knob
+      // (v0.6.1: dwell floors 3 min, dew margin floor 0.5 K, ff knobs).
       const TUNE_FIELDS = [
         { name: "kp", type: "number", min: 0, max: 50, step: 0.1, unit: "%/K" },
         { name: "ki", type: "number", min: 0, max: 1, step: 0.001, unit: "%/(K·s)" },
@@ -490,16 +518,23 @@
         { name: "deadband_c", type: "number", min: 0, max: 5, step: 0.1, unit: "K" },
         { name: "valve_floor_pct", type: "number", min: 0, max: 100, step: 1, unit: "%" },
         { name: "boost_offset_c", type: "number", min: 0, max: 10, step: 0.1, unit: "K" },
-        { name: "fast_min_on_minutes", type: "number", min: 0, max: 60, step: 1, unit: "min" },
-        { name: "fast_min_off_minutes", type: "number", min: 0, max: 60, step: 1, unit: "min" },
-        { name: "dew_margin_k", type: "number", min: 0, max: 10, step: 0.1, unit: "K" },
+        { name: "fast_min_on_minutes", type: "number", min: 3, max: 60, step: 1, unit: "min" },
+        { name: "fast_min_off_minutes", type: "number", min: 3, max: 60, step: 1, unit: "min" },
+        { name: "dew_margin_k", type: "number", min: 0.5, max: 10, step: 0.1, unit: "K" },
         { name: "dew_ramp_k", type: "number", min: 0.1, max: 10, step: 0.1, unit: "K" },
+        { name: "ff_neutral_c", type: "number", min: -30, max: 40, step: 0.5, unit: "°C" },
+        { name: "ff_gain_pct_per_k", type: "number", min: 0, max: 10, step: 0.1, unit: "%/K" },
+        { name: "ff_max_pct", type: "number", min: 0, max: 100, step: 1, unit: "%" },
         { name: "outdoor_ff_enabled", type: "bool", unit: "" },
       ];
+      // Library defaults as of v0.6.x (kp=14 / ki=0.0015 / kt=12 — the C1
+      // retune; ki deliberately NOT a multiple of its 0.001 step, so the
+      // preview exercises the honest stepper formatting, D6).
       const TUNE_DEFAULTS = {
-        kp: 8.0, ki: 0.02, kt: 6.0, deadband_c: 0.3, valve_floor_pct: 15.0,
+        kp: 14.0, ki: 0.0015, kt: 12.0, deadband_c: 0.3, valve_floor_pct: 15.0,
         boost_offset_c: 1.0, fast_min_on_minutes: 10.0, fast_min_off_minutes: 10.0,
-        dew_margin_k: 2.0, dew_ramp_k: 2.0, outdoor_ff_enabled: false,
+        dew_margin_k: 2.0, dew_ramp_k: 2.0, ff_neutral_c: 15.0,
+        ff_gain_pct_per_k: 1.0, ff_max_pct: 20.0, outdoor_ff_enabled: false,
       };
       function sampleTuning() {
         return {

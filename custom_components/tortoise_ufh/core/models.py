@@ -124,16 +124,20 @@ class RoomInputs:
             reconciliation see a DIRECTION divergence (a unit standing by in
             the opposite mode of a shared aggregate reports its set mode while
             ``fast_source_on`` still reads ``True``).
-        humidity_stale: ``True`` when ``humidity_pct`` is a held reading whose
-            source stopped reporting 60-120 minutes ago (additive field
-            2026-07-12, K7). The cooling path then pads the effective dew
-            point by +1 K and flags ``"rh_stale_gated"`` instead of dropping
-            straight to the conservative full stop, so a slow-reporting RH
-            sensor cannot limit-cycle the cooling.
+        humidity_stale_frac: Staleness fraction of ``humidity_pct`` in
+            ``[0, 1]`` (K7 2026-07-12; linearised 2026-07-12, D5 — replaces
+            the boolean ``humidity_stale``). ``0.0`` means a fresh reading
+            (age <= 60 min); the fraction rises linearly to ``1.0`` at 120
+            minutes of age, and the cooling path pads the effective dew point
+            by ``frac * 1 K`` (flagging ``"rh_stale_gated"`` whenever
+            ``frac > 0``) instead of jumping a full +1 K at the 60-min edge —
+            so a threshold-reporting RH sensor can neither limit-cycle the
+            cooling nor step the throttle discontinuously.
 
     Raises:
-        ValueError: If ``humidity_pct`` is outside the 0..100 range or
-            ``last_update_age_minutes`` is negative.
+        ValueError: If ``humidity_pct`` is outside the 0..100 range,
+            ``last_update_age_minutes`` is negative, or
+            ``humidity_stale_frac`` is outside the 0..1 range.
     """
 
     mode: Mode
@@ -149,10 +153,10 @@ class RoomInputs:
     last_update_age_minutes: float = 0.0  # S5 watchdog input (additive)
     fast_source_group: str = ""  # multisplit outdoor-unit group (K4, additive)
     fast_source_hvac_mode: str | None = None  # raw hvac-mode feedback (K4)
-    humidity_stale: bool = False  # held 60-120 min old RH reading (K7)
+    humidity_stale_frac: float = 0.0  # RH staleness 0..1 (age 60->120 min; K7/D5)
 
     def __post_init__(self) -> None:
-        """Validate the humidity range (percent) and the watchdog age."""
+        """Validate the humidity range/staleness (percent) and the watchdog age."""
         if self.humidity_pct is not None and not (0.0 <= self.humidity_pct <= 100.0):
             msg = f"humidity_pct must be in [0, 100] %, got {self.humidity_pct}"
             raise ValueError(msg)
@@ -160,6 +164,11 @@ class RoomInputs:
             msg = (
                 "last_update_age_minutes must be >= 0, got "
                 f"{self.last_update_age_minutes}"
+            )
+            raise ValueError(msg)
+        if not 0.0 <= self.humidity_stale_frac <= 1.0:
+            msg = (
+                f"humidity_stale_frac must be in [0, 1], got {self.humidity_stale_frac}"
             )
             raise ValueError(msg)
 

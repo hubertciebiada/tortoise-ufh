@@ -279,6 +279,7 @@ const STR = {
     val_hide_loops: "Ukryj pętle",
     val_empty: "Brak skonfigurowanych pokoi.",
     ast_th_kind: "Rodzaj",
+    ast_th_group: "Grupa",
     ast_th_command: "Komenda",
     ast_th_actual: "Stan rzeczywisty",
     ast_th_timer: "Timer",
@@ -287,6 +288,7 @@ const STR = {
     ast_none_line: "Bez wspomagania: {rooms}",
     ast_timer_unlock: "odblokuje się za ~{n} min",
     ast_timer_locked: "blokada min. czasu",
+    ast_timer_conflict: "konflikt grupy",
     ast_tune_link: "dostrój",
     ast_actual_unknown: "—",
     ast_empty: "Żaden pokój nie ma szybkiego źródła.",
@@ -440,6 +442,7 @@ const STR = {
     val_hide_loops: "Hide loops",
     val_empty: "No rooms configured.",
     ast_th_kind: "Kind",
+    ast_th_group: "Group",
     ast_th_command: "Command",
     ast_th_actual: "Actual state",
     ast_th_timer: "Timer",
@@ -448,6 +451,7 @@ const STR = {
     ast_none_line: "No assist: {rooms}",
     ast_timer_unlock: "unlocks in ~{n} min",
     ast_timer_locked: "min-runtime lock",
+    ast_timer_conflict: "group conflict",
     ast_tune_link: "tune",
     ast_actual_unknown: "—",
     ast_empty: "No room has a fast source.",
@@ -472,10 +476,10 @@ const STR = {
  * `valve_mismatch` (persistent command-vs-feedback divergence), plus the
  * safety-rule names merged into the report
  * (`s1_floor_overheat`, `s2_condensation`, `s3_emergency_heat`,
- * `s4_emergency_cool`, `s5_watchdog`). `saturated` / `valve_floor` are
- * synthetic labels for the report booleans surfaced as chips in the decision
- * view. Unknown codes fall back to the raw string at `warn` severity. `sev`
- * drives the room status dot.
+ * `s4_emergency_cool`, `s5_watchdog`). The report booleans `saturated` /
+ * `valve_floor_applied` are rendered from their own STR keys in the decision
+ * view, never through this map. Unknown codes fall back to the raw string at
+ * `warn` severity. `sev` drives the room status dot.
  */
 const FLAG_LABELS = {
   sensor_lost: { pl: "Utrata czujnika", en: "Sensor lost", sev: "problem" },
@@ -526,8 +530,6 @@ const FLAG_LABELS = {
     en: "Cooling disabled in this room",
     sev: "warn",
   },
-  saturated: { pl: "Nasycenie zaworu", en: "Valve saturated", sev: "warn" },
-  valve_floor: { pl: "Minimalne otwarcie", en: "Valve floor", sev: "warn" },
 };
 
 const SEV_RANK = { ok: 0, warn: 1, problem: 2 };
@@ -605,6 +607,19 @@ function stepDecimals(step) {
   const str = String(step);
   const dot = str.indexOf(".");
   return dot < 0 ? 0 : str.length - dot - 1;
+}
+
+/**
+ * Honest stepper-value formatting: at least the step's decimals, extended
+ * (up to 6) until the shown text round-trips to the actual value — so e.g.
+ * ki = 0.0015 with step 0.001 renders "0.0015", never a false "0.002".
+ */
+function fmtKnobValue(value, step) {
+  let dec = stepDecimals(step);
+  while (dec < 6 && parseFloat(value.toFixed(dec)) !== value) {
+    dec += 1;
+  }
+  return value.toFixed(dec);
 }
 
 /** Return the first non-null/undefined key present in `obj`, else `fallback`. */
@@ -1404,6 +1419,8 @@ class TortoiseUfhPanel extends HTMLElement {
         fastMode: pick(fast, ["mode"], "off"),
         fastTarget: num(fast.target_temperature_c),
         fastKind: String(pick(c, ["fast_source_kind"], "none") || "none"),
+        // Multisplit outdoor-unit group key (K9, 2026-07-12) — "" ungrouped.
+        fastGroup: String(pick(c, ["fast_source_group"], "") || ""),
         // Canonical three-state control: prefer the polled live value, then the
         // config value, defaulting to shadow (safe, matches the adapter).
         state: this._normState(pick(lv, ["control_state"], pick(c, ["control_state"], STATE_SHADOW))),
@@ -3099,9 +3116,17 @@ class TortoiseUfhPanel extends HTMLElement {
   /** Build the Assist section skeleton (rows populated by `_renderAssist`). */
   _buildAssistSection() {
     const empty = h("div", { class: "empty", text: this._t("loading") });
+    // The Group column (K9) is hidden until any room actually carries a
+    // multisplit group; `_renderAssist` toggles it together with the cells.
+    const groupTh = h("th", {
+      scope: "col",
+      text: this._t("ast_th_group"),
+      style: "display:none",
+    });
     const headCells = [
       h("th", { scope: "col", text: this._t("th_room") }),
       h("th", { scope: "col", text: this._t("ast_th_kind") }),
+      groupTh,
       h("th", { scope: "col", text: this._t("ast_th_command") }),
       h("th", { scope: "col", text: this._t("ast_th_actual") }),
       h("th", { scope: "col", text: this._t("ast_th_timer") }),
@@ -3118,7 +3143,16 @@ class TortoiseUfhPanel extends HTMLElement {
       { class: "tab-section", role: "tabpanel", style: "display:none", dataset: { tab: "assist" } },
       [empty, wrapEl, noneLine],
     );
-    this._assistEls = { el, tbody, empty, wrapEl, noneLine, rows: new Map() };
+    this._assistEls = {
+      el,
+      tbody,
+      empty,
+      wrapEl,
+      noneLine,
+      groupTh,
+      showGroup: false,
+      rows: new Map(),
+    };
     return el;
   }
 
@@ -3155,6 +3189,10 @@ class TortoiseUfhPanel extends HTMLElement {
     E.empty.style.display = "none";
     E.wrapEl.style.display = "";
 
+    // Group column (K9): shown only when ANY room carries a group.
+    E.showGroup = withAssist.some((r) => r.fastGroup);
+    E.groupTh.style.display = E.showGroup ? "" : "none";
+
     const desired = new Set(withAssist.map((r) => r.name));
     for (const [name, entry] of [...E.rows]) {
       if (!desired.has(name)) {
@@ -3180,6 +3218,9 @@ class TortoiseUfhPanel extends HTMLElement {
 
     p.kind = h("span");
     const kindCell = h("td", null, [p.kind]);
+
+    p.group = h("span", { class: "mono" });
+    p.groupCell = h("td", null, [p.group]);
 
     p.command = h("span", { class: "fast-badge" });
     const cmdCell = h("td", null, [p.command]);
@@ -3243,7 +3284,16 @@ class TortoiseUfhPanel extends HTMLElement {
           },
         },
       },
-      [nameCell, kindCell, cmdCell, actualCell, timerCell, flagsCell, entityCell],
+      [
+        nameCell,
+        kindCell,
+        p.groupCell,
+        cmdCell,
+        actualCell,
+        timerCell,
+        flagsCell,
+        entityCell,
+      ],
     );
     return { tr, parts: p };
   }
@@ -3255,6 +3305,12 @@ class TortoiseUfhPanel extends HTMLElement {
     // Kind (§8 labels).
     p.kind.textContent =
       r.fastKind === "heater" ? this._t("kind_heater") : this._t("kind_split");
+
+    // Multisplit group (K9): column rendered only when any room has one.
+    const E = this._assistEls;
+    p.groupCell.style.display = E && E.showGroup ? "" : "none";
+    p.group.textContent = r.fastGroup || "—";
+    p.group.className = r.fastGroup ? "mono" : "muted";
 
     // Command badge (Off / heating → target / cooling → target).
     const assist = this._assistLabel(r);
@@ -3280,12 +3336,17 @@ class TortoiseUfhPanel extends HTMLElement {
     const mismatch = st && ((cmdOn && idleish) || (!cmdOn && acting));
     p.actual.classList.toggle("mismatch", !!mismatch);
 
-    // Timer: remaining dwell → "unlocks in ~N min"; else min-runtime lock; else —.
+    // Timer: remaining dwell → "unlocks in ~N min"; else a group-conflict
+    // chip (K9 — the arbitration loser's dwell is cleared by the force-off,
+    // so a bare "—" left the OFF unexplained); else min-runtime lock; else —.
     if (r.fastDwell !== null) {
       p.timer.className = "";
       p.timer.textContent = fmtStr(this._t("ast_timer_unlock"), {
         n: Math.max(1, Math.ceil(r.fastDwell / 60)),
       });
+    } else if (r.flags.includes("fast_source_group_conflict")) {
+      p.timer.className = "chip chip-warn";
+      p.timer.textContent = this._t("ast_timer_conflict");
     } else if (r.flags.includes("fast_source_min_runtime")) {
       p.timer.className = "chip chip-warn";
       p.timer.textContent = this._t("ast_timer_locked");
@@ -3294,9 +3355,15 @@ class TortoiseUfhPanel extends HTMLElement {
       p.timer.textContent = "—";
     }
 
-    // Flags: the assist-relevant subset.
+    // Flags: the assist-relevant subset (K9 extended it with the group
+    // conflict and the physical-state mismatch, previously dropped here).
     p.flags.textContent = "";
-    for (const f of ["fast_source_min_runtime", "fast_source_cannot_cool"]) {
+    for (const f of [
+      "fast_source_min_runtime",
+      "fast_source_cannot_cool",
+      "fast_source_group_conflict",
+      "fast_source_mismatch",
+    ]) {
       if (r.flags.includes(f)) {
         p.flags.appendChild(this._chip(f));
       }
@@ -3533,9 +3600,8 @@ class TortoiseUfhPanel extends HTMLElement {
       refs.toggle.classList.toggle("on", on);
       refs.toggle.setAttribute("aria-pressed", on ? "true" : "false");
     } else {
-      const dec = stepDecimals(field.step);
       const nv = num(value);
-      refs.valEl.textContent = nv === null ? "—" : nv.toFixed(dec);
+      refs.valEl.textContent = nv === null ? "—" : fmtKnobValue(nv, field.step);
       refs.minus.disabled = nv === null || nv <= field.min;
       refs.plus.disabled = nv === null || nv >= field.max;
     }

@@ -83,7 +83,7 @@ def make_inputs(
     cooling_enabled: bool = True,
     fast_source_group: str = "",
     fast_source_hvac_mode: str | None = None,
-    humidity_stale: bool = False,
+    humidity_stale_frac: float = 0.0,
 ) -> RoomInputs:
     """Build a :class:`RoomInputs` with test-friendly keyword defaults.
 
@@ -102,8 +102,8 @@ def make_inputs(
         cooling_enabled: Whether the room participates in cooling.
         fast_source_group: Multisplit outdoor-unit group key (K4), or ``""``.
         fast_source_hvac_mode: Raw HVAC-mode feedback string (K4), or ``None``.
-        humidity_stale: Whether ``humidity_pct`` is a held 60-120 min old
-            reading (K7).
+        humidity_stale_frac: Staleness fraction of ``humidity_pct`` in
+            ``[0, 1]`` (K7/D5) — 0 fresh, 1 at 120 min of age.
 
     Returns:
         A validated :class:`RoomInputs`.
@@ -121,5 +121,5 @@ def make_inputs(
         cooling_enabled=cooling_enabled,
         fast_source_group=fast_source_group,
         fast_source_hvac_mode=fast_source_hvac_mode,
-        humidity_stale=humidity_stale,
+        humidity_stale_frac=humidity_stale_frac,
     )

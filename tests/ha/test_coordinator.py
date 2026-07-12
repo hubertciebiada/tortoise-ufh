@@ -514,11 +514,11 @@ async def test_stale_humidity_two_stage_gate(
 ) -> None:
     """C4+K7: RH staleness is two-stage — held+padded 60-120 min, None past.
 
-    Updated 2026-07-12 (K7): the old binary 60-min gate made a
-    threshold-reporting RH sensor limit-cycle the cooling. Now a 60-120 min
-    old reading is still served with ``humidity_stale`` (the core pads its
-    dew points by +1 K and flags ``rh_stale_gated``); only past 120 min does
-    the reading become unusable (conservative full stop).
+    Updated 2026-07-12 (K7, linearised D5): the old binary 60-min gate made
+    a threshold-reporting RH sensor limit-cycle the cooling. Now a 60-120 min
+    old reading is still served with ``humidity_stale_frac`` (the core pads
+    its dew points by ``frac * 1 K`` and flags ``rh_stale_gated``); only past
+    120 min does the reading become unusable (conservative full stop).
     """
     from datetime import timedelta
 
@@ -729,3 +729,141 @@ async def test_split_command_change_writes_immediately(
         pytest.approx(22.0),
         pytest.approx(23.0),
     ]
+
+
+# -- Round 3 hardening (2026-07-12): K1 shadow vote, K4 NaN guard, K7 cache --
+
+
+async def test_nan_setpoint_rejected_and_cycle_survives(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """K4: a NaN through the number-entity path must not wedge the cycles.
+
+    HA's ``number.set_value`` min/max check lets NaN through (every NaN
+    comparison is false); before the guard the mutated setpoint made every
+    subsequent ``RoomRuntime`` validation raise and the whole integration
+    went unavailable until a reload.
+    """
+    coordinator = _get_coordinator(setup_integration)
+    before = coordinator.get_home_temperature()
+
+    coordinator.set_home_temperature(float("nan"))
+    assert coordinator.get_home_temperature() == pytest.approx(before)
+
+    coordinator.set_room_offset("Salon", float("inf"))
+    assert coordinator.get_room_offset("Salon") == pytest.approx(0.0)
+
+    await _refresh(hass, coordinator)
+    assert coordinator.last_update_success
+    assert math.isfinite(coordinator.data.rooms["Salon"].setpoint_c)
+
+
+async def test_unavailable_rh_entity_keeps_the_stale_pad(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """K7: a value served from the short cache is STALE, never fresh.
+
+    The cache branch fires when the RH entity itself goes unavailable; the
+    held value's true age is unknowable, so it must carry the full +1 K pad.
+    Before the fix the branch reported FRESH — the conservative pad vanished
+    at the very moment the sensor died.
+    """
+    coordinator = _get_coordinator(setup_integration)
+    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    await _refresh(hass, coordinator)
+    fresh_global = coordinator.data.global_safe_dew_point_c
+    assert fresh_global is not None
+    assert "rh_stale_gated" not in coordinator.data.rooms["Salon"].report.flags
+
+    # The RH entity dies; the reader serves the <=5-min-old cached value.
+    hass.states.async_set("sensor.salon_humidity", "unavailable", {})
+    await _refresh(hass, coordinator)
+
+    report = coordinator.data.rooms["Salon"].report
+    assert "rh_stale_gated" in report.flags
+    # Same reading, +1 K pad: the global maximum moves up by exactly 1 K.
+    assert coordinator.data.global_safe_dew_point_c == pytest.approx(fresh_global + 1.0)
+
+
+async def test_shadow_room_does_not_vote_in_group_arbitration(
+    hass: HomeAssistant, register_sources: None
+) -> None:
+    """K1: only LIVE rooms arbitrate a shared outdoor unit.
+
+    A SHADOW room's split command is never written, yet its (uncontrolled,
+    so never-shrinking) error used to win every re-engage and permanently
+    force the LIVE room's split OFF — and shadow is the default state of a
+    new room.
+    """
+    from homeassistant.const import CONF_LATITUDE, CONF_LONGITUDE
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.tortoise_ufh.const import (
+        CONF_ENTITY_FAST_SOURCE,
+        CONF_ENTITY_TEMP_ROOM,
+        CONF_FAST_SOURCE_GROUP,
+        CONF_FAST_SOURCE_KIND,
+        CONF_HOME_SETPOINT,
+        CONF_ROOM_AREA,
+        CONF_ROOM_NAME,
+        CONF_ROOM_STATE,
+        CONF_ROOMS,
+        DOMAIN,
+        FAST_SOURCE_KIND_SPLIT,
+    )
+
+    hass.states.async_set("sensor.polnoc_temp", "19.5", _TEMP_ATTRS)  # wants heat
+    hass.states.async_set("sensor.poludnie_temp", "24.5", _TEMP_ATTRS)  # wants cool
+    # No climate feedback states on purpose: an observed OFF would seed the
+    # conservative full min-OFF dwell (S4) and keep both splits idle for the
+    # whole first cycle regardless of the arbitration under test.
+    _mock_actuator_services(hass)
+    hass.states.async_set(
+        "input_select.home_mode",
+        "transitional",
+        {"options": ["heating", "transitional", "cooling", "off"]},
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LATITUDE: 50.5,
+            CONF_LONGITUDE: 19.5,
+            CONF_HOME_SETPOINT: 21.0,
+            "entity_mode": "input_select.home_mode",
+            CONF_ROOMS: [
+                {
+                    CONF_ROOM_NAME: "Polnoc",
+                    CONF_ROOM_AREA: 20.0,
+                    CONF_ENTITY_TEMP_ROOM: "sensor.polnoc_temp",
+                    CONF_ENTITY_VALVES: [],
+                    CONF_ENTITY_FAST_SOURCE: "climate.polnoc_split",
+                    CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_SPLIT,
+                    CONF_FAST_SOURCE_GROUP: "outdoor_unit_a",
+                },
+                {
+                    CONF_ROOM_NAME: "Poludnie",
+                    CONF_ROOM_AREA: 20.0,
+                    CONF_ENTITY_TEMP_ROOM: "sensor.poludnie_temp",
+                    CONF_ENTITY_VALVES: [],
+                    CONF_ENTITY_FAST_SOURCE: "climate.poludnie_split",
+                    CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_SPLIT,
+                    CONF_FAST_SOURCE_GROUP: "outdoor_unit_a",
+                },
+            ],
+        },
+        # The LIVE room asks for a modest heat boost; the SHADOW room's much
+        # larger cooling error must not out-vote it.
+        options={CONF_ROOM_STATE: {"Polnoc": "live", "Poludnie": "shadow"}},
+        title="Tortoise-UFH",
+        unique_id="50.5_19.5",
+        version=2,
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    data = entry.runtime_data.coordinator.data
+    live = data.rooms["Polnoc"].outputs
+    assert live.fast_source.on is True
+    assert live.fast_source.mode.value == "heating"
+    assert "fast_source_group_conflict" not in live.report.flags

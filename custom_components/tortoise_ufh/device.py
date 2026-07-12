@@ -18,9 +18,15 @@ key. Units: none — this module carries registry metadata only.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 MANUFACTURER: str = "Tortoise-UFH"
 """Manufacturer string shown on every Tortoise-UFH device."""
@@ -61,6 +67,30 @@ def hub_device_info(entry_id: str) -> DeviceInfo:
         The hub device info (identifier ``(DOMAIN, entry_id)``).
     """
     return DeviceInfo(
+        identifiers={(DOMAIN, entry_id)},
+        name=HUB_NAME,
+        manufacturer=MANUFACTURER,
+        model=HUB_MODEL,
+    )
+
+
+def register_hub_device(hass: HomeAssistant, entry_id: str) -> None:
+    """Create the per-entry hub device in the device registry (K11).
+
+    Called from ``async_setup_entry`` BEFORE the entity platforms are
+    forwarded: the room devices reference the hub via ``via_device``, and
+    since HA 2025.x adding an entity whose ``via_device`` points at a device
+    that does not exist in the registry yet logs a "will stop working"
+    deprecation. Registering the hub first makes the reference always valid.
+    Idempotent (``async_get_or_create``).
+
+    Args:
+        hass: The Home Assistant instance.
+        entry_id: The config entry id owning the hub.
+    """
+    registry = dr.async_get(hass)
+    registry.async_get_or_create(
+        config_entry_id=entry_id,
         identifiers={(DOMAIN, entry_id)},
         name=HUB_NAME,
         manufacturer=MANUFACTURER,

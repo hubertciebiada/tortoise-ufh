@@ -416,3 +416,69 @@ async def test_set_tuning_unknown_scope_rejected(
 
     assert msg["success"] is False
     assert msg["error"]["code"] == "invalid_scope"
+
+
+# -- Round 3 hardening (2026-07-12): K9 group topology, D7 broken room -------
+
+
+async def test_get_config_exposes_fast_source_group(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """K9: the multisplit group key flows to the panel (empty when ungrouped)."""
+    from custom_components.tortoise_ufh.const import (
+        CONF_FAST_SOURCE_GROUP,
+        CONF_ROOM_NAME,
+        CONF_ROOMS,
+    )
+
+    entry = setup_integration
+    rooms_cfg = [dict(room) for room in entry.data[CONF_ROOMS]]
+    for room in rooms_cfg:
+        if room[CONF_ROOM_NAME] == "Salon":
+            room[CONF_FAST_SOURCE_GROUP] = "outdoor_unit_a"
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_ROOMS: rooms_cfg}
+    )
+    await hass.async_block_till_done()
+
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/get_config"})
+
+    assert msg["success"] is True
+    rooms = {room["name"]: room for room in msg["result"]["rooms"]}
+    assert rooms["Salon"]["fast_source_group"] == "outdoor_unit_a"
+    assert rooms["Lazienka"]["fast_source_group"] == ""
+
+
+async def test_get_config_skips_a_broken_room_entry(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """D7: one corrupted room dict must not blow up the whole reply."""
+    from custom_components.tortoise_ufh.const import (
+        CONF_ROOM_AREA,
+        CONF_ROOM_NAME,
+        CONF_ROOMS,
+    )
+
+    entry = setup_integration
+    rooms_cfg = [dict(room) for room in entry.data[CONF_ROOMS]]
+    for room in rooms_cfg:
+        if room[CONF_ROOM_NAME] == "Lazienka":
+            room[CONF_ROOM_AREA] = "zepsute"  # float() -> ValueError
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_ROOMS: rooms_cfg}
+    )
+    await hass.async_block_till_done()
+
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/get_config"})
+
+    assert msg["success"] is True
+    rooms = {room["name"]: room for room in msg["result"]["rooms"]}
+    # The healthy room is still served; the corrupted one is skipped.
+    assert "Salon" in rooms
+    assert "Lazienka" not in rooms

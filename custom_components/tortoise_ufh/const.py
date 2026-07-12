@@ -215,9 +215,14 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     ("deadband_c", 0.0, 5.0, 0.1),
     ("valve_floor_pct", 0.0, 100.0, 1.0),
     ("boost_offset_c", 0.0, 10.0, 0.1),
-    ("fast_min_on_minutes", 0.0, 60.0, 1.0),
-    ("fast_min_off_minutes", 0.0, 60.0, 1.0),
-    ("dew_margin_k", 0.0, 10.0, 0.1),
+    # Lower bound 3 min (K2, 2026-07-12): zero dwells let a conflicted
+    # multisplit group flip direction EVERY cycle; 3 min is the floor of
+    # sane compressor hygiene, the core itself still accepts 0 for tests.
+    ("fast_min_on_minutes", 3.0, 60.0, 1.0),
+    ("fast_min_off_minutes", 3.0, 60.0, 1.0),
+    # Lower bound 0.5 K (D4, 2026-07-12): margin 0 degenerates the local
+    # dew-point throttle ramp into a hard on/off step at the dew point.
+    ("dew_margin_k", 0.5, 10.0, 0.1),
     ("dew_ramp_k", 0.1, 10.0, 0.1),
     ("ff_neutral_c", -30.0, 40.0, 0.5),
     ("ff_gain_pct_per_k", 0.0, 10.0, 0.1),

@@ -254,3 +254,100 @@ class TestFarewellSync:
         """A farewell racing a room removal must not raise."""
         building = BuildingController({"salon": ControllerConfig()})
         building.notify_fast_source_farewell("nie_ma_takiego_pokoju")
+
+
+class TestIncumbentHysteresis:
+    """K2 (2026-07-12): the incumbent direction defends the aggregate."""
+
+    def _step_conflict(
+        self,
+        building: BuildingController,
+        *,
+        t_heat_room: float,
+        t_cool_room: float,
+        dt_seconds: float = 300.0,
+    ) -> dict[str, FastSourceMode | None]:
+        out = building.step(
+            {
+                "north": _transitional(room_temperature_c=t_heat_room),
+                "south": _transitional(room_temperature_c=t_cool_room),
+            },
+            dt_seconds=dt_seconds,
+        )
+        return {
+            name: (room.fast_source.mode if room.fast_source.on else None)
+            for name, room in out.rooms.items()
+        }
+
+    def test_noise_cannot_pingpong_a_persistent_conflict(self) -> None:
+        """Symmetric ~2 K opposite demands + sensor noise: <= 1 reversal.
+
+        The R3 audit measured 15 direction reversals in 2.5 h at zero dwells
+        (7 at the default 10/10 min) with the bare max-excess winner; the
+        +0.5 K incumbent hysteresis must hold the first winner against noise.
+        """
+        import random
+
+        rng = random.Random(42)
+        cfg = ControllerConfig(fast_min_on_minutes=0.0, fast_min_off_minutes=0.0)
+        building = BuildingController({"north": cfg, "south": cfg})
+        directions: list[FastSourceMode] = []
+        for _ in range(30):
+            modes = self._step_conflict(
+                building,
+                t_heat_room=19.0 + rng.gauss(0, 0.05),
+                t_cool_room=23.0 + rng.gauss(0, 0.05),
+            )
+            on_modes = {m for m in modes.values() if m is not None}
+            assert len(on_modes) <= 1  # one direction per aggregate, always
+            if on_modes:
+                directions.append(next(iter(on_modes)))
+        reversals = sum(
+            1 for a, b in zip(directions, directions[1:], strict=False) if a is not b
+        )
+        assert reversals <= 1
+
+    def test_clearly_stronger_challenger_takes_over(self) -> None:
+        """An excess advantage beyond +0.5 K still flips the group."""
+        building = BuildingController(
+            {"north": ControllerConfig(), "south": ControllerConfig()}
+        )
+        # North engages HEATING alone (excess 1.7 K) and becomes incumbent.
+        modes = self._step_conflict(building, t_heat_room=19.0, t_cool_room=21.0)
+        assert modes["north"] is FastSourceMode.HEATING
+        # South heats up to a 2.7 K excess (> 1.7 + 0.5): it must win once
+        # the incumbent's min-ON (10 min) and its own min-OFF elapse.
+        seen: list[dict[str, FastSourceMode | None]] = []
+        for _ in range(4):
+            seen.append(
+                self._step_conflict(building, t_heat_room=19.0, t_cool_room=24.0)
+            )
+        assert seen[-1]["south"] is FastSourceMode.COOLING
+        assert seen[-1]["north"] is None
+
+    def test_marginally_stronger_challenger_does_not_take_over(self) -> None:
+        """An excess advantage inside the 0.5 K hysteresis changes nothing."""
+        building = BuildingController(
+            {"north": ControllerConfig(), "south": ControllerConfig()}
+        )
+        modes = self._step_conflict(building, t_heat_room=19.0, t_cool_room=21.0)
+        assert modes["north"] is FastSourceMode.HEATING
+        # South's excess 2.0 K vs north's 1.7 K: within the +0.5 K band.
+        for _ in range(6):
+            modes = self._step_conflict(building, t_heat_room=19.0, t_cool_room=23.3)
+        assert modes["north"] is FastSourceMode.HEATING
+        assert modes["south"] is None
+
+    def test_reset_clears_the_incumbency(self) -> None:
+        """reset() forgets the last winner: the next conflict is excess-only."""
+        building = BuildingController(
+            {"north": ControllerConfig(), "south": ControllerConfig()}
+        )
+        modes = self._step_conflict(building, t_heat_room=19.0, t_cool_room=21.0)
+        assert modes["north"] is FastSourceMode.HEATING
+        building.reset()
+        # Fresh machines, marginally bigger cooling excess: cooling wins now
+        # (with the stored incumbent it would have stayed inside hysteresis).
+        modes = self._step_conflict(building, t_heat_room=19.0, t_cool_room=23.3)
+        assert modes["south"] is FastSourceMode.COOLING
+        assert modes["north"] is None

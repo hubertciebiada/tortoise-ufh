@@ -117,7 +117,7 @@ class TestBumplessSetpointTransfer:
 
 
 class TestStaleHumidityGate:
-    """K7: a held 60-120 min old RH pads the effective dew point by +1 K."""
+    """K7/D5: a held 60-120 min old RH pads the dew point by frac * 1 K."""
 
     _ROOM: dict[str, Any] = {
         "mode": Mode.COOLING,
@@ -138,7 +138,7 @@ class TestStaleHumidityGate:
             make_inputs(loops=loops, **self._ROOM), dt_seconds=300.0
         )
         stale = stale_ctrl.step(
-            make_inputs(loops=loops, humidity_stale=True, **self._ROOM),
+            make_inputs(loops=loops, humidity_stale_frac=1.0, **self._ROOM),
             dt_seconds=300.0,
         )
         assert stale.report.dew_throttle_factor == pytest.approx(
@@ -147,8 +147,32 @@ class TestStaleHumidityGate:
         assert "rh_stale_gated" in stale.report.flags
         assert "rh_stale_gated" not in fresh.report.flags
 
+    def test_stale_pad_is_linear_in_the_fraction(self) -> None:
+        """D5 (2026-07-12): half the staleness pads half the kelvin.
+
+        A fraction of 0.5 (age 90 min) moves the throttle factor down by
+        exactly ``0.5 * pad / ramp = 0.25`` — the pad grows continuously with
+        the age instead of jumping a full +1 K at the 60-min edge (the jump
+        was itself a mini limit cycle: factor stepped by 0.5 across one
+        reporting cadence).
+        """
+        fresh_ctrl = RoomController(ControllerConfig(), name="a")
+        half_ctrl = RoomController(ControllerConfig(), name="b")
+        loops = (LoopInput(None, 19.4, None),)
+        fresh = fresh_ctrl.step(
+            make_inputs(loops=loops, **self._ROOM), dt_seconds=300.0
+        )
+        half = half_ctrl.step(
+            make_inputs(loops=loops, humidity_stale_frac=0.5, **self._ROOM),
+            dt_seconds=300.0,
+        )
+        assert half.report.dew_throttle_factor == pytest.approx(
+            max(0.0, fresh.report.dew_throttle_factor - 0.25), abs=1e-6
+        )
+        assert "rh_stale_gated" in half.report.flags
+
     def test_stale_rh_raises_global_safe_dew_point(self) -> None:
-        """The global maximum prices the staleness in with the same +1 K."""
+        """The global maximum prices the staleness in with the same frac pad."""
         building = BuildingController({"salon": ControllerConfig()})
         loops = (LoopInput(None, 22.0, None),)
         fresh = building.step(
@@ -156,13 +180,22 @@ class TestStaleHumidityGate:
         )
         building.reset()
         stale = building.step(
-            {"salon": make_inputs(loops=loops, humidity_stale=True, **self._ROOM)},
+            {"salon": make_inputs(loops=loops, humidity_stale_frac=1.0, **self._ROOM)},
+            dt_seconds=300.0,
+        )
+        building.reset()
+        half = building.step(
+            {"salon": make_inputs(loops=loops, humidity_stale_frac=0.5, **self._ROOM)},
             dt_seconds=300.0,
         )
         assert fresh.global_safe_dew_point_c is not None
         assert stale.global_safe_dew_point_c is not None
+        assert half.global_safe_dew_point_c is not None
         assert stale.global_safe_dew_point_c == pytest.approx(
             fresh.global_safe_dew_point_c + 1.0
+        )
+        assert half.global_safe_dew_point_c == pytest.approx(
+            fresh.global_safe_dew_point_c + 0.5
         )
 
 
@@ -266,3 +299,33 @@ class TestTrendInvalidationHook:
         # The reference sample was dropped: the big post-gap delta must not
         # be divided by one clamped dt (a fictitious trend spike).
         assert out.rooms["salon"].report.trend_c_per_h == pytest.approx(0.0)
+
+
+class TestSetpointWiggleResidual:
+    """K6 (2026-07-12): a setpoint wiggle at a small integral is idempotent."""
+
+    def test_down_up_wiggle_restores_operating_point(self) -> None:
+        """-3 K and back within two debounced recomputes: I returns to I0.
+
+        The R3 audit measured the pre-fix pump at ~2*kp*dK (I0 = 10 ->
+        I = 79.8 with the valve at 79.8 % at zero error inside the band,
+        where the unwind is dead). The night_setback twin gate is blind to
+        this regime (its winter integral never clamps), so the regression
+        pin lives here on the pure core.
+        """
+        cfg = ControllerConfig()
+        controller = RoomController(cfg, name="salon")
+        controller._pid.shift_integral(+10.0)
+        settled = controller.step(
+            make_inputs(setpoint_c=21.0, room_temperature_c=21.0),
+            dt_seconds=300.0,
+        )
+        assert settled.valve_position_pct == pytest.approx(10.0, abs=0.1)
+        controller.step(
+            make_inputs(setpoint_c=18.0, room_temperature_c=21.0), dt_seconds=5.0
+        )
+        back = controller.step(
+            make_inputs(setpoint_c=21.0, room_temperature_c=21.0), dt_seconds=5.0
+        )
+        assert back.report.i_term == pytest.approx(10.0, abs=0.5)
+        assert back.valve_position_pct == pytest.approx(10.0, abs=0.5)

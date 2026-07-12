@@ -73,7 +73,10 @@ _SET_MODE_SCHEMA = vol.Schema(
 def _resolve_coordinator(hass: HomeAssistant) -> TortoiseUfhCoordinator:
     """Return the single loaded coordinator, or raise if none is ready.
 
-    Tortoise-UFH is a ``hub`` integration: one config entry manages every room.
+    Tortoise-UFH is a ``hub`` integration: one config entry manages every
+    room. Only a fully LOADED entry qualifies (D1, 2026-07-12): an entry
+    mid-unload or mid-setup still carries ``runtime_data``, and a service
+    call used to mutate its dying coordinator inside the unload window.
 
     Args:
         hass: The Home Assistant instance.
@@ -84,7 +87,11 @@ def _resolve_coordinator(hass: HomeAssistant) -> TortoiseUfhCoordinator:
     Raises:
         HomeAssistantError: When no config entry has finished loading.
     """
+    from homeassistant.config_entries import ConfigEntryState
+
     for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.state is not ConfigEntryState.LOADED:
+            continue
         runtime = getattr(entry, "runtime_data", None)
         coordinator = getattr(runtime, "coordinator", None)
         if coordinator is not None:

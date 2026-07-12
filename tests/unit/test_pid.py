@@ -278,3 +278,79 @@ class TestUnwindFactor:
         """A sub-1 unwind factor (slower unwinding than winding) is invalid."""
         with pytest.raises(ValueError, match="unwind_factor must be >= 1"):
             PIDController(kp=1.0, ki=0.001, kd=0.0, dt=300.0, unwind_factor=0.5)
+
+
+class TestShiftResidual:
+    """K6 (2026-07-12): clamp-cut shift debt netting + back-calc suppression."""
+
+    def test_wiggle_at_small_integral_is_idempotent(self) -> None:
+        """A down-and-back shift wiggle returns the integral to its origin.
+
+        Before K6 the sequence (shift clamps at 0 -> the transient saturation
+        back-calculates I to -P -> the counter-shift lands on top) pumped the
+        integral to ~2*kp*dK: measured 79.8 pp from I0 = 10 for a 3 K wiggle
+        at the default gains. Now the clamp cut is banked as a residual, the
+        opposing back-calculation is suppressed while that debt is
+        outstanding, and the counter-shift nets the debt first.
+        """
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0, unwind_factor=8.0)
+        pid.shift_integral(+10.0)  # small operating point
+        pid.compute(0.0, dt_seconds=300.0)  # settled at the setpoint
+        # Setpoint drops 3 K: shift -42 clamps at 0 (residual -32), and the
+        # deadbanded error -2.7 K saturates the output at 0 for one cycle.
+        pid.shift_integral(-42.0)
+        assert pid.integral == pytest.approx(0.0)
+        assert pid.shift_residual == pytest.approx(-32.0)
+        pid.compute(-2.7, dt_seconds=5.0)
+        # Setpoint returns: +42 nets the -32 debt, only +10 lands.
+        pid.shift_integral(+42.0)
+        out = pid.compute(0.0, dt_seconds=5.0)
+        assert pid.integral == pytest.approx(10.0, abs=0.1)
+        assert out == pytest.approx(10.0, abs=0.1)
+        assert pid.shift_residual == pytest.approx(0.0)
+
+    def test_monotonic_shift_series_sums_like_before(self) -> None:
+        """Same-sign shifts keep the pre-K6 series-sum behaviour."""
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        pid.shift_integral(+10.0)
+        for _ in range(3):
+            pid.shift_integral(-14.0)  # 3 x -1 K at kp=14, clamping at 0
+        assert pid.integral == pytest.approx(0.0)
+        # The whole -42 is owed: one +42 counter-shift restores the origin.
+        pid.shift_integral(+42.0)
+        assert pid.integral == pytest.approx(10.0)
+
+    def test_backcalc_untouched_without_residual(self) -> None:
+        """With no outstanding debt the anti-windup is bit-for-bit classic."""
+        classic = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        classic.shift_integral(+10.0)
+        classic.compute(-2.7, dt_seconds=5.0)
+        # Back-calculation drives I to -P during the low clamp (I = kp*2.7).
+        assert classic.integral == pytest.approx(14.0 * 2.7, abs=0.1)
+
+    def test_persistent_saturation_resumes_antiwindup_after_reset(self) -> None:
+        """reset() clears the residual with the rest of the state."""
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        pid.shift_integral(-42.0)
+        assert pid.shift_residual == pytest.approx(-42.0)
+        pid.reset()
+        assert pid.shift_residual == pytest.approx(0.0)
+        assert pid.integral == pytest.approx(0.0)
+
+    def test_opposite_residual_still_allows_true_antiwindup(self) -> None:
+        """A high-side clamp with a NEGATIVE debt still back-calculates.
+
+        The suppression is sign-keyed: it blocks only corrections that would
+        re-inflate the integral AGAINST the outstanding debt, never the
+        classic windup prevention on the other bound.
+        """
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        pid.shift_integral(+90.0)
+        pid.shift_integral(-140.0)  # clamps at 0: residual -50
+        assert pid.shift_residual == pytest.approx(-50.0)
+        pid.shift_integral(+95.0)  # nets the debt, applies +45
+        assert pid.integral == pytest.approx(45.0)
+        # Huge positive error: output clamps HIGH, the correction is negative
+        # (same sign as any remaining debt would be) -> applied normally.
+        pid.compute(+10.0, dt_seconds=300.0)
+        assert pid.integral <= 100.0

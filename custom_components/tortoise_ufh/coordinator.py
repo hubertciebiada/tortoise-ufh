@@ -427,6 +427,13 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             function=self.async_request_refresh,
         )
 
+        # Parked flag (K3, 2026-07-12): set by async_farewell_all — once the
+        # unload farewell has parked the actuators, no later control cycle may
+        # write commands again. Belt-and-braces behind the shutdown ordering
+        # in async_unload_entry (a cycle that slipped into the unload window
+        # used to re-open a farewell-parked cooling valve).
+        self._parked: bool = False
+
     @property
     def _entity_cache(self) -> dict[str, tuple[float, datetime]]:
         """The reader's stale cache (read/write delegate).
@@ -447,10 +454,19 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
     def set_home_temperature(self, value: float) -> None:
         """Set the global home target temperature and rebroadcast [degC].
 
+        A non-finite value is rejected WITHOUT mutating state (K4,
+        2026-07-12): HA's ``number.set_value`` min/max check lets ``NaN``
+        through (every comparison with NaN is false), and a NaN setpoint
+        poisoned every subsequent control cycle until a reload.
+
         Args:
             value: New home target temperature [degC].
         """
-        self._home_temperature_c = float(value)
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            _LOGGER.warning("Rejecting non-finite home temperature %r (K4)", value)
+            return
+        self._home_temperature_c = numeric
         self._persist_setpoints()
         self._rebroadcast_setpoints()
         self._schedule_recompute()
@@ -470,12 +486,23 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
     def set_room_offset(self, room_name: str, offset: float) -> None:
         """Set a room's setpoint offset and rebroadcast [K].
 
+        A non-finite value is rejected WITHOUT mutating state (K4,
+        2026-07-12) — see :meth:`set_home_temperature`.
+
         Args:
             room_name: The room name.
             offset: New offset from the home temperature [K].
         """
+        numeric = float(offset)
+        if not math.isfinite(numeric):
+            _LOGGER.warning(
+                "Rejecting non-finite offset %r for room %s (K4)",
+                offset,
+                room_name,
+            )
+            return
         if room_name in self._room_offsets:
-            self._room_offsets[room_name] = float(offset)
+            self._room_offsets[room_name] = numeric
             self._persist_setpoints()
             self._rebroadcast_setpoints()
             self._schedule_recompute()
@@ -686,6 +713,22 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             except ValueError:
                 _LOGGER.warning("Ignoring invalid persisted mode %r", raw_mode)
 
+    async def async_prune_room_setpoint(self, room_name: str) -> None:
+        """Drop a removed room's offset from memory and the setpoint Store.
+
+        Called by the options flow's remove-room leaf (D9, 2026-07-12).
+        Operating on the coordinator's OWN Store instance (instead of a
+        second, parallel ``Store`` object) removes the lost-update window in
+        which the coordinator's pending delayed save re-wrote the pruned
+        offset back; the direct ``async_save`` also flushes any such pending
+        save with the room already gone.
+
+        Args:
+            room_name: The room being removed.
+        """
+        self._room_offsets.pop(room_name, None)
+        await self._setpoint_store.async_save(self._setpoint_snapshot())
+
     @callback
     def _persist_options(self, changes: dict[str, Any]) -> None:
         """Merge ``changes`` into ``entry.options`` and persist them.
@@ -756,6 +799,28 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
     def async_cancel_recompute(self) -> None:
         """Cancel any pending debounced recompute (called on entry unload)."""
         self._recompute_debouncer.async_cancel()
+
+    async def async_shutdown(self) -> None:
+        """Shut the coordinator down and flush the setpoint Store (K3/K5).
+
+        Extends the base :class:`DataUpdateCoordinator` shutdown with the
+        two entry-unload hardenings of 2026-07-12:
+
+        * K3 — the pending debounced recompute is cancelled here too, so
+          whichever teardown path runs first (the explicit call at the top of
+          ``async_unload_entry`` or the ``entry.async_on_unload`` callbacks)
+          leaves no timer alive inside the unload window.
+        * K5 — a setpoint changed less than :data:`_SETPOINT_SAVE_DELAY_S`
+          before an unload/reload sat only in the Store's delayed-save timer
+          and was lost to the next coordinator; the snapshot is flushed
+          synchronously now (only when the Store was actually loaded — a
+          failed first refresh must not overwrite persisted values with the
+          config-entry seeds).
+        """
+        self.async_cancel_recompute()
+        await super().async_shutdown()
+        if self._setpoints_loaded:
+            await self._setpoint_store.async_save(self._setpoint_snapshot())
 
     # -- Update cycle -------------------------------------------------------
 
@@ -851,13 +916,21 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             )
 
         # Emit commands for LIVE rooms only; OFF and SHADOW rooms are computed
-        # and reported but never written.
-        for room_cfg, name in zip(self._room_configs, self._room_names, strict=True):
-            runtime = rooms.get(name)
-            if runtime is None or not runtime.live_control_enabled:
-                continue
-            await self._write_valves(room_cfg, name, runtime.outputs)
-            await self._write_fast_source(room_cfg, name, runtime.outputs)
+        # and reported but never written. A coordinator whose unload farewell
+        # has already parked the actuators writes NOTHING any more (K3,
+        # 2026-07-12) — a cycle sneaking into the unload window used to
+        # re-open a farewell-parked cooling valve.
+        if self._parked:
+            _LOGGER.debug("Coordinator parked by the unload farewell; skipping writes")
+        else:
+            for room_cfg, name in zip(
+                self._room_configs, self._room_names, strict=True
+            ):
+                runtime = rooms.get(name)
+                if runtime is None or not runtime.live_control_enabled:
+                    continue
+                await self._write_valves(room_cfg, name, runtime.outputs)
+                await self._write_fast_source(room_cfg, name, runtime.outputs)
 
         return CoordinatorData(
             rooms=rooms,
@@ -897,15 +970,15 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # the dew-point input rather than degrading the whole room. A stale
         # (frozen-but-present) humidity is the single most dangerous input in
         # cooling — both condensation defences trust it — so it carries a
-        # TWO-stage age gate (C4 + K7 2026-07-12): fresh <= 60 min, held +
-        # flagged stale to 120 min (the core pads its dew points by +1 K),
-        # unusable beyond.
-        humidity, humidity_stale = self._reader.read_humidity(
+        # TWO-stage age gate (C4 + K7 2026-07-12): fresh <= 60 min, held to
+        # 120 min with a linear staleness fraction (D5 — the core pads its
+        # dew points by frac * 1 K), unusable beyond.
+        humidity, humidity_stale_frac = self._reader.read_humidity(
             room_cfg.get(CONF_ENTITY_HUMIDITY)
         )
         if humidity is not None and not 0.0 <= humidity <= 100.0:
             humidity = None
-            humidity_stale = False
+            humidity_stale_frac = 0.0
         # S6: per-room data age for the core S5 watchdog. A fresh temperature
         # resets the clock; otherwise the age grows from the last fresh sample
         # (or from the first time the room was ever seen).
@@ -952,9 +1025,18 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 ),
                 cooling_enabled=cooling_enabled,
                 last_update_age_minutes=age_minutes,
-                fast_source_group=str(room_cfg.get(CONF_FAST_SOURCE_GROUP, "") or ""),
+                # K1 (2026-07-12): only a LIVE room votes in the multisplit
+                # group arbitration. A SHADOW room's command is never written,
+                # yet its (uncontrolled, so never-shrinking) error used to win
+                # every re-engage and permanently strangle the LIVE rooms'
+                # split — and shadow is the DEFAULT state of a new room.
+                fast_source_group=(
+                    str(room_cfg.get(CONF_FAST_SOURCE_GROUP, "") or "")
+                    if self.get_room_state(name) == ROOM_STATE_LIVE
+                    else ""
+                ),
                 fast_source_hvac_mode=fast_hvac,
-                humidity_stale=humidity_stale,
+                humidity_stale_frac=humidity_stale_frac,
             )
         except ValueError:
             _LOGGER.warning(
@@ -1194,10 +1276,18 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self._building.notify_fast_source_farewell(name)
 
     async def async_farewell_all(self) -> None:
-        """Park every live room's actuators (called on config-entry unload)."""
+        """Park every live room's actuators (called on config-entry unload).
+
+        Also raises the permanent ``_parked`` flag (K3, 2026-07-12): from
+        this point on the coordinator computes and reports but writes no
+        commands, so nothing that fires inside the unload window can undo
+        the parking. The flag lives for the rest of this instance's life —
+        a reload builds a fresh coordinator.
+        """
         for room_cfg, name in zip(self._room_configs, self._room_names, strict=True):
             if self.get_room_state(name) == ROOM_STATE_LIVE:
                 await self._async_farewell_room(room_cfg, name)
+        self._parked = True
 
     # -- Internal: entity reads ---------------------------------------------
 

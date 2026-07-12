@@ -66,6 +66,7 @@
       "invalid_location": "Invalid home location — latitude must be between -90 and 90 and longitude between -180 and 180",
       "empty_room_name": "Room name cannot be empty",
       "duplicate_room_name": "A room with this name already exists",
+      "duplicate_room_slug": "A room whose name differs only in case or spacing already exists (they would collide in the registry)",
       "invalid_room": "Invalid room definition",
       "valve_required": "At least one valve actuator must be selected",
       "humidity_required": "A humidity sensor is required for rooms participating in floor cooling",
@@ -167,6 +168,7 @@
     "error": {
       "empty_room_name": "Room name cannot be empty",
       "duplicate_room_name": "A room with this name already exists",
+      "duplicate_room_slug": "A room whose name differs only in case or spacing already exists (they would collide in the registry)",
       "invalid_room": "Invalid room definition",
       "valve_required": "At least one valve actuator must be selected",
       "humidity_required": "A humidity sensor is required for rooms participating in floor cooling",

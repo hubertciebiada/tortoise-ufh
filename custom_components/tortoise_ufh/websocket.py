@@ -25,12 +25,14 @@ physical control logic of its own.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 
@@ -44,6 +46,7 @@ from .const import (
     CONF_ENTITY_TEMP_OUTDOOR,
     CONF_ENTITY_TEMP_ROOM,
     CONF_ENTITY_VALVES,
+    CONF_FAST_SOURCE_GROUP,
     CONF_FAST_SOURCE_KIND,
     CONF_ROOM_AREA,
     CONF_ROOM_NAME,
@@ -76,6 +79,8 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
     from .coordinator import TortoiseUfhCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 # --- Command type strings ---------------------------------------------------
 
@@ -135,6 +140,10 @@ class RoomConfigView:
             ``off`` / ``shadow`` / ``live``).
         fast_source_kind: Configured fast-source kind (one of
             :data:`FAST_SOURCE_KINDS`).
+        fast_source_group: Configured multisplit outdoor-unit group key, or
+            ``""`` for an ungrouped unit (additive field 2026-07-12, K9 —
+            the panel could not show the group topology, so a room losing
+            the arbitration displayed an unexplained OFF).
         entities: Assigned source entities keyed by their ``CONF_*`` name;
             values are entity-id strings, lists of strings, or ``None``.
         diagnostic_entities: Registered diagnostic ``sensor`` entity ids keyed by
@@ -154,6 +163,7 @@ class RoomConfigView:
     cooling_enabled: bool
     control_state: str
     fast_source_kind: str
+    fast_source_group: str = ""
     entities: dict[str, Any] = field(default_factory=dict)
     diagnostic_entities: dict[str, str] = field(default_factory=dict)
 
@@ -190,6 +200,7 @@ class RoomConfigView:
             "cooling_enabled": self.cooling_enabled,
             "control_state": self.control_state,
             "fast_source_kind": self.fast_source_kind,
+            "fast_source_group": self.fast_source_group,
             "entities": dict(self.entities),
             "diagnostic_entities": dict(self.diagnostic_entities),
         }
@@ -398,8 +409,10 @@ def _resolve_coordinator(hass: HomeAssistant) -> TortoiseUfhCoordinator | None:
     """Resolve the coordinator from the first loaded config entry.
 
     Tortoise-UFH is a ``hub`` integration: a single config entry manages every
-    room. This returns that entry's coordinator, or ``None`` when no entry has
-    finished loading (``runtime_data`` not yet assigned).
+    room. This returns that entry's coordinator, or ``None`` when no entry is
+    fully LOADED (D1, 2026-07-12: an entry mid-unload or mid-setup still
+    carries ``runtime_data``, and a websocket command used to mutate its
+    dying coordinator inside the unload window).
 
     Args:
         hass: The running Home Assistant instance.
@@ -408,6 +421,8 @@ def _resolve_coordinator(hass: HomeAssistant) -> TortoiseUfhCoordinator | None:
         The live :class:`TortoiseUfhCoordinator`, or ``None`` if unavailable.
     """
     for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.state is not ConfigEntryState.LOADED:
+            continue
         runtime = getattr(entry, "runtime_data", None)
         if runtime is None:
             continue
@@ -571,25 +586,38 @@ def ws_get_config(
             CONF_ENTITY_RETURN: list(room_cfg.get(CONF_ENTITY_RETURN) or []),
             CONF_ENTITY_FAST_SOURCE: room_cfg.get(CONF_ENTITY_FAST_SOURCE),
         }
-        rooms.append(
-            RoomConfigView(
-                name=name,
-                area_m2=float(room_cfg.get(CONF_ROOM_AREA, 0.0) or 0.0),
-                offset_c=coordinator.get_room_offset(name),
-                cooling_enabled=bool(
-                    room_cfg.get(CONF_COOLING_ENABLED, DEFAULT_COOLING_ENABLED)
-                ),
-                control_state=coordinator.get_room_state(name),
-                fast_source_kind=str(
-                    room_cfg.get(CONF_FAST_SOURCE_KIND, DEFAULT_FAST_SOURCE_KIND)
-                    or DEFAULT_FAST_SOURCE_KIND
-                ),
-                entities=entities,
-                diagnostic_entities=_resolve_diagnostic_entities(
-                    registry, entry_id, name
-                ),
+        # D7 (2026-07-12): a single corrupted room dict (hand-edited storage,
+        # partial migration) must not blow up the WHOLE get_config reply —
+        # skip that room with a log and keep serving the healthy ones.
+        try:
+            rooms.append(
+                RoomConfigView(
+                    name=name,
+                    area_m2=float(room_cfg.get(CONF_ROOM_AREA, 0.0) or 0.0),
+                    offset_c=coordinator.get_room_offset(name),
+                    cooling_enabled=bool(
+                        room_cfg.get(CONF_COOLING_ENABLED, DEFAULT_COOLING_ENABLED)
+                    ),
+                    control_state=coordinator.get_room_state(name),
+                    fast_source_kind=str(
+                        room_cfg.get(CONF_FAST_SOURCE_KIND, DEFAULT_FAST_SOURCE_KIND)
+                        or DEFAULT_FAST_SOURCE_KIND
+                    ),
+                    fast_source_group=str(
+                        room_cfg.get(CONF_FAST_SOURCE_GROUP, "") or ""
+                    ),
+                    entities=entities,
+                    diagnostic_entities=_resolve_diagnostic_entities(
+                        registry, entry_id, name
+                    ),
+                )
             )
-        )
+        except (TypeError, ValueError):
+            _LOGGER.warning(
+                "Skipping room %r with an invalid persisted config in get_config",
+                name,
+                exc_info=True,
+            )
 
     result = ConfigResult(
         home_setpoint_c=coordinator.get_home_temperature(),

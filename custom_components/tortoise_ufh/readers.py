@@ -95,13 +95,15 @@ HUMIDITY_STALE_MAX_AGE_S: float = 120.0 * 60.0
 """Hard age limit for a humidity state [s] (K7, 2026-07-12).
 
 Between :data:`HUMIDITY_MAX_AGE_S` and this limit the LAST value is still
-served, flagged stale (``RoomInputs.humidity_stale``) — the core then pads
-the effective dew point by +1 K instead of dropping the reading entirely.
-Rationale: threshold-reporting RH sensors (e.g. SCD41 over Matter) can
-legitimately pause near 60 min; a binary gate at 60 min made the cooling
-limit-cycle (RH fresh -> cool -> aged out -> full stop -> repeat). Beyond
-this limit the reading is unusable and reads as ``None`` (full conservative
-stop).
+served with a staleness fraction rising linearly 0 -> 1 across the window
+(``RoomInputs.humidity_stale_frac``; D5, 2026-07-12) — the core then pads
+the effective dew point by ``frac * 1 K`` instead of dropping the reading
+entirely. Rationale: threshold-reporting RH sensors (e.g. SCD41 over Matter)
+can legitimately pause near 60 min; a binary gate at 60 min made the cooling
+limit-cycle (RH fresh -> cool -> aged out -> full stop -> repeat), and a
+binary +1 K pad still stepped the throttle discontinuously at the edge.
+Beyond this limit the reading is unusable and reads as ``None`` (full
+conservative stop).
 """
 
 _HP_INACTIVE_STATES: frozenset[str] = frozenset(
@@ -281,45 +283,61 @@ class SourceReader:
         self._temp_pending.pop(entity_id, None)
         return value
 
-    def read_humidity(self, entity_id: str | None) -> tuple[float | None, bool]:
+    def read_humidity(self, entity_id: str | None) -> tuple[float | None, float]:
         """Read a humidity entity with the two-stage age gate (K7, 2026-07-12).
 
-        Age <= :data:`HUMIDITY_MAX_AGE_S`: the reading is FRESH. Between that
-        and :data:`HUMIDITY_STALE_MAX_AGE_S`: the LAST value is still served,
-        marked stale — the core pads its dew points by +1 K instead of
-        dropping straight to the conservative full stop, so a
-        threshold-reporting RH sensor cannot limit-cycle the cooling. Older:
-        ``(None, False)`` (unusable).
+        Age <= :data:`HUMIDITY_MAX_AGE_S`: the reading is FRESH (fraction 0).
+        Between that and :data:`HUMIDITY_STALE_MAX_AGE_S`: the LAST value is
+        still served with a staleness fraction rising linearly 0 -> 1 across
+        the window (D5, 2026-07-12 — the core pads its dew points by
+        ``frac * 1 K``), so a threshold-reporting RH sensor can neither
+        limit-cycle the cooling nor step the throttle at the 60-min edge.
+        Older: ``(None, 0.0)`` (unusable).
+
+        A value served from the short unavailable-entity cache carries the
+        FULL fraction 1.0 (K7, 2026-07-12): the source entity just died, so
+        the held value's true age is unknowable — the conservative pad must
+        not vanish exactly when the sensor does.
 
         Args:
             entity_id: The humidity entity id, or ``None`` / empty.
 
         Returns:
-            ``(value_pct, stale)`` — the humidity [%] (or ``None``) and
-            whether it is a held 60-120 min old reading.
+            ``(value_pct, stale_frac)`` — the humidity [%] (or ``None``) and
+            its staleness fraction in ``[0, 1]``.
         """
         if not entity_id:
-            return None, False
+            return None, 0.0
         value = self.read_float_state(
             entity_id, max_age_seconds=HUMIDITY_STALE_MAX_AGE_S
         )
         if value is None:
-            return None, False
+            return None, 0.0
         state = self._hass.states.get(entity_id)
         if state is None or state.state.lower() in UNAVAILABLE_STATES:
-            # Value served from the short stale cache (<= 5 min old): fresh.
-            return value, False
+            # Value served from the short stale cache (<= 5 min old) because
+            # the entity itself is gone: maximum conservatism (K7) — before
+            # 2026-07-12 this branch reported FRESH, so the +1 K pad
+            # disappeared at the very moment the RH sensor died.
+            return value, 1.0
         reported = getattr(state, "last_reported", None) or state.last_updated
         age_s = (datetime.now(UTC) - reported).total_seconds()
         if age_s > HUMIDITY_MAX_AGE_S:
+            frac = min(
+                1.0,
+                (age_s - HUMIDITY_MAX_AGE_S)
+                / (HUMIDITY_STALE_MAX_AGE_S - HUMIDITY_MAX_AGE_S),
+            )
             _LOGGER.debug(
-                "Entity %s humidity is %.0f min old; serving as STALE (+1 K "
-                "dew pad in the core)",
+                "Entity %s humidity is %.0f min old; serving as STALE "
+                "(fraction %.2f -> +%.2f K dew pad in the core)",
                 entity_id,
                 age_s / 60.0,
+                frac,
+                frac,
             )
-            return value, True
-        return value, False
+            return value, frac
+        return value, 0.0
 
     def read_fast_source_hvac_mode(self, entity_id: str | None) -> str | None:
         """Read the fast source's raw HVAC-mode feedback string (K4).

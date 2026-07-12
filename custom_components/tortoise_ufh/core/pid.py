@@ -15,7 +15,9 @@ configured ``dt`` when :meth:`PIDController.compute` is not given one)::
     D = kd * (e - e_prev) / dt # zero on the first call
     u_raw = P + I + D
     u = clip(u_raw, output_min, output_max)
-    I += (u - u_raw)          # back-calculation anti-windup, only when ki > 0
+    I += (u - u_raw)          # back-calculation anti-windup, only when ki > 0;
+                              # suppressed while an opposite-sign shift
+                              # residual is outstanding (K6, 2026-07-12)
 
 The per-call ``dt_seconds`` keeps the integral honest when the caller steps
 at irregular intervals (e.g. an immediate recompute a few seconds after a
@@ -119,11 +121,22 @@ class PIDController:
         self._integral: float = 0.0
         self._prev_error: float | None = None
         self._last_output: float = 0.0
+        # Unconsumed shift debt [%] (K6, 2026-07-12): the part of a
+        # shift_integral request the output-range clamp cut off. Netted
+        # against future shifts of the OPPOSITE sign so a setpoint wiggle
+        # (down-and-back within a couple of cycles) is idempotent; cleared by
+        # reset() together with the rest of the state.
+        self._shift_residual: float = 0.0
 
     @property
     def integral(self) -> float:
         """Current integral accumulator value [%] (read-only)."""
         return self._integral
+
+    @property
+    def shift_residual(self) -> float:
+        """Outstanding clamp-cut shift debt [%] (read-only; K6, 2026-07-12)."""
+        return self._shift_residual
 
     @property
     def last_output(self) -> float:
@@ -143,15 +156,36 @@ class PIDController:
         shift can never park the accumulator outside the usable output range.
         A no-op when ``ki == 0`` (the accumulator is unused then).
 
+        Shift-residual bookkeeping (K6, 2026-07-12): the part of a shift the
+        clamp cuts off is BANKED as a signed residual instead of being lost.
+        A future shift of the OPPOSITE sign first cancels that residual and
+        only the remainder touches the accumulator, so a setpoint wiggle
+        (e.g. -3 K and back +3 K at a small integral) returns the integral to
+        its original value instead of pumping it by ~2·kp·ΔK. Same-sign
+        shifts accumulate the residual, so the sum property of a monotonic
+        shift series is unchanged. The residual dies with :meth:`reset`
+        (which the room controller invokes on every reference reset — mode
+        flip, integrator decay, full reset).
+
         Args:
             delta: Shift to apply to the integral accumulator [%]. May be
                 negative.
         """
         if self._ki <= 0:
             return
-        self._integral = max(
-            self._output_min, min(self._output_max, self._integral + delta)
-        )
+        # Net an opposite-sign residual first (K6): the debt of an earlier
+        # clamped shift consumes the counter-shift before the accumulator
+        # moves at all.
+        if self._shift_residual != 0.0 and delta * self._shift_residual < 0.0:
+            if abs(delta) <= abs(self._shift_residual):
+                self._shift_residual += delta
+                return
+            delta += self._shift_residual
+            self._shift_residual = 0.0
+        target = self._integral + delta
+        clamped = max(self._output_min, min(self._output_max, target))
+        self._shift_residual += target - clamped
+        self._integral = clamped
 
     def compute(
         self,
@@ -229,7 +263,22 @@ class PIDController:
         u_clamped = max(self._output_min, min(self._output_max, u_raw))
 
         if self._ki > 0:
-            self._integral += u_clamped - u_raw
+            correction = u_clamped - u_raw
+            if self._shift_residual != 0.0 and correction * self._shift_residual < 0.0:
+                # K6 (2026-07-12): while an opposite-sign shift debt is
+                # outstanding, the back-calculation correction is the very
+                # pump that made the wiggle non-idempotent — a transient
+                # saturation caused by the (clamped-off) setpoint excursion
+                # would write the P transient into the integral (I -> -P) and
+                # the counter-shift would then land on top of it. Suppress the
+                # correction and only keep the accumulator inside the output
+                # range; a PERSISTENT saturation resumes normal anti-windup
+                # the moment the residual is consumed or cleared.
+                self._integral = max(
+                    self._output_min, min(self._output_max, self._integral)
+                )
+            else:
+                self._integral += correction
 
         self._prev_error = error
         self._last_output = u_clamped
@@ -237,7 +286,9 @@ class PIDController:
         return u_clamped
 
     def reset(self) -> None:
-        """Reset the integral accumulator, previous error and last output."""
+        """Reset the integral accumulator, shift residual, previous error and
+        last output."""
         self._integral = 0.0
+        self._shift_residual = 0.0
         self._prev_error = None
         self._last_output = 0.0

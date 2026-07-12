@@ -657,3 +657,147 @@ async def test_valve_without_set_position_rejected(
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "entities"
     assert result["errors"] == {"base": "valve_no_set_position"}
+
+
+# -- Round 3 hardening (2026-07-12): K8 tuning prune, K10 slug, D2 group -----
+
+
+async def test_options_flow_add_room_rejects_slug_collision(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """K10: a name differing only in case/spacing collides in the registry.
+
+    Unique ids and device identifiers are built from the slug (lower +
+    spaces->underscores): "salon" next to "Salon" would collide unique ids
+    and remove-room would delete BOTH rooms' entities.
+    """
+    entry = setup_integration
+
+    result = await _open_menu_leaf(hass, entry, "add_room")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ROOM_NAME: "salon",
+            CONF_ROOM_AREA: 15.0,
+            CONF_ROOM_OFFSET: 0.0,
+            CONF_HAS_FAST_SOURCE: False,
+            CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_NONE,
+            CONF_COOLING_ENABLED: False,
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "add_room"
+    assert result["errors"] == {"base": "duplicate_room_slug"}
+
+
+async def test_wizard_rejects_slug_collision(hass: HomeAssistant) -> None:
+    """K10: the setup wizard applies the same slug-uniqueness gate."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_LATITUDE: _LAT, CONF_LONGITUDE: _LON}
+    )
+    assert result["step_id"] == "rooms"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_ROOM_NAME: "Kids Room",
+            CONF_ROOM_AREA: 12.0,
+            CONF_HAS_FAST_SOURCE: False,
+            CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_NONE,
+            CONF_COOLING_ENABLED: False,
+            CONF_ADD_ANOTHER: True,
+        },
+    )
+    assert result["step_id"] == "rooms"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_ROOM_NAME: "kids room",
+            CONF_ROOM_AREA: 12.0,
+            CONF_HAS_FAST_SOURCE: False,
+            CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_NONE,
+            CONF_COOLING_ENABLED: False,
+            CONF_ADD_ANOTHER: False,
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "duplicate_room_slug"}
+
+
+async def test_remove_room_prunes_room_tuning_override(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """K8: removing a room drops its sparse tuning override too.
+
+    Without the prune a NEW room reusing the name silently inherited the old
+    room's kp/ki — a real regulation risk.
+    """
+    entry = setup_integration
+    hass.config_entries.async_update_entry(
+        entry,
+        options={
+            **entry.options,
+            CONF_ROOM_TUNING: {"Lazienka": {"kp": 30.0}, "Salon": {"kt": 8.0}},
+        },
+    )
+    await hass.async_block_till_done()
+
+    result = await _open_menu_leaf(hass, entry, "remove_room")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SELECTED_ROOM: "Lazienka"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    room_tuning = entry.options.get(CONF_ROOM_TUNING, {})
+    assert "Lazienka" not in room_tuning
+    assert room_tuning.get("Salon") == {"kt": 8.0}
+
+
+async def test_add_room_heater_group_is_silently_cleared(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """D2: a group on a non-split fast source is dropped, not an error.
+
+    Only splits share a multisplit outdoor unit; the flow clears the group
+    exactly like it already did for ``has_fast_source=False`` instead of
+    surfacing an unexplained generic ``invalid_room``.
+    """
+    from custom_components.tortoise_ufh.const import FAST_SOURCE_KIND_HEATER
+
+    entry = setup_integration
+    hass.states.async_set("sensor.gabinet_temp", "21.0", _TEMP_ATTRS)
+    hass.states.async_set("number.gabinet_valve", "0", _PCT_ATTRS)
+    hass.states.async_set("climate.gabinet_heater", "off", {})
+
+    result = await _open_menu_leaf(hass, entry, "add_room")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ROOM_NAME: "Gabinet",
+            CONF_ROOM_AREA: 10.0,
+            CONF_ROOM_OFFSET: 0.0,
+            CONF_HAS_FAST_SOURCE: True,
+            CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_HEATER,
+            CONF_FAST_SOURCE_GROUP: "outdoor_unit_a",
+            CONF_COOLING_ENABLED: False,
+        },
+    )
+    assert result["step_id"] == "room_entities"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ENTITY_TEMP_ROOM: "sensor.gabinet_temp",
+            CONF_ENTITY_VALVES: ["number.gabinet_valve"],
+            CONF_ENTITY_FAST_SOURCE: "climate.gabinet_heater",
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    gabinet = entry.data[CONF_ROOMS][-1]
+    assert gabinet[CONF_ROOM_NAME] == "Gabinet"
+    assert gabinet[CONF_FAST_SOURCE_GROUP] == ""

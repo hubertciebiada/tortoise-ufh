@@ -488,8 +488,11 @@ it. Before this revision the ramp spanned `(margin, margin + ramp)`: the most hu
 one defining the pump floor — sat at `gap = margin` with `factor = 0`, and `hot_july` measured
 "fasadowe" cooling (valves open 29.7 % of records, living room ~2.7 K above the setpoint);
 after the change the valves are open 94.2 % of records with the minimum slab-dew margin still
-at +1.51 K. A STALE humidity reading (held 60-120 min, `RoomInputs.humidity_stale`, K7) pads
-the effective dew point by +1 K and flags `"rh_stale_gated"`.
+at +1.51 K. A STALE humidity reading (held 60-120 min, K7) pads the effective dew point by
+`RoomInputs.humidity_stale_frac * 1 K` — the fraction rises linearly 0 → 1 across the 60-120 min
+age window (linearised 2026-07-12, D5/R3, replacing the boolean field: the binary +1 K jump at
+the 60-min edge stepped the throttle factor by 0.5 in one cycle, itself a mini limit cycle) —
+and flags `"rh_stale_gated"` whenever the fraction is positive.
 
 **Conservative on missing data:** if humidity is missing/non-positive *or* no loop supply reading is
 available, `factor = 0.0` and the flag `"s2_throttle"` is raised — better a warm room than a wet
@@ -562,6 +565,39 @@ the slow loop charged. There is no path by which "the split satisfied the air" c
 structurally eliminating the Tekmar E006 pathology (§1.5). `_force_fast_off` bypasses the min-ON
 timer for safety conditions (lost sensor, OFF mode).
 
+### 8.4 Multisplit group arbiter (K4 2026-07-12; incumbent hysteresis K2/R3 2026-07-12)
+
+Rooms sharing a non-empty `RoomInputs.fast_source_group` (one physical outdoor unit) are
+direction-arbitrated by `BuildingController._arbitrate_fast_groups` after every room has
+stepped — ONE direction per group per cycle. Resolution order for a group whose emitted ON
+commands disagree:
+
+1. **Pinning** — a unit ON and still inside its min-ON dwell (or held ON by an S3/S4
+   emergency) pins the group to its direction; the arbiter never breaks a min-ON. Two
+   opposite pins (pathological startup adoption) override nobody; everyone is flagged.
+2. **Incumbent hysteresis (K2, R3 2026-07-12)** — the incumbent direction is the one a unit
+   was ALREADY physically running in at step entry, falling back to the group's stored last
+   winner when every conflicting unit re-engaged from OFF this cycle. The challenger takes
+   over only when its best comfort-band excess `max(0, |error| − deadband)` exceeds the
+   incumbent side's best excess by MORE than the fixed `_GROUP_CHALLENGER_HYSTERESIS_K =
+   0.5 K` (not a config knob). Measured motivation: two rooms with persistent opposite ~2 K
+   demands plus σ = 0.05 K sensor noise reversed the aggregate direction 15× in 2.5 h at
+   zero dwells (7× at the default 10/10 min) under the bare max-excess rule; with the
+   hysteresis: 0 reversals, while a genuinely stronger challenger (> +0.5 K) still wins.
+3. **Tie-break with no incumbent** — the direction of the single room with the **largest
+   comfort-band excess** wins (documented explicitly, D8/R3: the tie-break is deliberately
+   the strongest single room, NOT the side head-count — one room 3 K outside its band
+   outweighs two rooms 0.5 K outside; head-count would let several barely-uncomfortable
+   rooms strangle one badly-uncomfortable one).
+
+Losers are rewritten OFF (`RoomController.resolve_group_conflict`) with the
+`fast_source_group_conflict` flag and re-engage only through a full min-OFF. The stored
+last-winner map is cleared by `BuildingController.reset()`. **The adapter empties
+`fast_source_group` for every non-LIVE room (K1, R3 2026-07-12):** a SHADOW room's command is
+never written, yet its uncontrolled — so never-shrinking — error used to win every re-engage
+and permanently strangle the LIVE rooms' split (and shadow is the default state of a new
+room). Shadow rooms therefore observe but never vote.
+
 ---
 
 ## 9. Safe degradation
@@ -572,7 +608,7 @@ timer for safety conditions (lost sensor, OFF mode).
 | `Mode.OFF` | valve 0, split OFF | — |
 | `COOLING` with `cooling_enabled=False` | valve 0 (never floor-cool an opted-out room), split OFF, no PI | `cooling_disabled` |
 | Missing humidity / supply in cooling | S2 `factor → 0` (conservative close) | `s2_throttle` |
-| Humidity held 60-120 min old (K7, 2026-07-12) | effective dew point +1 K in both layers | `rh_stale_gated` |
+| Humidity held 60-120 min old (K7, 2026-07-12; linear D5/R3) | effective dew point + `frac * 1 K` in both layers (frac 0 → 1 across the age window) | `rh_stale_gated` |
 | Split change blocked by dwell timer | hold previous split state | `fast_source_min_runtime` |
 | Split lost the multisplit group arbitration (K4, 2026-07-12) | fast OFF (honest min-OFF before re-engaging) | `fast_source_group_conflict` |
 | HEATER-kind fast source asked to cool | fast source forced OFF (a heater never cools) | `fast_source_cannot_cool` |
@@ -673,3 +709,4 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 | 2026-07-09 | Phase B fast-source direction machine (DECISIONS §7): three-state `OFF/HEATING/COOLING` machine — direction change only through OFF with the full min-OFF, min-ON hold re-emits the REMEMBERED direction (`_fallback_mode` deleted); physical `fast_source_on` consumed (first feedback wins, conservative 0-seeded dwell after restart, `fast_source_mismatch` flag); split targets `setpoint ± 1 K` in active modes (S12) and exactly `setpoint` in TRANSITIONAL with far-edge release (bias removed); adapter split-command cache + ~45 min re-assert (S3); `boost_offset_c > deadband_c` validation (D2); dwell accumulates on sensor-lost/OFF paths (fast-F6). |
 | 2026-07-09 | Phases C+D+E (DECISIONS §8): retuned defaults kp=14/ki=0.0015/kt=12 (empirical sweep on the CALIBRATED twin; old ki=0.02 measured +1.2 K overshoot); FILTERED trend (>= 60 s sample floor + 15 min EMA); integrator frozen under an active S2 throttle, reset on HEATING<->COOLING, decayed after > 12 h inactivity; saturated no longer set by an S2 zero; FF constants -> ControllerConfig knobs; S5 watchdog LIVE (adapter-fed per-room data age, neutral-position action); BuildingOutputs.sensor_lost_rooms; simulator: solar wired (f_slab row), seasonal ground, EN 1264^1.1 plant with screed resistance, indoor-humidity model, cooling supply floored by the global safe dew point, split_boost scenario, ALL scenarios gate the merge with the S13 overshoot assertion. |
 | 2026-07-12 | Round-2 review (DECISIONS §11): K1 bumpless setpoint transfer (`shift_integral(kp·dK)`, mode-correct sign) + asymmetric integrator unwind (`unwind_factor = 8`) with the `night_setback` gate scenario (`SimScenario.setpoint_schedule`); K6 margin de-stacking — the local throttle ramp ENDS at `dew_margin_k` (full cooling on the pump's dew floor; hard S2 at the dew point itself); K3 CLOSE_VALVE is water-side only (the air-side decision stands); K4 multisplit group arbiter (`fast_source_group`, one direction per aggregate, direction-aware S4 mismatch via `fast_source_hvac_mode`); K5 mode-aware `controller_error` degrade; K7 two-stage RH staleness (+1 K dew pad, `rh_stale_gated`); K8 cold-snap recovery assertion; K9 throttle-freeze retained (back-calc from the final valve measured and rejected); K10 farewell syncs the fast machine; flag split `s2_throttle` vs `s2_condensation`; write threshold 2 → 5 pp; kt documented as an open question with data (unit sign canary). |
+| 2026-07-12 | Round-3 hardening (DECISIONS §12, v0.6.1): group arbiter grew the incumbent hysteresis (§8.4 — challenger wins only beyond +0.5 K over the incumbent; largest-excess tie-break documented) and the adapter stopped SHADOW rooms from voting (`fast_source_group` emptied for non-LIVE rooms); PID `shift_integral` banks the clamp-cut as a signed residual netted against opposite shifts, and the back-calculation is suppressed while an opposite-sign residual is outstanding — a setpoint wiggle at a small integral is idempotent (was: pumped to ~2·kp·ΔK); the RH staleness pad is linear (`humidity_stale_frac` 0 → 1 over 60-120 min, `frac * 1 K`; the unavailable-entity cache branch reads as fully stale). Adapter lifecycle: coordinator shutdown + Store flush BEFORE the unload farewell, `_parked` write gate, LOADED-entry filter in WS/services, non-finite setpoint guard, hub device registered before platforms. |

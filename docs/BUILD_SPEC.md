@@ -230,7 +230,7 @@ class RoomInputs:
     last_update_age_minutes: float = 0.0     # ADDITIVE (2026-07-09, S6): per-room data age -> S5 watchdog
     fast_source_group: str = ""              # ADDITIVE (2026-07-12, K4): multisplit outdoor-unit group key
     fast_source_hvac_mode: str | None = None # ADDITIVE (2026-07-12, K4): raw hvac-mode feedback -> S4 sees direction
-    humidity_stale: bool = False             # ADDITIVE (2026-07-12, K7): held 60-120 min RH -> +1 K dew pad
+    humidity_stale_frac: float = 0.0         # K7 2026-07-12 (linearised D5, R3): RH staleness 0..1 (age 60->120 min) -> frac * 1 K dew pad
 
 @dataclass(frozen=True)
 class FastSourceCommand:
@@ -422,7 +422,8 @@ Algorithm (all knobs from `ControllerConfig`, §6.3):
     layer no longer stacks a second margin on the pump floor — it is the emergency backstop
     below it (and the hard S2 rule in `safety.py` sits at the dew point itself,
     `S2_HARD_MARGIN_K = 0`, trip `gap < 0` / clear `> +1 K`). A STALE humidity
-    (`inputs.humidity_stale`, K7) pads the effective dew by +1 K and flags `"rh_stale_gated"`.
+    (`inputs.humidity_stale_frac`, K7; linear D5 2026-07-12) pads the effective dew by
+    `frac * 1 K` and flags `"rh_stale_gated"`.
     The flag rename (`"s2_throttle"`; previously `"s2_condensation"`) leaves the old name
     exclusively to the hard-safety rule.
     A COOLING room with `cooling_enabled=False` never reaches this step: it short-circuits
@@ -522,7 +523,8 @@ class BuildingController:
   helper, §4 — one classifier, two consumers),
   compute `T_dew_i = dew_point(T_room_i, rh_i)`, take `max_i`, add `config dew margin (2K)` ->
   `global_safe_dew_point_c`. `None` if no eligible room. A STALE humidity
-  (`humidity_stale`, K7 2026-07-12) pads that room's contribution by +1 K.
+  (`humidity_stale_frac`, K7 2026-07-12; linear D5) pads that room's contribution by
+  `frac * 1 K`.
 - **Multisplit group arbiter** *(ADDITIVE 2026-07-12, K4 — see DECISIONS §11)*: after stepping
   all rooms, rooms sharing a non-empty `RoomInputs.fast_source_group` are direction-arbitrated —
   ONE direction per group per cycle. A unit that was already running under its min-ON lock (or
@@ -781,10 +783,13 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   spike within seconds). A present-but-frozen state is aged out via
   `last_reported`/`last_updated`: room temperature older than 45 min is treated as unavailable
   (WITHOUT the short cache fallback — the cache would hold the same stale value). **Humidity is
-  TWO-stage (K7, 2026-07-12):** ≤ 60 min fresh; 60-120 min the LAST value is served with
-  `RoomInputs.humidity_stale=True` (the core pads both protective dew points by +1 K and flags
-  `rh_stale_gated`) so a threshold-reporting RH sensor cannot limit-cycle the cooling; > 120 min
-  unavailable (conservative full stop). Valve feedback is validated per loop (an out-of-range
+  TWO-stage (K7, 2026-07-12):** ≤ 60 min fresh; 60-120 min the LAST value is served with a
+  linear staleness fraction (`RoomInputs.humidity_stale_frac` 0 → 1 across the window; D5,
+  2026-07-12 — the core pads both protective dew points by `frac * 1 K` and flags
+  `rh_stale_gated`) so a threshold-reporting RH sensor can neither limit-cycle the cooling nor
+  step the throttle at the 60-min edge; > 120 min unavailable (conservative full stop). A value
+  served from the short unavailable-entity cache carries the FULL fraction 1.0 (K7, R3): the
+  pad must not vanish at the very moment the RH sensor dies. Valve feedback is validated per loop (an out-of-range
   reading nulls only that loop, never degrading the room to `sensor_lost`), and a LIVE room
   whose feedback diverges from the last written command by > 10 pp for 3 consecutive cycles gets
   a `valve_mismatch` report flag. When the measured step interval exceeds the 900 s dt clamp,

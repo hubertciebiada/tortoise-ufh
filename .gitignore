@@ -35,3 +35,6 @@ docker/config/*
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Tooling artefacts
+.playwright-mcp/

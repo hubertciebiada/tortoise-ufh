@@ -66,6 +66,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TortoiseUfhConfigEntry) 
     """
     from .const import DOMAIN, PLATFORMS
     from .coordinator import TortoiseUfhCoordinator
+    from .device import register_hub_device
     from .panel import async_register_panel
     from .services import async_register_services
     from .websocket import async_register_ws
@@ -78,6 +79,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: TortoiseUfhConfigEntry) 
     entry.runtime_data = RuntimeData(coordinator=coordinator)
 
     _async_purge_retired_entities(hass, entry)
+
+    # K11 (2026-07-12): the hub device must exist in the registry BEFORE any
+    # platform adds a room entity whose device carries `via_device` -> hub,
+    # or HA logs a "will stop working" deprecation per entity.
+    register_hub_device(hass, entry.entry_id)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -284,11 +290,21 @@ async def async_unload_entry(
     from .panel import async_unregister_panel
     from .services import async_unregister_services
 
-    # Farewell command (C5): before releasing ownership, park every LIVE
-    # room's actuators safely (split OFF; valve 0 in cooling) so an unloaded
-    # entry never leaves an orphaned open valve outside the dew-point guards.
     runtime = getattr(entry, "runtime_data", None)
     if runtime is not None:
+        # K3 (2026-07-12): kill the control machinery BEFORE the farewell.
+        # The `entry.async_on_unload` callbacks (debouncer cancel, the base
+        # coordinator auto-shutdown) only run AFTER this function returns, so
+        # the 2-s recompute timer and the 5-min tick stayed alive through the
+        # whole unload window and a cycle firing after the farewell re-opened
+        # a parked cooling valve. The explicit shutdown also flushes the
+        # setpoint Store (K5) while the entry still owns it.
+        runtime.coordinator.async_cancel_recompute()
+        await runtime.coordinator.async_shutdown()
+        # Farewell command (C5): before releasing ownership, park every LIVE
+        # room's actuators safely (split OFF; valve 0 in cooling) so an
+        # unloaded entry never leaves an orphaned open valve outside the
+        # dew-point guards.
         await runtime.coordinator.async_farewell_all()
 
     unload_ok: bool = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

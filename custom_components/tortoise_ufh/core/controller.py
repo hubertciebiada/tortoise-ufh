@@ -196,11 +196,27 @@ deadbanded error is 0, so steady-state behaviour is untouched.
 """
 
 _STALE_RH_DEW_PAD_K: float = 1.0
-"""Extra dew-point pad [K] applied while the room's RH reading is STALE (K7,
-2026-07-12): the adapter holds an RH whose sensor last reported 60-120 min ago
-(``RoomInputs.humidity_stale``) instead of dropping it to ``None``, and the
-cooling layers price the staleness in by computing every protective dew point
-1 K higher. Report flag: ``"rh_stale_gated"``."""
+"""Full-scale dew-point pad [K] for a STALE RH reading (K7, 2026-07-12;
+linearised 2026-07-12, D5): the adapter holds an RH whose sensor last
+reported 60-120 min ago instead of dropping it to ``None`` and reports the
+staleness as a linear fraction (``RoomInputs.humidity_stale_frac`` — 0 fresh,
+1 at 120 min). The cooling layers price the staleness in by computing every
+protective dew point ``frac`` times this pad higher, so the protection grows
+continuously with the age instead of jumping at the 60-min edge. Report flag:
+``"rh_stale_gated"`` whenever ``frac > 0``."""
+
+
+_GROUP_CHALLENGER_HYSTERESIS_K: float = 0.5
+"""Incumbent hysteresis of the multisplit group arbiter [K] (K2, 2026-07-12).
+
+In a direction conflict the challenging direction takes the group over only
+when its best comfort-band excess exceeds the incumbent direction's best
+excess by MORE than this margin. Without it the winner was a bare
+``max(band_excess)`` — two rooms with persistent opposite ~2 K demands plus
+sensor noise (sigma = 0.05 K) ping-ponged the shared outdoor unit through
+15 direction reversals in 2.5 h at zero dwells (7 at the default 10/10 min);
+with the hysteresis the first winner holds unless the other side genuinely
+outgrows it. Deliberately a fixed constant, not a config knob."""
 
 
 class RoomController:
@@ -523,6 +539,18 @@ class RoomController:
             and self._fast_entry_state is self._fast.state
             and self._fast.dwell_remaining_s is not None
         )
+
+    @property
+    def fast_source_entry_direction(self) -> FastSourceMode:
+        """Direction the machine was ALREADY running in when this step began.
+
+        Read by the group arbiter's incumbent hysteresis (K2, 2026-07-12): a
+        unit that was physically running before this cycle carries the
+        incumbency of its direction even after its min-ON dwell has elapsed,
+        while a machine that engaged this very cycle is a challenger.
+        :attr:`FastSourceMode.OFF` when the unit was idle at step entry.
+        """
+        return self._fast_entry_state
 
     # -- internal: result builders -----------------------------------------
 
@@ -1014,12 +1042,14 @@ class RoomController:
         :mod:`~tortoise_ufh.core.safety`, so the panel can tell the graduated
         local throttle from the hard backstop.
 
-        A STALE humidity reading (held 60-120 min, ``inputs.humidity_stale``,
-        K7 2026-07-12) pads the effective dew point by
-        :data:`_STALE_RH_DEW_PAD_K` and flags ``"rh_stale_gated"`` — the
-        throttle keeps working on the last known moisture level priced up
-        1 K instead of slamming to the conservative full stop, so a
-        slow-reporting RH sensor cannot limit-cycle the cooling.
+        A STALE humidity reading (held 60-120 min, K7 2026-07-12) pads the
+        effective dew point by ``inputs.humidity_stale_frac`` times
+        :data:`_STALE_RH_DEW_PAD_K` (linear in the age, D5 2026-07-12) and
+        flags ``"rh_stale_gated"`` — the throttle keeps working on the last
+        known moisture level priced up continuously with its age (up to
+        +1 K at 120 min) instead of slamming to the conservative full stop,
+        so a slow-reporting RH sensor can neither limit-cycle the cooling
+        nor step the throttle discontinuously at the 60-min edge.
 
         Args:
             inputs: The room's raw inputs.
@@ -1040,8 +1070,8 @@ class RoomController:
                 flags.append("s2_throttle")
             return 0.0
         effective_dew = room_dew
-        if inputs.humidity_stale:
-            effective_dew += _STALE_RH_DEW_PAD_K
+        if inputs.humidity_stale_frac > 0.0:
+            effective_dew += _STALE_RH_DEW_PAD_K * inputs.humidity_stale_frac
             if "rh_stale_gated" not in flags:
                 flags.append("rh_stale_gated")
         t_supply_min = min(supplies)
@@ -1280,6 +1310,11 @@ class BuildingController:
         # Kept for the group arbiter (K4): the per-room deadband scales the
         # "error beyond the comfort band" demand strength.
         self._configs: dict[str, ControllerConfig] = dict(configs)
+        # Incumbent bookkeeping of the group arbiter (K2, 2026-07-12): the
+        # direction that last ran (or last won a conflict) per group, so a
+        # challenger must beat the incumbent by the fixed hysteresis margin
+        # even across all-OFF gaps. Cleared by reset().
+        self._group_last_winner: dict[str, FastSourceMode] = {}
 
     def step(
         self, inputs: dict[str, RoomInputs], *, dt_seconds: float = 300.0
@@ -1345,6 +1380,7 @@ class BuildingController:
         """Reset every room controller's internal state."""
         for controller in self._controllers.values():
             controller.reset()
+        self._group_last_winner.clear()
 
     def invalidate_trends(self) -> None:
         """Invalidate every room's filtered trend after a control-cycle gap.
@@ -1387,13 +1423,23 @@ class BuildingController:
         1. A room whose machine is ON and still inside its min-ON dwell (or
            held ON by an S3/S4 emergency) PINS the group to its direction —
            the arbiter never breaks a min-ON or overrides an emergency.
-        2. With no pinned direction, the direction of the room with the
-           largest comfort-band excess ``max(0, |error| - deadband)`` wins.
-        3. Every losing ON room is rewritten via
+        2. With no pinned direction, the INCUMBENT direction (K2,
+           2026-07-12) defends its seat: the incumbent is the direction of a
+           unit that was already running when this step began, falling back
+           to the group's last winning direction when every unit re-engaged
+           from OFF. The challenging direction takes over only when its best
+           comfort-band excess ``max(0, |error| - deadband)`` exceeds the
+           incumbent's best excess by more than
+           :data:`_GROUP_CHALLENGER_HYSTERESIS_K` — sensor noise on two
+           persistent opposite demands can no longer ping-pong the aggregate.
+        3. With no incumbent either (first-ever conflict of a fresh group),
+           the direction of the room with the largest comfort-band excess
+           wins.
+        4. Every losing ON room is rewritten via
            :meth:`RoomController.resolve_group_conflict` (fast OFF + the
            ``"fast_source_group_conflict"`` flag); its machine passes through
            an honest min-OFF before it may re-engage.
-        4. Pathological double-pin (two rooms min-ON-locked in opposite
+        5. Pathological double-pin (two rooms min-ON-locked in opposite
            directions, only reachable by adopting an inconsistent physical
            state at startup) overrides nobody — every conflicting room is
            flagged and the situation resolves itself when a dwell elapses.
@@ -1417,10 +1463,14 @@ class BuildingController:
             ):
                 groups.setdefault(room_inputs.fast_source_group, []).append(name)
 
-        for members in groups.values():
+        for group, members in groups.items():
             on_rooms = [n for n in members if rooms[n].fast_source.on]
             directions = {rooms[n].fast_source.mode for n in on_rooms}
             if len(directions) <= 1:
+                # No conflict; a single running direction still claims the
+                # incumbency (K2) so a later challenger faces the hysteresis.
+                if len(directions) == 1:
+                    self._group_last_winner[group] = next(iter(directions))
                 continue
             pinned = {
                 n
@@ -1437,14 +1487,74 @@ class BuildingController:
                     rooms[n] = self._flag_group_conflict(rooms[n])
                 continue
             else:
-                winning_room = max(
-                    on_rooms,
-                    key=lambda n: self._band_excess_k(inputs[n], n),
-                )
-                winner = rooms[winning_room].fast_source.mode
+                winner = self._arbitrate_by_excess(group, inputs, rooms, on_rooms)
+            self._group_last_winner[group] = winner
             for n in on_rooms:
                 if rooms[n].fast_source.mode is not winner:
                     rooms[n] = self._controllers[n].resolve_group_conflict(rooms[n])
+
+    def _arbitrate_by_excess(
+        self,
+        group: str,
+        inputs: dict[str, RoomInputs],
+        rooms: dict[str, RoomOutputs],
+        on_rooms: list[str],
+    ) -> FastSourceMode:
+        """Pick a conflicted group's direction: incumbent hysteresis + excess.
+
+        K2 (2026-07-12): the incumbent direction is the one a unit was
+        ALREADY physically running in at step entry
+        (:attr:`RoomController.fast_source_entry_direction`); when every
+        conflicting unit re-engaged from OFF this cycle, the group's stored
+        last winner inherits the incumbency. The challenger wins only when
+        its best comfort-band excess exceeds the incumbent side's best excess
+        by more than :data:`_GROUP_CHALLENGER_HYSTERESIS_K`; with no
+        incumbent at all the largest excess wins outright (the tie-break is
+        deliberately the strongest single room, not the side head-count —
+        one room 3 K outside its band outweighs two rooms 0.5 K outside).
+
+        Args:
+            group: The group key (for the stored last winner).
+            inputs: Per-room inputs of this cycle.
+            rooms: Per-room outputs of this cycle.
+            on_rooms: Names of the group's rooms with an emitted ON command.
+
+        Returns:
+            The winning :class:`~tortoise_ufh.models.FastSourceMode`.
+        """
+        best_excess: dict[FastSourceMode, float] = {}
+        for n in on_rooms:
+            mode = rooms[n].fast_source.mode
+            excess = self._band_excess_k(inputs[n], n)
+            if excess > best_excess.get(mode, -1.0):
+                best_excess[mode] = excess
+        entry_dirs = {
+            self._controllers[n].fast_source_entry_direction
+            for n in on_rooms
+            if self._controllers[n].fast_source_entry_direction
+            is rooms[n].fast_source.mode
+        } - {FastSourceMode.OFF}
+        incumbent: FastSourceMode | None = None
+        if len(entry_dirs) == 1:
+            incumbent = next(iter(entry_dirs))
+        else:
+            # Nobody (or both sides) already running: the stored last winner
+            # inherits the incumbency when it is one of the candidates.
+            stored = self._group_last_winner.get(group)
+            if stored in best_excess:
+                incumbent = stored
+        challenger = max(
+            (mode for mode in best_excess if mode is not incumbent),
+            key=lambda mode: best_excess[mode],
+        )
+        if incumbent is None:
+            return challenger
+        if (
+            best_excess[challenger]
+            > best_excess[incumbent] + _GROUP_CHALLENGER_HYSTERESIS_K
+        ):
+            return challenger
+        return incumbent
 
     def _band_excess_k(self, room_inputs: RoomInputs, name: str) -> float:
         """Return a room's comfort-band excess ``max(0, |error| - deadband)``.
@@ -1506,9 +1616,10 @@ class BuildingController:
         humidity — one logic, two consumers.
 
         A STALE humidity reading (K7, 2026-07-12) pads the room's
-        contribution by :data:`_STALE_RH_DEW_PAD_K`, so the heat pump's
-        supply floor prices the staleness in exactly like the local throttle
-        does.
+        contribution by ``humidity_stale_frac`` times
+        :data:`_STALE_RH_DEW_PAD_K` (linear in the age, D5 2026-07-12), so
+        the heat pump's supply floor prices the staleness in exactly like the
+        local throttle does.
 
         Args:
             room_inputs: The room's raw inputs.
@@ -1524,8 +1635,8 @@ class BuildingController:
         if t_room is None or rh is None:  # narrowed by the classifier above
             return None
         dew = dew_point(t_room, rh)
-        if room_inputs.humidity_stale:
-            dew += _STALE_RH_DEW_PAD_K
+        if room_inputs.humidity_stale_frac > 0.0:
+            dew += _STALE_RH_DEW_PAD_K * room_inputs.humidity_stale_frac
         return dew
 
     @staticmethod

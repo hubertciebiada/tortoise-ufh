@@ -547,7 +547,8 @@ operations was preserved by extracting code verbatim).
 - **K7 — two-stage RH age gate (+1 K stale pad).** The binary 60-min age gate versus a
   threshold-reporting RH sensor (SCD41 over Matter) risked a cooling limit cycle
   (fresh → cool → aged out → full stop → repeat). Now: ≤ 60 min fresh; 60-120 min the
-  LAST value is served flagged stale (`RoomInputs.humidity_stale`) and the core pads
+  LAST value is served flagged stale (`RoomInputs.humidity_stale`; renamed
+  `humidity_stale_frac` in §12) and the core pads
   BOTH protective dew points (+1 K, flag `rh_stale_gated`); > 120 min unusable (`None`,
   conservative full stop) as before. Owner action item: measure the sensor's real
   reporting cadence before the cooling season.
@@ -595,3 +596,107 @@ operations was preserved by extracting code verbatim).
   the twin, the kt question (revisit with real-house data), and per-mode integrator
   memory (R2-F7 — today every HEATING↔COOLING flip resets the integral, costing ~2-3 h
   of re-convergence per seasonal mode wobble; correct for safety, optional comfort win).
+
+---
+
+## 12. Revision — round-3 hardening: arbiter incumbency, unload window, shift residual (2026-07-12, v0.6.1)
+
+> **Status: extends the contract; no §8 reversal.** Recorded 2026-07-12 after the third
+> adversarial review (`scratchpad/algo-analysis/round3-*` — mechanisms, adapter
+> concurrency/lifecycle, WS/panel/flow contracts; the async findings were CONFIRMED by
+> diagnostic tests before fixing). Every number below was measured before/after. Release
+> v0.6.1 (fixes + one additive WS field; non-breaking — no new required configuration).
+
+- **K1 — SHADOW rooms no longer vote in the multisplit arbiter.** The adapter empties
+  `RoomInputs.fast_source_group` for every non-LIVE room. A shadow room's command is never
+  written, yet its uncontrolled — so never-shrinking — error won EVERY re-engage and
+  permanently strangled the LIVE rooms' split (shadow is the default state of a new room);
+  its phantom machine could even min-ON-pin the group. Shadow observes, never votes.
+- **K2 — incumbent hysteresis in the group arbiter + UI dwell floor.** The conflict winner
+  was a bare `max(band_excess)`: two rooms with persistent opposite ~2 K demands plus
+  σ = 0.05 K noise reversed the shared aggregate 15×/2.5 h at zero dwells (7× at the default
+  10/10 min). Now the incumbent direction (a unit already running at step entry, else the
+  group's stored last winner — kept in `BuildingController`, cleared by `reset()`) defends
+  its seat: the challenger takes over only when its best excess exceeds the incumbent's by
+  more than the fixed `_GROUP_CHALLENGER_HYSTERESIS_K = 0.5 K` (not a knob).
+  Measured after: 0 reversals in both configurations; a genuinely stronger challenger
+  (> +0.5 K) still flips the group through honest dwells. The tie-break with no incumbent
+  stays **largest single-room excess** (documented in ALGORITHM_SPEC §8.4 — deliberately not
+  the side head-count). UI: `fast_min_on/off_minutes` knob floor raised 0 → **3 min**
+  (zero dwells let a conflicted group flip every cycle; the CORE still accepts 0 for tests).
+- **K3 — the unload window can no longer re-open a parked valve.** CONFIRMED race: a
+  setpoint nudge armed the 2-s recompute debouncer, `async_unload_entry` ran the farewell
+  (valve → 0), and the timer/5-min tick fired DURING `async_unload_platforms` (the
+  `async_on_unload` cancellations only run after the unload returns) — measured 53 → 0 →
+  **81.5 %** on an orphaned cooling valve outside both condensation guards. Now
+  `async_unload_entry` cancels the recompute and awaits `coordinator.async_shutdown()`
+  BEFORE the farewell, and `async_farewell_all` raises a permanent `_parked` flag gating the
+  coordinator's write loop (belt-and-braces).
+- **K4 — non-finite setpoint guard.** HA's `number.set_value` min/max check passes NaN
+  (every NaN comparison is false); the mutated setpoint made every later cycle raise in
+  `RoomRuntime.__post_init__` — entities unavailable, zero commands until reload
+  (CONFIRMED). `set_home_temperature` / `set_room_offset` now reject non-finite values
+  before mutating (log + no-op). The WS/service paths were already safe (`vol.Range`).
+- **K5 — setpoint Store flushed on unload.** A setpoint changed < 1 s before a reload sat
+  only in the Store's delayed-save timer and the new coordinator read the stale file
+  (CONFIRMED: 23.5 → 21.0). `TortoiseUfhCoordinator.async_shutdown` now flushes the
+  snapshot synchronously (only when the Store was actually loaded — a failed first refresh
+  must not overwrite persisted values with config-entry seeds).
+- **K6 — shift residual + suppressed back-calculation (PID).** A setpoint wiggle
+  (down-and-back within a couple of cycles) at a SMALL integral pumped I to ~2·kp·ΔK:
+  the down-shift clamped at 0 (losing kp·ΔK of intent), the transient low saturation
+  back-calculated I to −P, and the counter-shift landed on top — measured I: 10 → **79.8**
+  for a 3 K wiggle, with the valve at 79.8 % at zero error inside the band where the unwind
+  is dead. The night_setback twin gate is blind to this regime (winter integrals never
+  clamp). Fix, in `PIDController` (the clamp lives there, so its debt does too — a
+  deliberate placement refinement of the "RoomController residual" plan):
+  (a) `shift_integral` banks the clamp-cut as a signed **residual**, netted against future
+  shifts of the OPPOSITE sign (same-sign series keep their sum — monotonic behaviour
+  unchanged); (b) the back-calculation correction is **suppressed** while an opposite-sign
+  residual is outstanding (the accumulator is only range-clamped) — without (b) the
+  netting alone still left I at 47.8 (the −P pump is conserved regardless of where the
+  residual is booked; verified empirically). Measured after: 10 → 0 → **10.0** (idempotent);
+  residual dies with `reset()` (mode flip, 12-h decay, full reset), so a slow return hours
+  later simply under-shifts and converges at ki speed — the safe direction. With no
+  outstanding residual the anti-windup is bit-for-bit classic.
+- **K7 — the unavailable-RH cache branch reads as fully stale.** The ≤ 5-min cache served a
+  60-119-min-old held value as FRESH the moment the RH entity died — the +1 K pad vanished
+  exactly when the sensor did. The branch now returns staleness fraction 1.0.
+- **K8 — `remove_room` prunes `CONF_ROOM_TUNING`.** Symmetric with the control-state map
+  and the setpoint Store; a NEW room reusing the name silently inherited the removed room's
+  kp/ki (real regulation risk).
+- **K9 — arbitration is observable (additive WS field).** `get_config` rooms now carry
+  `fast_source_group`; the panel's Assist tab gained a "Grupa" column (rendered only when
+  any room has a group), a "konflikt grupy" chip in the Timer column for the arbitration
+  loser (whose dwell is cleared by the force-off, so it showed a bare "—"), and the tab's
+  flag subset now includes `fast_source_group_conflict` + `fast_source_mismatch` (i18n
+  PL/EN).
+- **K10 — room-name SLUG uniqueness.** Unique ids and device identifiers are slug-based
+  (lower + spaces→underscores): "Salon"/"salon" passed validation, collided unique ids and
+  made remove-room delete BOTH rooms' entities. The wizard and options add-room now reject
+  slug collisions (`duplicate_room_slug`, i18n PL/EN).
+- **K11 — hub device registered before platforms.** Room devices reference the hub via
+  `via_device`; adding them before the hub existed in the registry logged HA's
+  "will stop working" deprecation per entity. `async_setup_entry` now creates the hub
+  device explicitly before forwarding platforms.
+- **Minor, same pass:** D1 WS/services resolve only LOADED entries (commands can no longer
+  mutate a coordinator dying inside the unload window); D2 a `fast_source_group` on a
+  non-split fast source is SILENTLY cleared by `RoomDefinition.as_dict` (consistent with
+  `has_fast_source=False`; the `ValueError` → generic `invalid_room` is gone); D4 UI floor
+  `dew_margin_k ≥ 0.5 K` (0 degenerated the local ramp into a hard step); D5 the RH
+  staleness pad is LINEAR (`RoomInputs.humidity_stale_frac` ∈ [0, 1] replaces the boolean
+  `humidity_stale` — an internal core-contract rename; pad = frac × 1 K, flag when
+  frac > 0) — removes the 0.5 factor step at the 60-min edge; D6 the panel tuning stepper
+  renders values honestly (ki 0.0015 no longer shows as "0.002"); D7 `get_config` skips a
+  corrupted room entry with a log instead of failing the whole reply; D9 the options flow
+  prunes a removed room's offset through the loaded coordinator's own Store instance
+  (flushes the pending delayed save; lost-update window closed); D10 dead panel flag labels
+  (`saturated`/`valve_floor`) removed and the `_save_rooms` docstring no longer mentions the
+  retired `live_control`; dev/panel-preview.html re-synced with the v0.6.1 contract
+  (`room_temperature_c`, current tuning defaults/knobs, `s2_throttle`, `sensor_lost_rooms`,
+  a group-conflict scenario).
+- **Backlog (deliberately NOT this round):** `get_tuning.defaults` stays (a future
+  "reset to factory" UI); assist-tab mismatch detection for climates without
+  `hvac_action`; drawer auto-deselect on room removal; `CONF_ENTITY_HP_ACTIVE` in the
+  flow/wiring tab; `unload_ok=False` re-park recovery; the shared farewell registry across
+  entries.
