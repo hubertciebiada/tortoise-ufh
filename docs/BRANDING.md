@@ -14,7 +14,8 @@ Tracked assets:
 | File | Size | Purpose |
 | --- | --- | --- |
 | `custom_components/tortoise_ufh/brand/icon.png` | 256×256 | canonical icon |
-| `custom_components/tortoise_ufh/brand/logo.png` | 800×658 | full lockup (turtle + wordmark), README header |
+| `custom_components/tortoise_ufh/brand/logo.png` | 800×658 | full lockup (turtle + wordmark), README header (light theme) |
+| `custom_components/tortoise_ufh/brand/logo-dark.png` | 800×658 | dark-theme lockup (charcoal remapped to light grey), README `<picture>` source |
 | `custom_components/tortoise_ufh/brand/icon@2x.png` | 512×512 | hi-DPI icon |
 | `custom_components/tortoise_ufh/brand/icon.svg` | vector | hand-written placeholder (kept as-is, not a raster trace) |
 | `custom_components/tortoise_ufh/frontend/panel-icon.png` | 256×256 | panel header mark, served at `/tortoise_ufh_panel/panel-icon.png` (`panel.py`); the panel falls back to the 🐢 glyph if it fails to load |
