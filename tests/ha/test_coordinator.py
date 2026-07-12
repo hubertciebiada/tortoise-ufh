@@ -2,7 +2,7 @@
 
 Exercises the coordinator through the real config-entry setup (see
 ``conftest.py``): the typed payload it stores, its response to a changed source
-sensor, and the off/shadow/live gating of actuator writes. The actuator
+sensor, and the off/live gating of actuator writes. The actuator
 service calls (``number.set_value`` / ``climate.*``) are intercepted by
 registering mock service handlers (``async_mock_service``) so we assert on what
 the coordinator *would* write. ``ServiceRegistry.async_call`` is a read-only
@@ -21,7 +21,6 @@ from custom_components.tortoise_ufh.const import (
     CONF_ENTITY_VALVES,
     ROOM_STATE_LIVE,
     ROOM_STATE_OFF,
-    ROOM_STATE_SHADOW,
 )
 from custom_components.tortoise_ufh.core.controller import GLOBAL_SAFE_DEW_MARGIN_K
 from custom_components.tortoise_ufh.core.dew_point import dew_point
@@ -111,6 +110,10 @@ async def test_changed_room_sensor_updates_report_and_valve(
     from datetime import timedelta
 
     coordinator = _get_coordinator(setup_integration)
+    # The room must participate for the valve to react: live (writes mocked).
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    _mock_actuator_services(hass)
+    await _refresh(hass, coordinator)
     before = coordinator.data.rooms["Salon"]
     # Room started at 21.5 (above the 21.0 setpoint): not calling for heat.
     assert before.report.error_c == pytest.approx(-0.5, abs=0.05)
@@ -127,19 +130,20 @@ async def test_changed_room_sensor_updates_report_and_valve(
     assert after.outputs.valve_position_pct > before.outputs.valve_position_pct
 
 
-async def test_shadow_mode_issues_no_actuator_writes(
+async def test_default_off_issues_no_actuator_writes(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
-    """The default shadow state computes results but writes nothing."""
+    """The default off state still computes a report but writes nothing."""
     coordinator = _get_coordinator(setup_integration)
-    assert coordinator.get_room_state("Salon") == ROOM_STATE_SHADOW
+    assert coordinator.get_room_state("Salon") == ROOM_STATE_OFF
 
     mocks = _mock_actuator_services(hass)
     await _refresh(hass, coordinator)
 
     assert _all_actuator_calls(mocks) == []
-    # Results are still produced despite emitting no commands.
+    # Results are still produced despite emitting no commands (Mode.OFF path).
     assert coordinator.data.rooms["Salon"].outputs is not None
+    assert coordinator.data.rooms["Salon"].outputs.valve_position_pct == 0.0
 
 
 async def test_live_room_writes_valve(
@@ -178,6 +182,10 @@ async def test_cooling_global_safe_dew_point_is_max_room_dew_plus_margin(
 ) -> None:
     """In cooling the global dew point is the eligible room max plus 2 K."""
     coordinator = _get_coordinator(setup_integration)
+    # An OFF room is fed Mode.OFF and never contributes to the (cooling-only)
+    # global dew point — the room must participate (live; writes mocked).
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    _mock_actuator_services(hass)
     hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
     await _refresh(hass, coordinator)
 
@@ -396,6 +404,10 @@ async def test_set_mode_schedules_prompt_recompute(
     from custom_components.tortoise_ufh.core.models import Mode
 
     coordinator = _get_coordinator(setup_integration)
+    # An OFF room reports the Off path; participation needs live (writes mocked).
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    _mock_actuator_services(hass)
+    await _refresh(hass, coordinator)
     assert coordinator.data.rooms["Salon"].report.explanation.startswith("Grzanie")
 
     coordinator._mode_entity = ""
@@ -523,6 +535,9 @@ async def test_stale_humidity_two_stage_gate(
     from datetime import timedelta
 
     coordinator = _get_coordinator(setup_integration)
+    # Dew-point participation needs a non-OFF room (live; writes mocked).
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    _mock_actuator_services(hass)
     hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
     await _refresh(hass, coordinator)
     fresh_global = coordinator.data.global_safe_dew_point_c
@@ -555,7 +570,7 @@ async def test_stale_humidity_two_stage_gate(
     assert "s2_throttle" in report.flags
 
 
-async def test_live_to_shadow_emits_farewell_split_off(
+async def test_live_to_off_emits_farewell_split_off(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
     """C5: leaving live parks the split OFF once (heating keeps the valve)."""
@@ -563,7 +578,7 @@ async def test_live_to_shadow_emits_farewell_split_off(
     coordinator._room_states["Salon"] = ROOM_STATE_LIVE
 
     mocks = _mock_actuator_services(hass)
-    coordinator.set_room_state("Salon", ROOM_STATE_SHADOW)
+    coordinator.set_room_state("Salon", ROOM_STATE_OFF)
     await hass.async_block_till_done()
 
     hvac_calls = mocks[("climate", "set_hvac_mode")]
@@ -593,20 +608,6 @@ async def test_live_to_off_in_cooling_closes_valve(
     ]
     hvac_calls = mocks[("climate", "set_hvac_mode")]
     assert [c.data["hvac_mode"] for c in hvac_calls] == ["off"]
-
-
-async def test_shadow_to_off_emits_no_farewell(
-    hass: HomeAssistant, setup_integration: MockConfigEntry
-) -> None:
-    """C5: transitions not leaving live never write to the hardware."""
-    coordinator = _get_coordinator(setup_integration)
-    assert coordinator.get_room_state("Salon") == ROOM_STATE_SHADOW
-
-    mocks = _mock_actuator_services(hass)
-    coordinator.set_room_state("Salon", ROOM_STATE_OFF)
-    await hass.async_block_till_done()
-
-    assert _all_actuator_calls(mocks) == []
 
 
 async def test_bad_valve_feedback_does_not_degrade_room(
@@ -645,11 +646,12 @@ async def test_valve_mismatch_flag_after_three_cycles(
     assert "valve_mismatch" in coordinator.data.rooms["Salon"].report.flags
 
 
-async def test_valve_mismatch_not_tracked_in_shadow(
+async def test_valve_mismatch_not_tracked_in_off(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
-    """S8: a shadow room (nothing written) never accuses the valve."""
+    """S8: an off room (nothing written) never accuses the valve."""
     coordinator = _get_coordinator(setup_integration)
+    assert coordinator.get_room_state("Salon") == ROOM_STATE_OFF
     hass.states.async_set("sensor.salon_temp", "18.0", _TEMP_ATTRS)
     for _ in range(4):
         await _refresh(hass, coordinator)
@@ -731,7 +733,7 @@ async def test_split_command_change_writes_immediately(
     ]
 
 
-# -- Round 3 hardening (2026-07-12): K1 shadow vote, K4 NaN guard, K7 cache --
+# -- Round 3 hardening (2026-07-12): K1 group vote, K4 NaN guard, K7 cache ---
 
 
 async def test_nan_setpoint_rejected_and_cycle_survives(
@@ -769,6 +771,9 @@ async def test_unavailable_rh_entity_keeps_the_stale_pad(
     at the very moment the sensor died.
     """
     coordinator = _get_coordinator(setup_integration)
+    # Dew-point participation needs a non-OFF room (live; writes mocked).
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    _mock_actuator_services(hass)
     hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
     await _refresh(hass, coordinator)
     fresh_global = coordinator.data.global_safe_dew_point_c
@@ -785,15 +790,16 @@ async def test_unavailable_rh_entity_keeps_the_stale_pad(
     assert coordinator.data.global_safe_dew_point_c == pytest.approx(fresh_global + 1.0)
 
 
-async def test_shadow_room_does_not_vote_in_group_arbitration(
+async def test_off_room_does_not_vote_in_group_arbitration(
     hass: HomeAssistant, register_sources: None
 ) -> None:
     """K1: only LIVE rooms arbitrate a shared outdoor unit.
 
-    A SHADOW room's split command is never written, yet its (uncontrolled,
-    so never-shrinking) error used to win every re-engage and permanently
-    force the LIVE room's split OFF — and shadow is the default state of a
-    new room.
+    An OFF room's split command is never written; the adapter empties its
+    ``fast_source_group`` so its (phantom) direction machine can neither vote
+    in nor dwell-pin the group's arbitration — belt and braces on top of the
+    Mode.OFF feed. (Historically K1 guarded the shadow state, whose
+    uncontrolled error used to strangle the LIVE rooms' split.)
     """
     from homeassistant.const import CONF_LATITUDE, CONF_LONGITUDE
     from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -851,12 +857,12 @@ async def test_shadow_room_does_not_vote_in_group_arbitration(
                 },
             ],
         },
-        # The LIVE room asks for a modest heat boost; the SHADOW room's much
+        # The LIVE room asks for a modest heat boost; the OFF room's much
         # larger cooling error must not out-vote it.
-        options={CONF_ROOM_STATE: {"Polnoc": "live", "Poludnie": "shadow"}},
+        options={CONF_ROOM_STATE: {"Polnoc": "live", "Poludnie": "off"}},
         title="Tortoise-UFH",
         unique_id="50.5_19.5",
-        version=2,
+        version=3,
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)

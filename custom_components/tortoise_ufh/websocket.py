@@ -137,7 +137,7 @@ class RoomConfigView:
         offset_c: Per-room offset from the home setpoint in kelvin.
         cooling_enabled: Whether the room participates in floor cooling.
         control_state: The room's control state (one of :data:`ROOM_STATES`:
-            ``off`` / ``shadow`` / ``live``).
+            ``off`` / ``live``).
         fast_source_kind: Configured fast-source kind (one of
             :data:`FAST_SOURCE_KINDS`).
         fast_source_group: Configured multisplit outdoor-unit group key, or
@@ -258,7 +258,7 @@ class LiveRoomView:
         setpoint_c: The effective target temperature in degrees Celsius used
             this cycle (home temperature + room offset).
         control_state: The room's control state (one of :data:`ROOM_STATES`:
-            ``off`` / ``shadow`` / ``live``). The formerly duplicated
+            ``off`` / ``live``). The formerly duplicated
             ``live_control_enabled`` convenience flag was removed in v0.5.0.
 
     Raises:
@@ -823,7 +823,7 @@ def ws_set_room_state(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Set a room's control state (``off`` / ``shadow`` / ``live``).
+    """Set a room's control state (``off`` / ``live``).
 
     Args:
         hass: The running Home Assistant instance.

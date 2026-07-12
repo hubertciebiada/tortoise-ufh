@@ -481,7 +481,8 @@ class RoomController:
 
         The adapter's farewell command (C5: room leaving ``live``, entry
         unload) writes a physical OFF OUTSIDE the control loop; without this
-        hook the direction machine kept "emitting" ON in shadow, so a return
+        hook the direction machine kept emitting ON after the out-of-band
+        farewell OFF, so a return
         to live could write ON seconds after the farewell OFF with no dwell
         in between. Transitioning the machine to OFF here resets the dwell
         clock on the ON->OFF edge — the way back to live passes through an

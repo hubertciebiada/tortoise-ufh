@@ -57,13 +57,12 @@ CONF_CONTROLLER: str = "controller"
 CONF_LIVE_CONTROL: str = "live_control"
 """LEGACY per-room shadow->live toggle map (options), keyed by room name.
 
-Retired in favour of the canonical three-state :data:`CONF_ROOM_STATE` map. Kept
-only so :func:`async_migrate_entry` can read a v1 entry's value while translating
-it to the new state map; never written by the current code.
+legacy-migration-only: read exclusively by :func:`async_migrate_entry` while
+translating a v1 entry to the state map; never written by the current code.
 """
 
 # ---------------------------------------------------------------------------
-# Per-room control state (the canonical three-state OFF / SHADOW / LIVE)
+# Per-room control state (the canonical two-state OFF / LIVE)
 # ---------------------------------------------------------------------------
 
 CONF_ROOM_STATE: str = "room_state"
@@ -79,14 +78,20 @@ empty override dict for a room means "back to global" and is pruned entirely."""
 ROOM_STATE_OFF: str = "off"
 """Room does not participate in control at all (core sees ``Mode.OFF``)."""
 
-ROOM_STATE_SHADOW: str = "shadow"
-"""Room is computed and reported but no commands are written (dry-run)."""
-
 ROOM_STATE_LIVE: str = "live"
 """Room is computed, reported and its commands are written to the actuators."""
 
-ROOM_STATES: list[str] = [ROOM_STATE_OFF, ROOM_STATE_SHADOW, ROOM_STATE_LIVE]
-"""Accepted per-room control states (off / shadow / live)."""
+ROOM_STATE_SHADOW: str = "shadow"
+"""LEGACY dry-run state, removed 2026-07-12 (v0.7.0; DECISIONS §13).
+
+legacy-migration-only: the literal is read (and transiently written by the
+v1->v2 block) exclusively by :func:`async_migrate_entry` — the v2->v3 block
+converts every ``"shadow"`` to :data:`ROOM_STATE_OFF`. Never written by the
+current runtime code and deliberately absent from :data:`ROOM_STATES`.
+"""
+
+ROOM_STATES: list[str] = [ROOM_STATE_OFF, ROOM_STATE_LIVE]
+"""Accepted per-room control states (off / live)."""
 
 # ---------------------------------------------------------------------------
 # Configuration keys — rooms (config-flow step 2)
@@ -144,7 +149,12 @@ CONF_ROOM_OFFSET: str = "room_offset"
 """Per-room offset from the global home setpoint, K. Room target = home + offset."""
 
 CONF_PARTICIPATES: str = "participates"
-"""Whether the room participates in control at all (``udzial``)."""
+"""LEGACY v1 per-room participation flag (``udzial``).
+
+legacy-migration-only: read exclusively by :func:`async_migrate_entry` (v1->v2);
+never written by the current code. Participation is now derived from the
+control state (``participates := state != off``).
+"""
 
 CONF_COOLING_ENABLED: str = "cooling_enabled"
 """Whether the room participates in floor cooling (``udzial w chlodzeniu``)."""
@@ -185,9 +195,10 @@ DEFAULT_MODE: str = MODE_HEATING
 DEFAULT_PARTICIPATES: bool = True
 DEFAULT_COOLING_ENABLED: bool = True
 
-DEFAULT_ROOM_STATE: str = ROOM_STATE_SHADOW
-"""New / unknown rooms start safely in shadow (dry-run) mode: a room the
-coordinator has never seen a persisted state for is observed, not driven.
+DEFAULT_ROOM_STATE: str = ROOM_STATE_OFF
+"""New / unknown rooms start safely OFF: a room the coordinator has never seen
+a persisted state for writes nothing until the user deliberately switches it
+to ``live``.
 """
 
 # ---------------------------------------------------------------------------

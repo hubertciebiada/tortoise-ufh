@@ -17,6 +17,10 @@
 [license-badge]: https://img.shields.io/badge/License-MIT-green.svg
 [license-url]: LICENSE
 
+> 📖 **Instrukcja użytkownika (PL): [docs/INSTRUKCJA.md](docs/INSTRUKCJA.md)** —
+> kompletny przewodnik po instalacji, konfiguracji, panelu, strojeniu i flagach.
+> The full end-user manual ships in Polish; this README covers the essentials in English.
+
 ---
 
 ## What it is
@@ -125,10 +129,10 @@ explanation of what it did and why.
   integral term is frozen so it does not wind up against a dead actuator.
 - **Optional weather feedforward** — a modest baseline valve term from outdoor temperature;
   the PI loop does the rest.
-- **Per-room control state (off / shadow / live)** — one three-state select per room:
-  *off* excludes it from control, *shadow* computes and reports without touching any
-  actuator, *live* drives its hardware. A whole-house "hands off" is simply every room in
-  off or shadow (see below).
+- **Per-room control state (off / live)** — one two-state select per room:
+  *off* excludes it from control (the core idles it and nothing is ever written),
+  *live* drives its hardware. A whole-house "hands off" is simply every room in
+  off (see below).
 - **Sidebar panel** — a dependency-free Home Assistant panel with Rooms / Tuning /
   Valves / Assist tabs: a live per-room table (control state, measured temperature,
   setpoint, error, valve %, supply/return water, mode), controller tuning (global gains
@@ -223,7 +227,7 @@ only). From the panel you can:
 - Set the **global home temperature** and pick the **mode** (heating / transitional /
   cooling / off).
 - Adjust a **per-room offset** — each room's setpoint is `home temperature + room offset`.
-- Set each room's **control state** (off / shadow / live). A room's participation in
+- Set each room's **control state** (off / live). A room's participation in
   cooling is configured in the integration options, not the panel.
 - Tune the **PI + trend controller** from the Tuning tab — global gains with sparse
   per-room overrides.
@@ -250,20 +254,19 @@ the UI pickers rather than hard-coding pre-0.5.0 ids.
 
 ---
 
-## Control state: off / shadow / live (per room)
+## Control state: off / live (per room)
 
-Tortoise-UFH is built for cautious rollout. It **always** computes commands and publishes
-the full report — but whether those commands reach your actuators is gated by each room's
-**control state**, exposed as a per-room `select` entity (`select.<room>_control_state`),
+Whether Tortoise-UFH touches a room's actuators is gated by that room's **control
+state**, exposed as a per-room `select` entity (`select.<room>_control_state`),
 in the panel, and over the `tortoise_ufh/set_room_state` WebSocket command. A new room
-starts in the safe **shadow** default.
+starts in the safe **off** default — nothing is written until you deliberately switch it
+to **live**.
 
-- **`off`.** The room is excluded from control entirely — the core is fed `Mode.OFF`, so
-  its valve is held at its last position and its fast source is idled. Nothing is written.
-- **`shadow`.** The coordinator computes the valve and fast-source commands and shows them
-  in the panel and diagnostic sensors, but writes nothing. Watch its recommendations
-  against your existing controller for as long as you like, then promote rooms to live one
-  at a time.
+- **`off`.** The room is excluded from control — the core is fed `Mode.OFF`, so its
+  report shows valve 0 % and the fast source idle, and **nothing is written**: the
+  physical actuators stay exactly as you left them. Switching a live room off first sends
+  a one-shot farewell (split OFF; the valve is driven to 0 in cooling and left holding in
+  heating).
 - **`live`.** The coordinator writes the room's valve entities (only when the new value
   differs from the last by at least the write threshold, to avoid actuator chatter) and the
   split's mode and target temperature.
@@ -274,21 +277,28 @@ starts in the safe **shadow** default.
 > 45 minutes**, so a manual change of the split's mode or target from its remote will be
 > overwritten within that window (the report raises `fast_source_mismatch` in the
 > meantime). If you want to drive a room's hardware by hand for a while, **switch the room
-> to `shadow`** — that is the supported "manual mode": the controller keeps computing and
-> showing what it *would* do, but writes nothing, and the way back to `live` re-parks the
-> actuators safely (the split passes an honest minimum-OFF before any restart).
+> to `off`** — that is the supported "manual mode": the controller writes nothing, and the
+> way back to `live` re-parks the actuators safely (the split passes an honest
+> minimum-OFF before any restart).
 
-A whole-house "hands off the hardware" is simply **every room in off or shadow** — the
-three-state control replaced the earlier global kill-switch. Changing a room's control
-state takes effect immediately and does **not** reset the PID integrator (only tuning
-changes reload the controller).
+A whole-house "hands off the hardware" is simply **every room off** — the per-room control
+state replaced the earlier global kill-switch. Changing a room's control state takes
+effect immediately and does **not** reset the PID integrator (only tuning changes reload
+the controller).
 
-In short: **a room in off or shadow → compute and report, but emit no commands; only live
-rooms drive hardware.**
+In short: **an off room → report only, no commands; only live rooms drive hardware.**
 
-> Upgrading from an older install? The config entry migrates automatically (v1 → v2): the
-> old `participates` flag, per-room `live_control` toggles and the global kill switch are
-> folded into the new per-room control state (`participates == false` becomes `off`). The
+> **v0.7.0 removed the third `shadow` state** (compute in the real mode but write
+> nothing — a dry-run rollout aid). The config entry migrates automatically (v2 → v3):
+> rooms in `shadow` become `off`. Note the deliberate reporting change: a shadow room used
+> to show "what it would do" in its sensors and panel row; an `off` room reports the idle
+> state (valve 0 %, fast source off) instead — this is the intended behaviour, not broken
+> sensors. See `docs/DECISIONS.md` §13.
+
+> Upgrading from an older install? The config entry migrates automatically (v1 → v3 in
+> one step): the old `participates` flag, per-room `live_control` toggles and the global
+> kill switch are folded into the per-room control state (`participates == false` becomes
+> `off`; a room that was not `live` lands on `off`). The
 > `switch.tortoise_ufh_kill_switch` and `switch.*_live_control` entities are removed and
 > replaced by `select.*_control_state`. v0.5.0 additionally retires the redundant
 > `binary_sensor.*_live_control` (it merely mirrored `control_state == "live"`; orphaned

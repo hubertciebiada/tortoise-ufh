@@ -116,10 +116,10 @@
       <button data-scenario-btn="cooling">Chłodzenie</button>
       <button data-scenario-btn="stale">Stale</button>
       <span class="sep"></span>
-      <!-- Per-room control is the three-state segment in the room table's first
-           column (Off / Shadow / Live) — click it to exercise set_room_state. -->
+      <!-- Per-room control is the two-state segment in the room table's first
+           column (Off / Live) — click it to exercise set_room_state. -->
       <span class="hint" style="color: var(--secondary-text-color)"
-        >Sterowanie pokoju → segment 3-stanu w tabeli</span
+        >Sterowanie pokoju → segment 2-stanu w tabeli</span
       >
       <span class="sep"></span>
       <button id="poll-btn">Symuluj poll (+70 s)</button>
@@ -150,8 +150,8 @@
               "mdi:close": "✕",
               "mdi:open-in-new": "↗",
               "mdi:power": "⏻",
-              "mdi:eye-outline": "◎",
               "mdi:play": "▶",
+              "mdi:information-outline": "ⓘ",
             };
             this.textContent = map[icon] || "•";
             this.style.display = "inline-flex";
@@ -419,10 +419,10 @@
                 },
           ),
         };
-        // Inject the canonical three-state control from the shared room-state
+        // Inject the canonical two-state control from the shared room-state
         // map (mirrors LiveRoomView.to_dict).
         for (const [name, lr] of Object.entries(rooms)) {
-          lr.control_state = state.roomStates[name] || "shadow";
+          lr.control_state = state.roomStates[name] || "off";
         }
         return {
           rooms,
@@ -494,7 +494,7 @@
       }
 
       // --- Mock hass --------------------------------------------------------
-      // `roomStates` is the canonical three-state control map the coordinator
+      // `roomStates` is the canonical two-state control map the coordinator
       // owns; both get_config and get_live read from it, and set_room_state
       // mutates it so the optimistic UI reconciles on the follow-up poll.
       const state = {
@@ -502,7 +502,7 @@
         lang: "pl",
         scenario: "heating",
         ageSeconds: 45,
-        roomStates: { Salon: "live", Kuchnia: "shadow", "Łazienka": "live" },
+        roomStates: { Salon: "live", Kuchnia: "off", "Łazienka": "live" },
         // Sparse per-room controller overrides (mirrors CONF_ROOM_TUNING).
         tuningRooms: { Salon: { kt: 8.0 } },
       };
@@ -548,6 +548,7 @@
       function makeHass() {
         return {
           language: state.lang,
+          locale: { language: state.lang },
           states: STATES,
           themes: { darkMode: state.theme === "dark" },
           callWS(msg) {

@@ -47,8 +47,8 @@ the full benefit of PI + trend damping — it simply has no fast fallback when t
 ### 1.2 Operating modes (one global house mode)
 
 A single global house mode (`Mode` enum) drives every room; per room only the *control state*
-(off / shadow / live — `off` maps to `Mode.OFF` in the core), *cooling participation* and *offset*
-differ.
+(off / live — `off` maps to `Mode.OFF` in the core; the former `shadow` state was removed
+2026-07-12, v0.7.0 — DECISIONS §13), *cooling participation* and *offset* differ.
 
 | `Mode` | Valve | Fast source |
 |--------|-------|-------------|
@@ -593,10 +593,11 @@ commands disagree:
 Losers are rewritten OFF (`RoomController.resolve_group_conflict`) with the
 `fast_source_group_conflict` flag and re-engage only through a full min-OFF. The stored
 last-winner map is cleared by `BuildingController.reset()`. **The adapter empties
-`fast_source_group` for every non-LIVE room (K1, R3 2026-07-12):** a SHADOW room's command is
-never written, yet its uncontrolled — so never-shrinking — error used to win every re-engage
-and permanently strangle the LIVE rooms' split (and shadow is the default state of a new
-room). Shadow rooms therefore observe but never vote.
+`fast_source_group` for every non-LIVE room (K1, R3 2026-07-12; reduced 2026-07-12 v0.7.0):**
+an OFF room is fed `Mode.OFF` and never writes, but its direction machine (with dwell
+timers) still exists — the emptied group keeps it from voting in or dwell-pinning the
+arbitration (belt and braces). Historically K1 guarded the since-removed `shadow` state,
+whose uncontrolled error used to strangle the LIVE rooms' split.
 
 ---
 
@@ -623,10 +624,11 @@ counter surfaced via websocket, not a new entity). A **watchdog** (HA adapter): 
 > 15 min → emergency/alarm state in the report (recovery after 5 min); report-only — the
 per-room actuator escalation belongs to S5 above. The module is the *sole
 owner* of participating rooms' valves and splits; externally there is only the global mode, the
-per-room control state (off / shadow / live), and the water-side owner (heat pump / DHW). A room in
-**off** (core fed `Mode.OFF`, valve held) or **shadow** → compute + full report but emit **no**
-commands; only a **live** room writes. A whole-home stop is every room off/shadow (the per-room
-three-state replaced the earlier global kill-switch in v2). Floor protection without a slab sensor
+per-room control state (off / live), and the water-side owner (heat pump / DHW). A room in
+**off** (core fed `Mode.OFF`) → compute + report but emit **no**
+commands; only a **live** room writes. A whole-home stop is every room off (the per-room
+control state replaced the earlier global kill-switch in v2; the third `shadow` state was
+removed in v0.7.0 — DECISIONS §13). Floor protection without a slab sensor
 relies on the supply-water temperature proxy (safety rules S1/S2) plus conservative valve ranges.
 
 ---
@@ -656,8 +658,9 @@ relies on the supply-water temperature proxy (safety rules S1/S2) plus conservat
    (`pytest.raises(ValueError, match=...)`); safe-degrade holds the last valve.
 2. **Simulation (`-m simulation`, seed 12345):** a session-scoped `run_scenario` harness returning
    `(SimulationLog, SimMetrics)`; parametrized scenarios calling `assert_*` per room.
-3. **Shadow mode on the live system:** the coordinator computes and logs the full report but emits
-   no commands until a room's control state is switched to `live` (Aneks §8.9 / §8.11).
+3. **Off-by-default on the live system** *(historical: the dedicated `shadow` dry-run stage was
+   removed 2026-07-12, v0.7.0 — Aneks §8.12 / DECISIONS §13)*: a new room starts `off` and the
+   coordinator emits no commands until its control state is switched to `live`.
 
 ### 10.3 Scenario library and acceptance metrics
 
@@ -710,3 +713,4 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 | 2026-07-09 | Phases C+D+E (DECISIONS §8): retuned defaults kp=14/ki=0.0015/kt=12 (empirical sweep on the CALIBRATED twin; old ki=0.02 measured +1.2 K overshoot); FILTERED trend (>= 60 s sample floor + 15 min EMA); integrator frozen under an active S2 throttle, reset on HEATING<->COOLING, decayed after > 12 h inactivity; saturated no longer set by an S2 zero; FF constants -> ControllerConfig knobs; S5 watchdog LIVE (adapter-fed per-room data age, neutral-position action); BuildingOutputs.sensor_lost_rooms; simulator: solar wired (f_slab row), seasonal ground, EN 1264^1.1 plant with screed resistance, indoor-humidity model, cooling supply floored by the global safe dew point, split_boost scenario, ALL scenarios gate the merge with the S13 overshoot assertion. |
 | 2026-07-12 | Round-2 review (DECISIONS §11): K1 bumpless setpoint transfer (`shift_integral(kp·dK)`, mode-correct sign) + asymmetric integrator unwind (`unwind_factor = 8`) with the `night_setback` gate scenario (`SimScenario.setpoint_schedule`); K6 margin de-stacking — the local throttle ramp ENDS at `dew_margin_k` (full cooling on the pump's dew floor; hard S2 at the dew point itself); K3 CLOSE_VALVE is water-side only (the air-side decision stands); K4 multisplit group arbiter (`fast_source_group`, one direction per aggregate, direction-aware S4 mismatch via `fast_source_hvac_mode`); K5 mode-aware `controller_error` degrade; K7 two-stage RH staleness (+1 K dew pad, `rh_stale_gated`); K8 cold-snap recovery assertion; K9 throttle-freeze retained (back-calc from the final valve measured and rejected); K10 farewell syncs the fast machine; flag split `s2_throttle` vs `s2_condensation`; write threshold 2 → 5 pp; kt documented as an open question with data (unit sign canary). |
 | 2026-07-12 | Round-3 hardening (DECISIONS §12, v0.6.1): group arbiter grew the incumbent hysteresis (§8.4 — challenger wins only beyond +0.5 K over the incumbent; largest-excess tie-break documented) and the adapter stopped SHADOW rooms from voting (`fast_source_group` emptied for non-LIVE rooms); PID `shift_integral` banks the clamp-cut as a signed residual netted against opposite shifts, and the back-calculation is suppressed while an opposite-sign residual is outstanding — a setpoint wiggle at a small integral is idempotent (was: pumped to ~2·kp·ΔK); the RH staleness pad is linear (`humidity_stale_frac` 0 → 1 over 60-120 min, `frac * 1 K`; the unavailable-entity cache branch reads as fully stale). Adapter lifecycle: coordinator shutdown + Store flush BEFORE the unload farewell, `_parked` write gate, LOADED-entry filter in WS/services, non-finite setpoint guard, hub device registered before platforms. |
+| 2026-07-12 | Shadow removal (DECISIONS §13, v0.7.0): the per-room control state is a two-state `off` / `live`; `off` is the default for new/unknown rooms; migration v2→v3 maps `shadow` (and garbage) to `off` (v1→v3 chain in one call). Core untouched (it never knew shadow — only `Mode` + the farewell hook); K1 reduces to "an OFF room does not vote" with the emptied `fast_source_group` kept as belt-and-braces. |

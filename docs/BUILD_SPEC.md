@@ -84,7 +84,7 @@ tortoise-ufh/
     number.py                        # global home-temp + per-room offset (writable)
     sensor.py                        # per-room report/diagnostics + GLOBAL safe dew-point sensor
     binary_sensor.py                 # per-room flags (sensor_lost, saturated, condensation)
-    select.py                        # per-room control-state select (off / shadow / live)
+    select.py                        # per-room control-state select (off / live)
     websocket.py                     # panel API commands (config/live/setters + room state + tuning)
     panel.py                         # register sidebar panel + static path for the JS module
     services.py                      # register/unregister the services declared in services.yaml
@@ -541,7 +541,7 @@ class BuildingController:
 - `invalidate_trends()`: adapter hook for a control-cycle gap that hit the adapter's dt clamp
   (900 s) — restarts every room's trend filter so the clamped dt cannot inflate the next raw
   dT/dt sample. `notify_fast_source_farewell(room)`: adapter hook after the C5 farewell write —
-  transitions the room's fast machine to OFF (dwell reset), so live -> shadow -> live passes an
+  transitions the room's fast machine to OFF (dwell reset), so live -> off -> live passes an
   honest min-OFF instead of an instant ON (K10).
 
 ---
@@ -731,9 +731,10 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   supply(list)/return(list)/fast_source entity+kind/offset/cooling_enabled),
   `WATCHDOG_TIMEOUT_MINUTES=15`, `WATCHDOG_RECOVERY_MINUTES=5`, unit sets (°C/%/W),
   `ENTITY_STALE_MAX_SECONDS=300`. **Canonical
-  per-room control state:** `CONF_ROOM_STATE` (options map `{room: state}`), `ROOM_STATE_OFF/SHADOW/LIVE`,
-  `ROOM_STATES`, `DEFAULT_ROOM_STATE = "shadow"`. `CONF_LIVE_CONTROL` / `CONF_PARTICIPATES` remain only so
-  `async_migrate_entry` can read a legacy v1 entry; the kill-switch key is retired (no constant).
+  per-room control state (two-state since 2026-07-12, v0.7.0 — DECISIONS §13):** `CONF_ROOM_STATE`
+  (options map `{room: state}`), `ROOM_STATE_OFF/LIVE`, `ROOM_STATES = [off, live]`,
+  `DEFAULT_ROOM_STATE = "off"`. `CONF_LIVE_CONTROL` / `CONF_PARTICIPATES` / `ROOM_STATE_SHADOW` remain only so
+  `async_migrate_entry` can read (v1) and convert (v2 -> v3) a legacy entry; the kill-switch key is retired (no constant).
   **Tuning:** `CONF_ROOM_TUNING` (options map `{room: {field: value}}` of *sparse* per-room
   `ControllerConfig` overrides; an emptied room override is pruned = "back to global") plus the
   single source of truth for the exposed knobs: `CONTROLLER_NUMBER_KNOBS` (`(field, min, max,
@@ -758,12 +759,12 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   `_last_written_valve`; no IR beeps, no stomping on manual louvre/fan tweaks) but is re-asserted
   after ~45 min so a missed write or manual override self-heals — the machine stays the owner.
   All writes `blocking=False`, try/except +
-  `_LOGGER.exception` (`# noqa: BLE001`). Watchdog + shadow-mode identical pattern to blueprint.
+  `_LOGGER.exception` (`# noqa: BLE001`). Watchdog identical pattern to blueprint.
   Holds `_room_states: dict[str, str]` (seeded from `CONF_ROOM_STATE`); `get_room_state`/`set_room_state`
   (`@callback`, persists options WITHOUT reload — `options_require_reload` treats a state-only change as
   no-reload so the PID integrator survives). Derived: `participates := state != off` (→ `Mode.OFF` when
   off), `write := state == live`.
-  **Any room in `off` or `shadow` => compute + report but emit NO commands; only `live` writes.**
+  **An `off` room is computed against `Mode.OFF` and reported but never written; only `live` writes.**
   **Measured dt:** the core `step` is fed the REAL elapsed time since the previous step
   (monotonic clock, clamped to `[1, 900]` s; nominal 300 s on the very first step) instead of a
   hard-coded 300 s, so an off-cycle recompute does not advance trend/dwell by a full cycle.
@@ -802,7 +803,7 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   **Mode persistence (S9):** the global mode is persisted in the setpoint Store and restored on
   startup (a configured, available mode entity still wins), so a restart in July never falls
   back to heating logic.
-  **Farewell command (C5):** on a room's `live → shadow/off` transition and on entry unload,
+  **Farewell command (C5):** on a room's `live → off` transition and on entry unload,
   one-shot safe parking of the released actuators: split **OFF** always; valve → **0** when the
   global mode is COOLING (an orphaned open valve would keep passing chilled water outside both
   dew defences), position left untouched in HEATING (warm water is bounded by the HP curve;
@@ -823,7 +824,7 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   *(The derived per-room `live_control` binary sensor was retired in v0.5.0 — redundant with the
   control-state select; orphaned registry entries are swept on setup by
   `__init__._async_purge_retired_entities`, no entry-version bump.)* **`select.py`**: one per-room
-  `control_state` select (`off` / `shadow` / `live`, `translation_key="control_state"`,
+  `control_state` select (`off` / `live`, `translation_key="control_state"`,
   `EntityCategory.CONFIG`); `async_select_option` → `coordinator.set_room_state`. This native select
   replaced the retired global kill-switch and per-room `live_control` switch (both purged by migration).
 - **Devices & entity naming (v0.5.0, GH #3)**: helpers in **`device.py`** — every room is a device
@@ -840,12 +841,14 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   `domain=["sensor"], device_class=["temperature"]` (per loop, multiple); room temp sensor+temperature;
   humidity `device_class=["humidity"]`; fast source `domain=["climate"]`; global mode entity
   `domain=["select","input_select"]`. Rooms can be seeded from HA areas but manual add is fine. Config
-  flow `VERSION = 2`; `async_migrate_entry` folds legacy v1 (`participates` + `live_control` +
-  `kill_switch`) into `CONF_ROOM_STATE` (safety precedence: `participates == false` ⇒ `off`) and
-  purges the retired switch entities from the registry. The **options flow is a menu** with four
+  flow `VERSION = 3`; `async_migrate_entry` folds legacy v1 (`participates` + `live_control` +
+  `kill_switch`) into `CONF_ROOM_STATE` (safety precedence: `participates == false` ⇒ `off`),
+  purges the retired switch entities from the registry, and (v2 → v3, shadow removal
+  2026-07-12 — DECISIONS §13) maps every state ∉ {`off`, `live`} to `off`; a v1 entry passes
+  both blocks in ONE call. The **options flow is a menu** with four
   leaves: `add_room` / `edit_room` (name immutable) / `remove_room` (with entity-registry and
   setpoint-Store cleanup) / `settings` — the settings form carries the per-room control-state
-  selects (off/shadow/live) + the advanced global controller knobs, merged over existing options
+  selects (off/live) + the advanced global controller knobs, merged over existing options
   so the panel-managed `CONF_ROOM_TUNING` map is preserved. Use `entity_validator.py` (unit-only,
   hardware-agnostic).
 - **`websocket.py`**: register WS commands `tortoise_ufh/get_config` (global settings + per-room
@@ -881,12 +884,12 @@ properties on the element. **No imports from CDNs** (CSP) — plain DOM + inline
 Must render:
 - Header with global **home temperature** (editable -> `set_home_temperature` WS), **mode** selector
   (`set_mode`), the global safe dew point and algorithm/watchdog status. A whole-home stop is
-  expressed as putting rooms in `off`/`shadow` (no separate kill toggle).
+  expressed as putting every room in `off` (no separate kill toggle).
 - Four **tabs** (order authoritative for keyboard navigation): **Pokoje** (rooms table),
   **Strojenie** (tuning), **Zawory** (valves), **Wspomaganie** (fast-source assist).
 - **Pokoje**: a table, one row per room, columns
   `[control-state] | Pokój | Pomiar | Zadana | Uchył | Zawór % | Zasilanie | Powrót | Tryb | Temp.`
-  — the leading control is a three-button per-room **control-state** toggle (off / shadow / live
+  — the leading control is a two-button per-room **control-state** toggle (off / live
   -> `set_room_state` WS); `Pomiar` reads `report.room_temperature_c` (never reconstructed from
   `setpoint - error_c`); `Tryb`/`Temp.` show the fast-source command. Editable **offset** (->
   `set_room_offset`). Narrow layouts drop the least-critical columns.

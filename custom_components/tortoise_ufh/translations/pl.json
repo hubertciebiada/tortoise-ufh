@@ -59,7 +59,7 @@
       },
       "confirm": {
         "title": "Potwierdź konfigurację",
-        "description": "Tortoise-UFH zostanie skonfigurowany z liczbą pomieszczeń: {num_rooms}, w lokalizacji ({latitude}, {longitude}), z nastawą domu {home_setpoint} °C. Pomieszczenia startują w trybie cichym (tylko odczyt) do czasu włączenia sterowania na żywo. Potwierdź, aby zakończyć konfigurację."
+        "description": "Tortoise-UFH zostanie skonfigurowany z liczbą pomieszczeń: {num_rooms}, w lokalizacji ({latitude}, {longitude}), z nastawą domu {home_setpoint} °C. Pomieszczenia startują w stanie Wyłączony — nic nie jest zapisywane do sprzętu, dopóki nie przełączysz pomieszczenia na Steruje. Potwierdź, aby zakończyć konfigurację."
       }
     },
     "error": {
@@ -95,7 +95,7 @@
       },
       "settings": {
         "title": "Sterowanie i strojenie",
-        "description": "Ustaw stan sterowania każdego pomieszczenia — wyłączony (poza sterowaniem), obserwuje (tylko liczy i raportuje) lub steruje (napędza zawory i szybkie źródło) — oraz dostosuj zaawansowane wzmocnienia regulatora. Głównym interfejsem są panel i encje select stanu sterowania; ten formularz to awaryjna alternatywa bez automatyzacji.",
+        "description": "Ustaw stan sterowania każdego pomieszczenia — Wyłączony (poza sterowaniem, nic nie jest zapisywane do sprzętu) lub Steruje (napędza zawory i szybkie źródło) — oraz dostosuj zaawansowane wzmocnienia regulatora. Głównym interfejsem są panel i encje select stanu sterowania; ten formularz to awaryjna alternatywa bez automatyzacji.",
         "data": {
           "kp": "Wzmocnienie proporcjonalne kp (%/K)",
           "ki": "Wzmocnienie całkujące ki (%/(K·s))",
@@ -190,7 +190,6 @@
         "name": "Stan sterowania",
         "state": {
           "off": "Wyłączony",
-          "shadow": "Obserwuje",
           "live": "Steruje"
         }
       }
@@ -257,8 +256,43 @@
     "control_state": {
       "options": {
         "off": "Wyłączony",
-        "shadow": "Obserwuje",
         "live": "Steruje"
+      }
+    }
+  },
+  "services": {
+    "set_home_temperature": {
+      "name": "Ustaw temperaturę domu",
+      "description": "Ustawia globalną temperaturę zadaną domu w stopniach Celsjusza. Nastawy pomieszczeń są wyliczane jako temperatura domu plus korekta pomieszczenia.",
+      "fields": {
+        "temperature": {
+          "name": "Temperatura",
+          "description": "Globalna temperatura zadana domu w stopniach Celsjusza."
+        }
+      }
+    },
+    "set_room_offset": {
+      "name": "Ustaw korektę pokoju",
+      "description": "Ustawia korektę temperatury dla jednego pomieszczenia w kelwinach. Nastawa pomieszczenia to globalna temperatura domu plus ta korekta.",
+      "fields": {
+        "room": {
+          "name": "Pomieszczenie",
+          "description": "Identyfikator (nazwa) pomieszczenia do zmiany."
+        },
+        "offset": {
+          "name": "Korekta",
+          "description": "Korekta temperatury pomieszczenia w kelwinach (względem temperatury domu)."
+        }
+      }
+    },
+    "set_mode": {
+      "name": "Ustaw tryb",
+      "description": "Ustawia globalny tryb pracy systemu Tortoise-UFH.",
+      "fields": {
+        "mode": {
+          "name": "Tryb",
+          "description": "Tryb pracy systemu (grzanie / przejściowy / chłodzenie / wyłączony)."
+        }
       }
     }
   }

@@ -75,6 +75,8 @@ commands) and the heat pump / DHW as the water-side owner.
 > **Status: this REVERSES a frozen §8 decision.** Recorded here (and in
 > `prd-control-brain.md` §8.11) as a deliberate, dated contract change, not a drift:
 > **2026-07-09, shipped in v0.3.0** (breaking; config-entry migration v1 → v2).
+> **Superseded in part by §13 (2026-07-12, v0.7.0):** the `shadow` state was removed
+> permanently; the control state is a two-state `off` / `live` and the default is `off`.
 
 The original interview locked three separate participation controls: a per-room
 **participation** flag (Q2, `entry.data`), a per-room **live/shadow** toggle (the "shadow /
@@ -700,3 +702,61 @@ operations was preserved by extracting code verbatim).
   `hvac_action`; drawer auto-deselect on room removal; `CONF_ENTITY_HP_ACTIVE` in the
   flow/wiring tab; `unload_ok=False` re-park recovery; the shared farewell registry across
   entries.
+
+---
+
+## 13. Revision — PERMANENT removal of the shadow state: two-state `off` / `live` (2026-07-12, v0.7.0)
+
+> **Status: this REVERSES frozen decisions.** It reverses PRD Aneks §8.9 (the shadow /
+> dry-run rollout switch) and reduces §8.11's three-state `RoomControlState` to a
+> two-state. Recorded here (and in `prd-control-brain.md` §8.12) as a deliberate, dated
+> contract change, not a drift: **2026-07-12, shipped in v0.7.0** (breaking; config-entry
+> migration v2 → v3, with the full v1 → v3 chain running in one `async_migrate_entry`
+> call).
+
+**Context.** The owner's verdict: the application was getting too hard to use, and shadow
+made it worse. Three states per room forced every user-facing surface (select entity,
+panel segment, options flow, WS validation, docs) to explain a mode whose only purpose —
+"compute in the real mode but write nothing" — was a rollout aid, not a living feature.
+The v0.6.x rounds kept paying for it in complexity (K1: shadow rooms voting in the
+multisplit arbiter; K10: phantom ON after farewell in shadow).
+
+**Decision.**
+
+- `RoomControlState` = **two-state** `off` / `live`. The "compute but don't write"
+  capability is gone entirely.
+- **`DEFAULT_ROOM_STATE = "off"`** for new and unknown/corrupted rooms — safe: nothing is
+  written until the user deliberately switches a room to `live`.
+- **Migration v2 → v3:** every persisted state ∉ {`off`, `live`} maps to `off` (covers
+  `shadow` and garbage). This preserves the WRITE behaviour exactly — neither shadow nor
+  off ever wrote a command. An entry without a state map keeps not having one (the
+  coordinator defaults to `off`). No registry cleanup: `select.*_control_state` keeps its
+  domain, unique id and translation key; only the option list shrinks to `[off, live]`
+  (PL: „Wyłączony" / „Steruje").
+- **Deliberate reporting change (not a sensor regression):** a shadow room used to compute
+  FULL commands in the real mode — the panel and diagnostic sensors showed "what it would
+  do". An `off` room is fed `Mode.OFF` (report: valve 0 %, fast source off), so that
+  observational dry-run value disappears. That loss is the point of the reversal; document
+  it so users do not file "my sensors broke after the update".
+- **"Manual mode" is now `off`:** to drive a room's hardware by hand, switch it to `off`
+  (the farewell parks the split OFF; the valve is closed in cooling, held in heating) and
+  operate the devices directly. A whole-home stop = every room `off`.
+
+**Consequences / cleanups.**
+
+- `RoomRuntime.live_control_enabled` (coordinator-internal) removed; the write gate asks
+  `get_room_state(name) == live` directly, and `set_room_state` no longer rebuilds the
+  cached payload (it notifies entity listeners instead).
+- K1 (§12) reduces to "an OFF room does not vote": the adapter still empties
+  `fast_source_group` for every non-LIVE room — an OFF room's direction machine (with
+  dwell timers) still exists, so the empty group stays as belt-and-braces on top of the
+  `Mode.OFF` feed.
+- The C5 farewell is now exactly the `live → off` transition (plus entry unload).
+- `ROOM_STATE_SHADOW`, `CONF_LIVE_CONTROL` and `CONF_PARTICIPATES` remain in `const.py` as
+  **legacy-migration-only** constants read (or transiently written) exclusively by
+  `async_migrate_entry`.
+- `CONTROL_ALGORITHMS_REVIEW.md` is deliberately untouched: SHADOW appears there as a
+  rollout-methodology stage in a frozen historical review, not as a product feature.
+
+Unchanged: the three external outputs, the safe-degrade contract, the dew-point layers,
+the control law, and the no-reload-on-state-change rule (PID integrator preserved).

@@ -23,7 +23,7 @@
 #             sensor.tortoise_ufh_watchdog_status
 #   Per room the id is "<room>_<name>" (<room> = slug of the room device,
 #   no tortoise_ufh_ prefix), e.g. for a room named "Living room":
-#             select.living_room_control_state               (off/shadow/live)
+#             select.living_room_control_state               (off/live)
 #             number.living_room_setpoint_offset             (K, -5..+5)
 #             sensor.living_room_recommended_valve_position  (%)
 #             sensor.living_room_fast_source_mode
@@ -74,7 +74,7 @@
 #         columns: 4
 #         entities:
 #           - entity: select.living_room_control_state
-#             name: Control (off/shadow/live)
+#             name: Control (off/live)
 #           - entity: sensor.living_room_temp
 #             name: Temp (°C)
 #           - entity: number.living_room_setpoint_offset
@@ -103,7 +103,7 @@
 #         columns: 4
 #         entities:
 #           - entity: select.bathroom_control_state
-#             name: Control (off/shadow/live)
+#             name: Control (off/live)
 #           - entity: sensor.bathroom_temp
 #             name: Temp (°C)
 #           - entity: number.bathroom_setpoint_offset

@@ -1,6 +1,6 @@
 """Config flow for the Tortoise-UFH integration.
 
-Implements the multi-step setup wizard (``VERSION = 2``) and the options flow.
+Implements the multi-step setup wizard (``VERSION = 3``) and the options flow.
 
 Wizard steps:
     1. ``user``       — home location (latitude / longitude, decimal degrees).
@@ -611,7 +611,7 @@ def _first_entity_error(
 class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
     """Multi-step setup wizard for Tortoise-UFH."""
 
-    VERSION = 2
+    VERSION = 3
 
     @staticmethod
     def async_get_options_flow(
@@ -922,7 +922,7 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
       immutable) and entity mapping in place.
     * ``remove_room`` — pick a room, remove it from ``entry.data[CONF_ROOMS]``,
       delete its orphaned entity-registry entries and prune its per-room state.
-    * ``settings`` — per-room control-state selects (off / shadow / live) and the
+    * ``settings`` — per-room control-state selects (off / live) and the
       advanced :class:`ControllerConfig` knobs (the original options form).
 
     Room definitions live in ``entry.data`` (not ``entry.options``); the room
@@ -954,10 +954,11 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         """Per-room control-state selects and advanced controller knobs.
 
         Provides an emergency / automation-free surface for the per-room control
-        state (off / shadow / live) alongside the advanced
+        state (off / live) alongside the advanced
         :class:`ControllerConfig` knobs; the primary control surface is the
         panel and the per-room ``select`` entities. Writes the state map to
-        ``entry.options[CONF_ROOM_STATE]``.
+        ``entry.options[CONF_ROOM_STATE]``. An unknown or invalid persisted
+        state falls back to :data:`DEFAULT_ROOM_STATE` (``off``).
         """
         entry = self.config_entry
         rooms: list[dict[str, Any]] = list(entry.data.get(CONF_ROOMS, []))

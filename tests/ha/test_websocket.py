@@ -20,7 +20,7 @@ from custom_components.tortoise_ufh.const import (
     CONF_ROOM_TUNING,
     DOMAIN,
     ROOM_STATE_LIVE,
-    ROOM_STATE_SHADOW,
+    ROOM_STATE_OFF,
     ROOM_STATES,
 )
 from custom_components.tortoise_ufh.core.models import Mode
@@ -69,9 +69,9 @@ async def test_get_config_returns_globals_and_rooms(
     assert rooms["Salon"]["offset_c"] == 0.0
     for room in rooms.values():
         assert "offset_c" in room
-        # Canonical three-state field (off / shadow / live).
+        # Canonical two-state field (off / live); new rooms default to off.
         assert room["control_state"] in ROOM_STATES
-        assert room["control_state"] == ROOM_STATE_SHADOW
+        assert room["control_state"] == ROOM_STATE_OFF
     # Cooling opt-out from the PRD survives the round-trip.
     assert rooms["Salon"]["cooling_enabled"] is True
     assert rooms["Lazienka"]["cooling_enabled"] is False
@@ -239,7 +239,7 @@ async def test_set_room_state_mutates_control_state(
 ) -> None:
     """set_room_state promotes a room to live and echoes the new state."""
     coordinator = _coordinator(hass)
-    assert coordinator.get_room_state("Salon") == ROOM_STATE_SHADOW
+    assert coordinator.get_room_state("Salon") == ROOM_STATE_OFF
 
     client = await hass_ws_client(hass)
     msg = await _round_trip(
@@ -259,7 +259,26 @@ async def test_set_room_state_mutates_control_state(
     assert _coordinator(hass) is coordinator
     assert coordinator.get_room_state("Salon") == ROOM_STATE_LIVE
     # The other room is untouched.
-    assert coordinator.get_room_state("Lazienka") == ROOM_STATE_SHADOW
+    assert coordinator.get_room_state("Lazienka") == ROOM_STATE_OFF
+
+
+async def test_set_room_state_rejects_retired_shadow(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """The retired ``shadow`` state fails schema validation (v0.7.0)."""
+    coordinator = _coordinator(hass)
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(
+        client,
+        {"type": f"{DOMAIN}/set_room_state", "room": "Salon", "state": "shadow"},
+    )
+
+    assert msg["success"] is False
+    assert msg["error"]["code"] == "invalid_format"
+    # State untouched by the rejected command.
+    assert coordinator.get_room_state("Salon") == ROOM_STATE_OFF
 
 
 async def test_set_room_state_unknown_room_errors(

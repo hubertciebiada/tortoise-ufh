@@ -146,15 +146,21 @@ async def async_migrate_entry(
     v1 -> v2 (the RoomControlState refactor): the two legacy participation flags
     — per-room ``participates`` (in ``entry.data``) and the per-room
     ``live_control`` map plus the global ``kill_switch`` (in ``entry.options``) —
-    are collapsed into a single canonical per-room three-state map
-    ``entry.options[CONF_ROOM_STATE]`` (``off`` / ``shadow`` / ``live``).
+    are collapsed into a single canonical per-room state map
+    ``entry.options[CONF_ROOM_STATE]``. This block deliberately still writes the
+    historical ``"shadow"`` literal (its logic is frozen); the v2 -> v3 block
+    below converts it in the same call.
 
-    Per-room precedence (safety wins): ``participates == False`` maps to ``off``
-    even when ``live_control`` was ``True``; otherwise ``live_control`` decides
-    ``live`` vs ``shadow``. The legacy ``participates`` key is stripped from each
-    room dict and the legacy ``live_control`` / ``kill_switch`` option keys are
-    dropped, so no orphaned keys linger. The retired kill-switch and per-room
-    live-control switch entities are removed from the registry.
+    v2 -> v3 (shadow removal, 2026-07-12; DECISIONS §13): the per-room control
+    state becomes a two-state (``off`` / ``live``). Every persisted state that is
+    not ``off`` or ``live`` — notably the retired ``shadow``, but also any
+    corrupted value — maps to ``off``, which preserves the write behaviour
+    exactly (neither shadow nor off ever wrote a command). No registry cleanup
+    is needed: the ``select.*_control_state`` entity keeps its domain and
+    unique id; only its option list shrinks.
+
+    A v1 entry passes both blocks sequentially in one call (the v1 block ends
+    at version 2, so the v2 block picks it up immediately) and lands on v3.
 
     Args:
         hass: The Home Assistant instance.
@@ -183,7 +189,7 @@ async def async_migrate_entry(
     # named constant; kept here only to purge it from options and the registry).
     legacy_kill_switch_key = "kill_switch"
 
-    if entry.version > 2:
+    if entry.version > 3:
         # Downgrade from an unknown future version is not supported.
         return False
 
@@ -235,6 +241,33 @@ async def async_migrate_entry(
             entry.entry_id,
             room_states,
         )
+
+    if entry.version == 2:
+        # Shadow removal (2026-07-12, v0.7.0; DECISIONS §13): reduce the
+        # per-room state map to the two-state off/live. "shadow" (and any
+        # garbage value) becomes "off" — identical write behaviour, since
+        # neither state ever wrote a command. An entry without the map keeps
+        # not having it (the coordinator defaults every room to "off").
+        new_options_v3 = dict(entry.options)
+        if CONF_ROOM_STATE in new_options_v3:
+            state_map: dict[str, Any] = dict(
+                new_options_v3.get(CONF_ROOM_STATE, {}) or {}
+            )
+            converted = {
+                name: (
+                    state
+                    if state in (ROOM_STATE_OFF, ROOM_STATE_LIVE)
+                    else ROOM_STATE_OFF
+                )
+                for name, state in state_map.items()
+            }
+            new_options_v3[CONF_ROOM_STATE] = converted
+            _LOGGER.debug(
+                "Migrated Tortoise-UFH entry %s to v3 (room states: %s)",
+                entry.entry_id,
+                converted,
+            )
+        hass.config_entries.async_update_entry(entry, options=new_options_v3, version=3)
 
     return True
 

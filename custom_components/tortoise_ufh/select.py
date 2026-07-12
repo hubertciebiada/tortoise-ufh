@@ -1,12 +1,12 @@
 """Select entities for the Tortoise-UFH integration.
 
-Exposes one per-room **control-state** select (``off`` / ``shadow`` / ``live``),
+Exposes one per-room **control-state** select (``off`` / ``live``),
 backed by the coordinator's single-source-of-truth control-state map:
 
-* ``off``    — the room does not participate in control (the core sees
-  ``Mode.OFF``; the valve is held and the fast source idled).
-* ``shadow`` — the room is computed and reported, but no commands are written.
-* ``live``   — the room is computed, reported *and* its valve / fast-source
+* ``off``  — the room does not participate in control (the core sees
+  ``Mode.OFF``; the valve is held and the fast source idled). Nothing is
+  written, so the physical actuators stay untouched.
+* ``live`` — the room is computed, reported *and* its valve / fast-source
   commands are written to the actuators.
 
 Selecting an option updates the coordinator's in-memory state immediately (via
@@ -17,7 +17,9 @@ reload the config entry (see ``coordinator.options_require_reload`` and
 ``__init__._async_update_listener``), so the PID integrator is preserved.
 
 This native select replaces the retired per-room ``live_control`` switch and the
-global kill-switch: a whole-home stop is now "every room off / shadow".
+global kill-switch: a whole-home stop is now "every room off". (The former
+third state ``shadow`` — compute but never write — was removed 2026-07-12,
+v0.7.0; see docs/DECISIONS.md §13. Migration maps it to ``off``.)
 
 Units: none — this entity carries a closed set of control-state strings, not a
 physical quantity. (Temperatures elsewhere are in degrees Celsius, valve position
@@ -43,7 +45,7 @@ if TYPE_CHECKING:
     from . import TortoiseUfhConfigEntry
 
 
-# The per-room control-state select: off / shadow / live.
+# The per-room control-state select: off / live.
 CONTROL_STATE_DESCRIPTION: SelectEntityDescription = SelectEntityDescription(
     key="control_state",
     translation_key="control_state",
@@ -100,7 +102,7 @@ async def async_setup_entry(
 class TortoiseUfhControlStateSelect(
     CoordinatorEntity[TortoiseUfhCoordinator], SelectEntity
 ):
-    """A per-room control-state select (``off`` / ``shadow`` / ``live``).
+    """A per-room control-state select (``off`` / ``live``).
 
     Reads its current option from the coordinator's control-state map and, on
     selection, updates that state in memory (immediate effect) and persists the
@@ -136,7 +138,7 @@ class TortoiseUfhControlStateSelect(
 
     @property
     def current_option(self) -> str:
-        """Return the room's current control state (``off`` / ``shadow`` / ``live``)."""
+        """Return the room's current control state (``off`` / ``live``)."""
         return self.coordinator.get_room_state(self._room_name)
 
     async def async_select_option(self, option: str) -> None:

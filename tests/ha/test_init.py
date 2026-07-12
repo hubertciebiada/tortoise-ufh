@@ -59,10 +59,10 @@ async def test_unload_parks_live_room_actuators(
     ]
 
 
-async def test_unload_shadow_rooms_send_nothing(
+async def test_unload_off_rooms_send_nothing(
     hass: HomeAssistant, setup_integration
 ) -> None:
-    """C5: unloading with only shadow rooms emits no farewell writes."""
+    """C5: unloading with only off (default) rooms emits no farewell writes."""
     from pytest_homeassistant_custom_component.common import async_mock_service
 
     hvac_calls = async_mock_service(hass, "climate", "set_hvac_mode")

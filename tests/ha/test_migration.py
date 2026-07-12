@@ -1,16 +1,22 @@
-"""Config-entry migration tests: v1 -> v2 (the RoomControlState refactor).
+"""Config-entry migration tests: v1 -> v2 -> v3 (the control-state refactors).
 
 The v1 schema carried a per-room ``participates`` flag (in ``entry.data``), a
 per-room ``live_control`` map and a global ``kill_switch`` (both in
-``entry.options``). v2 collapses all three into a single canonical per-room
+``entry.options``). v2 collapsed all three into a single canonical per-room
 three-state map ``entry.options[CONF_ROOM_STATE]`` (``off`` / ``shadow`` /
-``live``), with safety precedence: ``participates == False`` wins as ``off`` even
-when ``live_control`` was ``True``.
+``live``), with safety precedence: ``participates == False`` wins as ``off``
+even when ``live_control`` was ``True``.
 
-These tests pin every ``participates × live_control`` combination (including the
-absent-key defaults and unknown rooms), the removal of the legacy keys and the
-retired switch entities, and that a real v1 entry still loads cleanly after being
-migrated by :func:`homeassistant.config_entries.async_setup`.
+v3 (shadow removal, 2026-07-12; DECISIONS §13) reduces the map to the
+two-state ``off`` / ``live``: every value that is not ``off`` or ``live``
+(notably the retired ``shadow``, but also corrupted values) becomes ``off`` —
+identical write behaviour, since neither shadow nor off ever wrote a command.
+
+These tests pin every ``participates × live_control`` combination through the
+FULL v1 -> v3 chain (one ``async_migrate_entry`` call), the standalone v2 -> v3
+conversion, the removal of the legacy keys and the retired switch entities, and
+that a real v1 entry still loads cleanly after being migrated by
+:func:`homeassistant.config_entries.async_setup`.
 """
 
 from __future__ import annotations
@@ -50,14 +56,15 @@ pytestmark = pytest.mark.ha
 _LEGACY_KILL_SWITCH = "kill_switch"
 
 
-def _v1_entry(
+def _entry(
     hass: HomeAssistant,
     *,
     rooms: list[dict[str, Any]],
     options: dict[str, Any] | None = None,
+    version: int = 1,
     unique_id: str = "50.5_19.5",
 ) -> MockConfigEntry:
-    """Add a version-1 :class:`MockConfigEntry` to hass and return it."""
+    """Add a :class:`MockConfigEntry` of the given version to hass."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={
@@ -66,7 +73,7 @@ def _v1_entry(
             CONF_ROOMS: rooms,
         },
         options=options or {},
-        version=1,
+        version=version,
         title="Tortoise-UFH",
         unique_id=unique_id,
     )
@@ -75,28 +82,32 @@ def _v1_entry(
 
 
 # ``participates`` value in entry.data (``None`` == key absent, default True),
-# ``live_control`` value in options (``None`` == key absent) -> expected state.
+# ``live_control`` value in options (``None`` == key absent) -> expected state
+# AFTER the full v1 -> v3 chain (the intermediate v2 "shadow" becomes "off").
 _COMBOS: Iterable[tuple[bool | None, bool | None, str]] = (
     (False, True, ROOM_STATE_OFF),  # participates=False wins over live=True
     (False, False, ROOM_STATE_OFF),
     (False, None, ROOM_STATE_OFF),
     (True, True, ROOM_STATE_LIVE),
-    (True, False, ROOM_STATE_SHADOW),
-    (True, None, ROOM_STATE_SHADOW),  # live key absent -> shadow
+    (True, False, ROOM_STATE_OFF),  # v2 shadow -> v3 off
+    (True, None, ROOM_STATE_OFF),  # live key absent -> shadow -> off
     (None, True, ROOM_STATE_LIVE),  # participates absent -> default True
-    (None, False, ROOM_STATE_SHADOW),
-    (None, None, ROOM_STATE_SHADOW),  # no options at all -> shadow
+    (None, False, ROOM_STATE_OFF),
+    (None, None, ROOM_STATE_OFF),  # no options at all -> shadow -> off
 )
 
 
 @pytest.mark.parametrize(("participates", "live", "expected"), _COMBOS)
-async def test_migrate_state_precedence(
+async def test_migrate_v1_chain_state_precedence(
     hass: HomeAssistant,
     participates: bool | None,
     live: bool | None,
     expected: str,
 ) -> None:
-    """Every participates × live_control combination maps to the right state."""
+    """Every participates × live_control combo lands on the right v3 state.
+
+    A single ``async_migrate_entry`` call must run BOTH blocks (v1 -> v2 -> v3).
+    """
     room: dict[str, Any] = {CONF_ROOM_NAME: "Salon"}
     if participates is not None:
         room[CONF_PARTICIPATES] = participates
@@ -104,33 +115,36 @@ async def test_migrate_state_precedence(
     if live is not None:
         options[CONF_LIVE_CONTROL] = {"Salon": live}
 
-    entry = _v1_entry(hass, rooms=[room], options=options)
+    entry = _entry(hass, rooms=[room], options=options)
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 2
+    assert entry.version == 3
     assert entry.options[CONF_ROOM_STATE] == {"Salon": expected}
+    # No shadow literal may survive the chain.
+    assert ROOM_STATE_SHADOW not in entry.options[CONF_ROOM_STATE].values()
     # Legacy keys are purged, not merely ignored.
     assert CONF_PARTICIPATES not in entry.data[CONF_ROOMS][0]
     assert CONF_LIVE_CONTROL not in entry.options
     assert _LEGACY_KILL_SWITCH not in entry.options
 
 
-async def test_migrate_no_options_defaults_every_room_to_shadow(
+async def test_migrate_v1_no_options_defaults_every_room_to_off(
     hass: HomeAssistant,
 ) -> None:
-    """A v1 entry with no options migrates every room to the safe shadow state."""
+    """A v1 entry with no options migrates every room to the safe off state."""
     rooms = [
         {CONF_ROOM_NAME: "Salon", CONF_PARTICIPATES: True},
         {CONF_ROOM_NAME: "Lazienka", CONF_PARTICIPATES: True},
     ]
-    entry = _v1_entry(hass, rooms=rooms, options={})
+    entry = _entry(hass, rooms=rooms, options={})
 
     assert await async_migrate_entry(hass, entry)
 
+    assert entry.version == 3
     assert entry.options[CONF_ROOM_STATE] == {
-        "Salon": ROOM_STATE_SHADOW,
-        "Lazienka": ROOM_STATE_SHADOW,
+        "Salon": ROOM_STATE_OFF,
+        "Lazienka": ROOM_STATE_OFF,
     }
 
 
@@ -143,12 +157,12 @@ async def test_migrate_ignores_unknown_rooms_in_live_map(
         CONF_LIVE_CONTROL: {"Salon": False, "Ghost": True},
         _LEGACY_KILL_SWITCH: True,
     }
-    entry = _v1_entry(hass, rooms=rooms, options=options)
+    entry = _entry(hass, rooms=rooms, options=options)
 
     assert await async_migrate_entry(hass, entry)
 
     # Only the real room appears in the state map; the phantom room is not.
-    assert entry.options[CONF_ROOM_STATE] == {"Salon": ROOM_STATE_SHADOW}
+    assert entry.options[CONF_ROOM_STATE] == {"Salon": ROOM_STATE_OFF}
     assert "Ghost" not in entry.options[CONF_ROOM_STATE]
     # Both legacy option keys are gone.
     assert CONF_LIVE_CONTROL not in entry.options
@@ -160,7 +174,7 @@ async def test_migrate_removes_retired_switch_entities(
 ) -> None:
     """The retired kill-switch + per-room live-control switches are purged."""
     rooms = [{CONF_ROOM_NAME: "Salon", CONF_PARTICIPATES: True}]
-    entry = _v1_entry(hass, rooms=rooms, options={CONF_LIVE_CONTROL: {"Salon": True}})
+    entry = _entry(hass, rooms=rooms, options={CONF_LIVE_CONTROL: {"Salon": True}})
 
     registry = er.async_get(hass)
     # Pre-seed the legacy switch entities under their frozen v1 unique ids.
@@ -186,10 +200,57 @@ async def test_migrate_removes_retired_switch_entities(
     )
 
 
+# -- v2 -> v3 (shadow removal, 2026-07-12) -----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("v2_state", "expected"),
+    [
+        (ROOM_STATE_SHADOW, ROOM_STATE_OFF),
+        (ROOM_STATE_OFF, ROOM_STATE_OFF),
+        (ROOM_STATE_LIVE, ROOM_STATE_LIVE),
+        ("garbage", ROOM_STATE_OFF),
+    ],
+)
+async def test_migrate_v2_state_conversion(
+    hass: HomeAssistant, v2_state: str, expected: str
+) -> None:
+    """v2 -> v3 maps shadow (and garbage) to off; off/live stay themselves."""
+    entry = _entry(
+        hass,
+        rooms=[{CONF_ROOM_NAME: "Salon"}],
+        options={CONF_ROOM_STATE: {"Salon": v2_state}},
+        version=2,
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert entry.version == 3
+    assert entry.options[CONF_ROOM_STATE] == {"Salon": expected}
+
+
+async def test_migrate_v2_without_state_map_does_not_invent_one(
+    hass: HomeAssistant,
+) -> None:
+    """A v2 entry lacking CONF_ROOM_STATE stays without it (coordinator defaults)."""
+    entry = _entry(
+        hass,
+        rooms=[{CONF_ROOM_NAME: "Salon"}],
+        options={"unrelated": True},
+        version=2,
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert entry.version == 3
+    assert CONF_ROOM_STATE not in entry.options
+    assert entry.options.get("unrelated") is True
+
+
 async def test_migrate_rejects_newer_version(hass: HomeAssistant) -> None:
     """A version newer than the code knows about is refused (no downgrade)."""
-    entry = _v1_entry(hass, rooms=[{CONF_ROOM_NAME: "Salon"}])
-    hass.config_entries.async_update_entry(entry, version=3)
+    entry = _entry(hass, rooms=[{CONF_ROOM_NAME: "Salon"}])
+    hass.config_entries.async_update_entry(entry, version=4)
 
     assert await async_migrate_entry(hass, entry) is False
 
@@ -199,12 +260,13 @@ async def test_v1_entry_sets_up_and_migrates(
     register_sources: None,
     entry_data: dict[str, Any],
 ) -> None:
-    """A real v1 entry migrates and loads cleanly through async_setup.
+    """A real v1 entry migrates through the chain and loads via async_setup.
 
     ``entry_data`` (from conftest) carries ``participates`` on both rooms; a
     seeded ``live_control`` map plus a stray ``kill_switch`` exercise the full
-    legacy surface. The Salon promotion to live is harmless: actuator services
-    are mocked, so the first refresh's writes are captured, not dispatched.
+    legacy surface. Salon (live) stays live; Lazienka (no live_control entry)
+    passes through the intermediate shadow and lands on off. Actuator services
+    are mocked, so the first refresh's live writes are captured, not dispatched.
     """
     for domain, service in (
         ("number", "set_value"),
@@ -229,18 +291,18 @@ async def test_v1_entry_sets_up_and_migrates(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    # The entry loaded on the migrated (v2) schema.
+    # The entry loaded on the migrated (v3) schema.
     assert entry.state is ConfigEntryState.LOADED
-    assert entry.version == 2
+    assert entry.version == 3
 
     coordinator = entry.runtime_data.coordinator
-    # participates=True + live=True -> live; the other room -> shadow.
+    # participates=True + live=True -> live; the other room -> shadow -> off.
     assert coordinator.get_room_state("Salon") == ROOM_STATE_LIVE
-    assert coordinator.get_room_state("Lazienka") == ROOM_STATE_SHADOW
+    assert coordinator.get_room_state("Lazienka") == ROOM_STATE_OFF
 
     assert entry.options[CONF_ROOM_STATE] == {
         "Salon": ROOM_STATE_LIVE,
-        "Lazienka": ROOM_STATE_SHADOW,
+        "Lazienka": ROOM_STATE_OFF,
     }
     # Legacy keys are gone from options and every room dict.
     assert CONF_LIVE_CONTROL not in entry.options

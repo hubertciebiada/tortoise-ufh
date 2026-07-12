@@ -59,7 +59,7 @@
       },
       "confirm": {
         "title": "Confirm Setup",
-        "description": "Tortoise-UFH will be set up with {num_rooms} room(s) at location ({latitude}, {longitude}), home setpoint {home_setpoint} °C. Rooms start in shadow (read-only) mode until promoted to live control. Confirm to complete setup."
+        "description": "Tortoise-UFH will be set up with {num_rooms} room(s) at location ({latitude}, {longitude}), home setpoint {home_setpoint} °C. Rooms start in the Off state — nothing is written to your hardware until you switch a room to Live. Confirm to complete setup."
       }
     },
     "error": {
@@ -95,7 +95,7 @@
       },
       "settings": {
         "title": "Control & Tuning",
-        "description": "Set each room's control state — off (excluded from control), shadow (computed and reported only) or live (drives its valves and fast source) — and adjust the advanced controller gains. The panel and the per-room control-state select entities are the primary surface; this form is an emergency / automation-free fallback.",
+        "description": "Set each room's control state — off (excluded from control, nothing is written to the hardware) or live (drives its valves and fast source) — and adjust the advanced controller gains. The panel and the per-room control-state select entities are the primary surface; this form is an emergency / automation-free fallback.",
         "data": {
           "kp": "Proportional gain kp (%/K)",
           "ki": "Integral gain ki (%/(K·s))",
@@ -190,7 +190,6 @@
         "name": "Control state",
         "state": {
           "off": "Off",
-          "shadow": "Shadow",
           "live": "Live"
         }
       }
@@ -257,8 +256,43 @@
     "control_state": {
       "options": {
         "off": "Off",
-        "shadow": "Shadow",
         "live": "Live"
+      }
+    }
+  },
+  "services": {
+    "set_home_temperature": {
+      "name": "Set home temperature",
+      "description": "Set the global home target temperature in degrees Celsius. Per-room setpoints are derived as home temperature plus each room's offset.",
+      "fields": {
+        "temperature": {
+          "name": "Temperature",
+          "description": "Global home target temperature in degrees Celsius."
+        }
+      }
+    },
+    "set_room_offset": {
+      "name": "Set room offset",
+      "description": "Set the temperature offset for a single room in kelvin. The room setpoint equals the global home temperature plus this offset.",
+      "fields": {
+        "room": {
+          "name": "Room",
+          "description": "Identifier of the room to adjust."
+        },
+        "offset": {
+          "name": "Offset",
+          "description": "Temperature offset for the room in kelvin (relative to home)."
+        }
+      }
+    },
+    "set_mode": {
+      "name": "Set mode",
+      "description": "Set the global operating mode of the Tortoise-UFH system.",
+      "fields": {
+        "mode": {
+          "name": "Mode",
+          "description": "Operating mode of the system (heating / transitional / cooling / off)."
+        }
       }
     }
   }

@@ -51,7 +51,7 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   core via `.core`; is imported by nothing.
 - **Panel** — `custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js`. Self-contained
   vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Four tabs — Rooms (table
-  with the per-room three-state control), Tuning, Valves, Assist — rendering the black-box
+  with the per-room two-state control), Tuning, Valves, Assist — rendering the black-box
   report.
 - **Simulator** — `custom_components/tortoise_ufh/core/simulator.py` (`BuildingSimulator` +
   `SimulatedRoom`). Digital twin for offline tests. Crucially, `get_all_measurements()`
@@ -84,16 +84,17 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
 - **Split = ON + mode + temp, anti priority-inversion.** The split decision NEVER reduces or
   holds the valve — the floor stays the base source. Split only *adds* boost above
   `boost_offset_c` and releases inside the comfort band. Respects min-ON / min-OFF timers.
-- **Per-room control state (`RoomControlState = off | shadow | live`).** One canonical
-  three-state per room (adapter `select` entity + panel + `set_room_state` WS), stored in
-  `entry.options[CONF_ROOM_STATE]`; new rooms default to `shadow`. `off` ⇒ core sees `Mode.OFF`
-  (reports valve 0 %, fast source off — nothing is written, so the actuator stays untouched);
-  `shadow` ⇒ compute + report but emit NO commands; `live` ⇒ compute, report AND write. A
+- **Per-room control state (`RoomControlState = off | live`).** One canonical
+  two-state per room (adapter `select` entity + panel + `set_room_state` WS), stored in
+  `entry.options[CONF_ROOM_STATE]`; new/unknown rooms default to `off`. `off` ⇒ core sees
+  `Mode.OFF` (reports valve 0 %, fast source off — nothing is written, so the actuator stays
+  untouched); `live` ⇒ compute, report AND write. A
   state-only change via the select/panel/WS path does NOT reload the entry (PID integrator
-  preserved). A whole-home stop =
-  every room `off`/`shadow`. This REVERSED the frozen global kill-switch + per-room
-  live-control-boolean decision (2026-07-09, v0.3.0 breaking, config-entry migration v1→v2;
-  see docs/DECISIONS.md §4).
+  preserved). A whole-home stop = every room `off`. History: the v0.3.0 three-state
+  (`off|shadow|live`, migration v1→v2; DECISIONS §4) REVERSED the frozen kill-switch +
+  per-room boolean decision; the `shadow` (dry-run) state was then PERMANENTLY removed
+  2026-07-12 (v0.7.0 breaking, migration v2→v3 maps `shadow`→`off`, the v1→v3 chain runs in
+  one call; DECISIONS §13, PRD §8.12).
 - **Sensor loss ⇒ freeze valve + split off** (see valve rule above). Integrator freezes when
   `hp_active_for_ufh is False` (DHW/defrost) — since 2026-07-08 a DORMANT optional feature
   (the owner has a buffer tank; `CONF_ENTITY_HP_ACTIVE` unset ⇒ `None` by default; PRD §8.3).

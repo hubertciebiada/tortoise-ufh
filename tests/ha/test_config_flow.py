@@ -44,8 +44,8 @@ from custom_components.tortoise_ufh.const import (
     DOMAIN,
     FAST_SOURCE_KIND_NONE,
     FAST_SOURCE_KIND_SPLIT,
+    ROOM_STATE_LIVE,
     ROOM_STATE_OFF,
-    ROOM_STATE_SHADOW,
     VALID_TEMP_UNITS,
 )
 from custom_components.tortoise_ufh.entity_validator import EntityValidator
@@ -269,19 +269,25 @@ async def test_options_flow_saves_room_state_and_knobs(
     assert "kill_switch" not in schema_keys
     assert "kp" in schema_keys
 
-    # Off / shadow are write-free, so this settings save (which reloads the
-    # entry) never drives an actuator during the ensuing refresh.
+    # Lazienka goes live, so the reloaded entry's first refresh writes its
+    # actuators — capture the writes instead of dispatching them.
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    async_mock_service(hass, "number", "set_value")
+    async_mock_service(hass, "climate", "set_hvac_mode")
+    async_mock_service(hass, "climate", "set_temperature")
+
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {"room_state_0": ROOM_STATE_OFF, "room_state_1": ROOM_STATE_SHADOW},
+        {"room_state_0": ROOM_STATE_OFF, "room_state_1": ROOM_STATE_LIVE},
     )
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    # Salon (index 0) switched off, Lazienka (index 1) left in shadow.
+    # Salon (index 0) stays off, Lazienka (index 1) promoted to live.
     assert entry.options[CONF_ROOM_STATE] == {
         "Salon": ROOM_STATE_OFF,
-        "Lazienka": ROOM_STATE_SHADOW,
+        "Lazienka": ROOM_STATE_LIVE,
     }
     assert CONF_CONTROLLER in entry.options
 
@@ -309,7 +315,7 @@ async def test_settings_save_preserves_room_tuning(
     )
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {"room_state_0": ROOM_STATE_OFF, "room_state_1": ROOM_STATE_SHADOW},
+        {"room_state_0": ROOM_STATE_OFF, "room_state_1": ROOM_STATE_OFF},
     )
     await hass.async_block_till_done()
 
@@ -463,7 +469,7 @@ async def test_options_flow_remove_room_cleans_registry(
     entry = setup_integration
 
     # Seed a control-state map so the prune of the removed room is observable.
-    # Both rooms stay in shadow (write-free), so the reloaded coordinator emits
+    # Both rooms stay off (write-free), so the reloaded coordinator emits
     # no valve writes; the seed matches the in-memory state, so it does not even
     # force a reload here.
     hass.config_entries.async_update_entry(
@@ -471,8 +477,8 @@ async def test_options_flow_remove_room_cleans_registry(
         options={
             **entry.options,
             CONF_ROOM_STATE: {
-                "Salon": ROOM_STATE_SHADOW,
-                "Lazienka": ROOM_STATE_SHADOW,
+                "Salon": ROOM_STATE_OFF,
+                "Lazienka": ROOM_STATE_OFF,
             },
         },
     )
@@ -521,7 +527,7 @@ async def test_options_flow_remove_room_cleans_registry(
     # The control-state map no longer mentions the removed room; Salon survives.
     room_state = entry.options.get(CONF_ROOM_STATE, {})
     assert "Lazienka" not in room_state
-    assert room_state.get("Salon") == ROOM_STATE_SHADOW
+    assert room_state.get("Salon") == ROOM_STATE_OFF
 
     # The removed room's device is gone too; Salon's device survives.
     device_registry = dr.async_get(hass)

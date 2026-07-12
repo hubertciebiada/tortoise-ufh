@@ -35,7 +35,7 @@ First run: create a local account, then **Settings → Devices & Services → Ad
 Tortoise-UFH**. Point the global mode entity at `input_select.tortoise_home_mode` (pre-created
 in `config/configuration.yaml`). Add fake room temperature / humidity / valve entities via
 **Settings → Devices & Services → Helpers** (or template sensors) to drive the controller
-without real hardware. Rooms start in the **shadow** control state — nothing is written until you
+without real hardware. Rooms start in the **off** control state — nothing is written until you
 switch a room's control state to **live** (`select.<room>_control_state`), so it is
 safe to explore.
 

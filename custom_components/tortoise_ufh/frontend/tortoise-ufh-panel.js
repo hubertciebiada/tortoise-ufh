@@ -7,7 +7,9 @@
  * Assist) + a master/detail room inspector (a sticky side column on wide
  * screens, a right-side overlay drawer on narrow ones), and lets an admin
  * edit the global home temperature, mode, per-room offset and each room's
- * three-state control (off / shadow / live). It talks to the integration
+ * two-state control (off / live). Tuning knobs and the harder decision
+ * fields carry an "i" info button feeding ONE shared, CSP-safe tooltip
+ * element (hover + keyboard focus + tap). It talks to the integration
  * exclusively through the `tortoise_ufh/*` websocket commands (get_config /
  * get_live / set_*).
  *
@@ -55,20 +57,20 @@ const MODES = ["heating", "transitional", "cooling", "off"];
 
 /** Canonical per-room control state (mirrors the adapter's `ROOM_STATES`). */
 const STATE_OFF = "off";
-const STATE_SHADOW = "shadow";
 const STATE_LIVE = "live";
-const ROOM_STATES = [STATE_OFF, STATE_SHADOW, STATE_LIVE];
+const ROOM_STATES = [STATE_OFF, STATE_LIVE];
 
 /**
- * Three-state segment control metadata (column 1 of the room table).
+ * Two-state segment control metadata (column 1 of the room table).
  *
  * One button per state, rendered as an icon with a tooltip; the active state's
  * button is highlighted. Icons resolve through `_icon` (native `<ha-icon>` when
- * available, else a plain-glyph fallback — CSP-safe either way).
+ * available, else a plain-glyph fallback — CSP-safe either way). (The former
+ * third state `shadow` was removed 2026-07-12, v0.7.0; migration maps it to
+ * `off`.)
  */
 const STATE_META = [
   { state: STATE_OFF, icon: "mdi:power", glyph: "⏻", key: "state_off" },
-  { state: STATE_SHADOW, icon: "mdi:eye-outline", glyph: "◎", key: "state_shadow" },
   { state: STATE_LIVE, icon: "mdi:play", glyph: "▶", key: "state_live" },
 ];
 
@@ -175,7 +177,6 @@ const STR = {
     card_setpoint: "Zadana",
     card_offset: "korekta {v}",
     state_off: "Wyłączony",
-    state_shadow: "Obserwuje",
     state_live: "Steruje",
     assist_split: "Split",
     assist_heater: "Grzałka",
@@ -185,13 +186,11 @@ const STR = {
     assist_state_cooling: "chłodzi",
     kind_split: "Klimatyzator (split)",
     kind_heater: "Grzałka elektryczna",
-    kind_none: "brak wspomagania",
     detail_close: "Zamknij",
     sec_wiring: "Okablowanie",
     sec_decision: "Decyzja regulatora",
     sec_history: "Historia",
     sec_diagnostics: "Encje diagnostyczne",
-    history_soon: "Ładowanie historii…",
     chart_temp: "Temperatura",
     chart_setpoint: "Zadana",
     chart_valve: "Zawór",
@@ -242,7 +241,6 @@ const STR = {
     tune_saved: "Zapisano",
     tune_overridden: "nadpisane",
     tune_revert: "Wróć do globalnej",
-    tune_inherited: "globalna",
     tune_on: "wł.",
     tune_off: "wył.",
     tune_kp: "Wzmocnienie P",
@@ -298,6 +296,140 @@ const STR = {
     dew_reason_no_temperature: "brak pomiaru temperatury",
     dew_none_collective: "{n} pokoi bez danych do punktu rosy",
     dec_dew_reason: "Powód braku punktu rosy",
+    err_ws: "Błąd połączenia z integracją: {detail}",
+    tooltip_show: "Pokaż objaśnienie",
+    tooltip_hide: "Ukryj objaśnienie",
+    // Tooltipy knobów strojenia (tip_knob_*) — treść wspólna z
+    // docs/INSTRUKCJA.md §8: zmieniaj OBA miejsca razem.
+    tip_knob_kp:
+      "Wzmocnienie proporcjonalne: ile procent otwarcia zaworu dodaje każdy " +
+      "1 K uchybu (zadana − zmierzona). Wyższe = szybsza reakcja, ale większe " +
+      "ryzyko przeregulowania bezwładnej podłogi. Domyślnie 14; typowo 8–20. " +
+      "Ruszaj małymi krokami i obserwuj dobę.",
+    tip_knob_ki:
+      "Wzmocnienie całkujące: jak szybko regulator dokłada otwarcie, gdy mały " +
+      "uchyb utrzymuje się godzinami — usuwa trwały niedogrzew. Wartości są " +
+      "celowo bardzo małe (sekundy w mianowniku). Domyślnie 0,0015. Za duże " +
+      "ki = powolne bujanie temperatury wokół zadanej.",
+    tip_knob_kt:
+      "Człon trendu (tłumienie): patrzy na tempo zmian temperatury. Gdy pokój " +
+      "szybko zmierza do zadanej, przymyka zawór zawczasu i ogranicza " +
+      "przestrzelenie bezwładnej podłogi. Domyślnie 12. Zwykle nie wymaga zmian.",
+    tip_knob_deadband_c:
+      "Strefa nieczułości wokół zadanej (±): wewnątrz niej regulator nie goni " +
+      "drobnych odchyłek, co zmniejsza ruchy zaworów i taktowanie. Domyślnie " +
+      "0,3 K; typowo 0,2–0,5 K.",
+    tip_knob_valve_floor_pct:
+      "Minimalne otwarcie zaworu, gdy pokój wzywa ciepło: nie schodzimy " +
+      "poniżej tej wartości, żeby w pętli był sensowny przepływ. Domyślnie " +
+      "15 %. 0 wyłącza minimum.",
+    tip_knob_boost_offset_c:
+      "Próg dogrzewu: gdy uchyb przekroczy tę wartość, włącza się szybkie " +
+      "źródło (split/grzałka). Split puszcza z powrotem wewnątrz pasma " +
+      "komfortu; podłoga zawsze zostaje źródłem bazowym. Musi być większy niż " +
+      "strefa nieczułości. Domyślnie 1,0 K.",
+    tip_knob_fast_min_on_minutes:
+      "Minimalny czas pracy szybkiego źródła po włączeniu. Chroni sprężarkę " +
+      "splita przed taktowaniem i uspokaja zmiany kierunku w grupie " +
+      "multisplit. Domyślnie 10 min; minimum 3.",
+    tip_knob_fast_min_off_minutes:
+      "Minimalny czas postoju szybkiego źródła po wyłączeniu, zanim wolno je " +
+      "włączyć ponownie. Domyślnie 10 min; minimum 3.",
+    tip_knob_dew_margin_k:
+      "Chłodzenie: gdy zasilanie jest co najmniej o tyle K powyżej punktu " +
+      "rosy, zawór działa bez ograniczeń; bliżej rosy zaczyna się dławienie " +
+      "przepływu (ochrona przed kondensacją na podłodze). Domyślnie 2 K; " +
+      "zwiększ, jeśli widzisz wilgoć.",
+    tip_knob_dew_ramp_k:
+      "Szerokość rampy dławienia poniżej marginesu rosy: na tym odcinku " +
+      "przepływ maleje liniowo od 100 % do 0. Mniejsza wartość = ostrzejsze " +
+      "odcinanie. Domyślnie 2 K.",
+    tip_knob_outdoor_ff_enabled:
+      "Sprzężenie pogodowe: dodaje bazowe otwarcie zaworu zależne od " +
+      "temperatury zewnętrznej, zanim pokój zdąży się wychłodzić. Przydatne " +
+      "przy dużych przeszkleniach i mrozach. Domyślnie wyłączone.",
+    tip_knob_ff_neutral_c:
+      "Temperatura zewnętrzna, przy której człon pogodowy wynosi zero; " +
+      "poniżej niej każdy 1 K chłodniej dodaje otwarcie według wzmocnienia " +
+      "FF. Domyślnie 15 °C.",
+    tip_knob_ff_gain_pct_per_k:
+      "Ile procent otwarcia dodaje człon pogodowy za każdy 1 K poniżej " +
+      "temperatury neutralnej. Domyślnie 1 %/K.",
+    tip_knob_ff_max_pct:
+      "Górny limit członu pogodowego — sprzężenie nigdy nie doda więcej niż " +
+      "tyle procent otwarcia. Domyślnie 20 %.",
+    // Tooltipy szczegółów pokoju (tip_dec_*) i nagłówków tabel (tip_val_* /
+    // tip_ast_*) — treść wspólna z docs/INSTRUKCJA.md: zmieniaj razem.
+    tip_dec_error:
+      "Uchyb = zadana − zmierzona. Dodatni znaczy: za zimno (w grzaniu " +
+      "otwiera zawór); w chłodzeniu znak działa odwrotnie.",
+    tip_dec_trend:
+      "Filtrowane tempo zmian temperatury pokoju w K/h. To wejście członu " +
+      "trendu — szybki wzrost ku zadanej przymyka zawór zawczasu. Po przerwie " +
+      "w danych filtr potrzebuje ~30–45 min rozgrzewki.",
+    tip_dec_terms:
+      "Z czego składa się surowe otwarcie: P reaguje na bieżący uchyb, I na " +
+      "uchyb utrzymujący się w czasie, Trend tłumi rozpędzoną temperaturę, FF " +
+      "dodaje bazę pogodową. Suma = zawór surowy.",
+    tip_dec_raw_valve:
+      "Otwarcie policzone przez regulator PRZED limitami: minimalnym " +
+      "otwarciem, obcięciem 0–100 % i regułami bezpieczeństwa.",
+    tip_dec_final_valve:
+      "Otwarcie faktycznie komenderowane do siłowników (po limitach i " +
+      "regułach bezpieczeństwa). Jedna wartość dla wszystkich pętli pokoju.",
+    tip_dec_throttle:
+      "Współczynnik dławienia przy punkcie rosy (tylko chłodzenie): 100 % = " +
+      "bez ograniczeń, 0 % = zawór zamknięty, bo zasilanie zeszło do punktu " +
+      "rosy (flaga s2_throttle). 0 % pojawia się też zachowawczo, gdy " +
+      "brakuje danych o wilgotności lub temperaturze zasilania.",
+    tip_dec_integrator:
+      "Pamięć członu całkującego. „Zamrożony” znaczy: celowo wstrzymana — " +
+      "np. pompa ciepła robi CWU/odszranianie, czujnik zgubiony albo pokój " +
+      "wyłączony — żeby całka nie narosła fałszywie.",
+    tip_dec_saturated:
+      "Zawór uderzył w ogranicznik 0 lub 100 %. Regulator chce więcej, niż " +
+      "fizycznie się da; anty-nasycenie pilnuje, by całka nie rosła w ścianę.",
+    tip_dec_floor:
+      "Czy zadziałało minimalne otwarcie przy grzaniu (parametr „Minimalne " +
+      "otwarcie zaworu”).",
+    tip_dec_dew:
+      "Punkt rosy policzony z temperatury i wilgotności pokoju. Poniżej tej " +
+      "temperatury na podłodze skrapla się woda — stąd obie ochrony przy " +
+      "chłodzeniu. Obok: powód, gdy pokój nie wnosi wkładu do globalnego " +
+      "bezpiecznego punktu rosy.",
+    tip_dec_fast:
+      "Komenda dla splita/grzałki: włącz + kierunek + temperatura zadana. " +
+      "Split reguluje się sam; podłogi nigdy nie wyręcza, tylko " +
+      "dogrzewa/dochładza powyżej progu dogrzewu.",
+    tip_dec_flags:
+      "Flagi diagnostyczne tego cyklu — każda mówi, które zabezpieczenie lub " +
+      "ograniczenie zadziałało. Pełny słownik flag znajdziesz w instrukcji " +
+      "(docs/INSTRUKCJA.md §11).",
+    tip_val_raw:
+      "Otwarcie policzone przez regulator przed limitami (minimalne otwarcie, " +
+      "obcięcie 0–100 %, reguły bezpieczeństwa). Najedź na wartość, by " +
+      "zobaczyć wkład członów P/I/Trend/FF.",
+    tip_val_floor:
+      "Czy zadziałało minimalne otwarcie przy grzaniu (parametr „Minimalne " +
+      "otwarcie zaworu”).",
+    tip_val_sat:
+      "Zawór uderzył w ogranicznik 0 lub 100 % — regulator chce więcej, niż " +
+      "fizycznie się da; anty-nasycenie pilnuje, by całka nie rosła w ścianę.",
+    tip_val_s2:
+      "Dławienie przepływu przy punkcie rosy (tylko chłodzenie): 100 % = bez " +
+      "ograniczeń, 0 % = zawór zamknięty (flaga s2_throttle; także " +
+      "zachowawczo przy braku danych o wilgotności lub zasilaniu).",
+    tip_val_feedback:
+      "Pozycja raportowana przez siłownik; trwała rozbieżność z komendą " +
+      "podnosi flagę valve_mismatch.",
+    tip_ast_timer:
+      "Blokada minimalnego czasu pracy/postoju: tyle jeszcze musi upłynąć, " +
+      "zanim wspomaganie może zmienić stan. Chroni sprężarkę.",
+    tip_ast_group:
+      "Pokoje na wspólnym agregacie (multisplit) muszą chłodzić albo grzać " +
+      "razem. Przegrany arbitrażu jest przymusowo wyłączony do czasu zmiany " +
+      "kierunku grupy (wygrywa większa potrzeba, urzędujący kierunek ma bonus " +
+      "0,5 K).",
   },
   en: {
     status_running: "Running · cycle {age}",
@@ -338,7 +470,6 @@ const STR = {
     card_setpoint: "Setpoint",
     card_offset: "offset {v}",
     state_off: "Off",
-    state_shadow: "Shadow",
     state_live: "Live",
     assist_split: "Split",
     assist_heater: "Heater",
@@ -348,13 +479,11 @@ const STR = {
     assist_state_cooling: "cooling",
     kind_split: "Air-con (split)",
     kind_heater: "Electric heater",
-    kind_none: "no assist",
     detail_close: "Close",
     sec_wiring: "Wiring",
     sec_decision: "Controller decision",
     sec_history: "History",
     sec_diagnostics: "Diagnostic entities",
-    history_soon: "Loading history…",
     chart_temp: "Temperature",
     chart_setpoint: "Setpoint",
     chart_valve: "Valve",
@@ -405,7 +534,6 @@ const STR = {
     tune_saved: "Saved",
     tune_overridden: "overridden",
     tune_revert: "Revert to global",
-    tune_inherited: "global",
     tune_on: "on",
     tune_off: "off",
     tune_kp: "P gain",
@@ -461,6 +589,138 @@ const STR = {
     dew_reason_no_temperature: "no temperature reading",
     dew_none_collective: "{n} rooms lack dew-point data",
     dec_dew_reason: "Safe dew-point exclusion",
+    err_ws: "Integration call failed: {detail}",
+    tooltip_show: "Show explanation",
+    tooltip_hide: "Hide explanation",
+    // Tuning-knob tooltips (tip_knob_*) — content shared with
+    // docs/INSTRUKCJA.md §8: change BOTH places together.
+    tip_knob_kp:
+      "Proportional gain: how many percent of valve opening each 1 K of error " +
+      "(setpoint − measured) adds. Higher reacts faster but risks overshoot " +
+      "on a high-mass floor. Default 14; typical 8–20. Change in small steps " +
+      "and watch a full day.",
+    tip_knob_ki:
+      "Integral gain: how quickly the controller adds opening while a small " +
+      "error persists for hours — removes steady-state offset. Values are " +
+      "deliberately tiny (seconds in the denominator). Default 0.0015. Too " +
+      "high = slow temperature oscillation around the setpoint.",
+    tip_knob_kt:
+      "Trend damping: watches how fast the temperature is moving. When the " +
+      "room is closing on the setpoint quickly it eases the valve early, " +
+      "taming overshoot of the high-mass floor. Default 12. Rarely needs " +
+      "changing.",
+    tip_knob_deadband_c:
+      "Deadband around the setpoint (±): inside it the controller does not " +
+      "chase tiny deviations, reducing valve travel and cycling. Default " +
+      "0.3 K; typical 0.2–0.5 K.",
+    tip_knob_valve_floor_pct:
+      "Minimum valve opening while the room calls for heat, keeping a " +
+      "sensible flow in the loop. Default 15 %. 0 disables the floor.",
+    tip_knob_boost_offset_c:
+      "Boost threshold: once the error exceeds this, the fast source " +
+      "(split/heater) engages. It releases inside the comfort band; the floor " +
+      "always stays the base source. Must exceed the deadband. Default 1.0 K.",
+    tip_knob_fast_min_on_minutes:
+      "Minimum runtime of the fast source once switched on. Protects the " +
+      "split compressor from short-cycling and calms direction changes on a " +
+      "multisplit group. Default 10 min; minimum 3.",
+    tip_knob_fast_min_off_minutes:
+      "Minimum off-time of the fast source before it may start again. " +
+      "Default 10 min; minimum 3.",
+    tip_knob_dew_margin_k:
+      "Cooling: while supply is at least this many K above the dew point the " +
+      "valve runs unrestricted; closer to the dew point the flow gets " +
+      "throttled (floor condensation protection). Default 2 K; raise it if " +
+      "you ever see moisture.",
+    tip_knob_dew_ramp_k:
+      "Width of the throttle ramp below the dew margin: over this span the " +
+      "flow falls linearly from 100 % to 0. Smaller = sharper cut-off. " +
+      "Default 2 K.",
+    tip_knob_outdoor_ff_enabled:
+      "Weather feedforward: adds a baseline valve opening based on outdoor " +
+      "temperature, before the room has time to cool down. Useful with large " +
+      "glazing and cold snaps. Off by default.",
+    tip_knob_ff_neutral_c:
+      "Outdoor temperature at which the weather term is zero; below it every " +
+      "1 K colder adds opening per the FF gain. Default 15 °C.",
+    tip_knob_ff_gain_pct_per_k:
+      "How many percent of opening the weather term adds per 1 K below the " +
+      "neutral temperature. Default 1 %/K.",
+    tip_knob_ff_max_pct:
+      "Upper cap on the weather term — the feedforward never adds more than " +
+      "this many percent of opening. Default 20 %.",
+    // Room-detail tooltips (tip_dec_*) and table-header tooltips (tip_val_* /
+    // tip_ast_*) — content shared with docs/INSTRUKCJA.md: change together.
+    tip_dec_error:
+      "Error = setpoint − measured. Positive means too cold (opens the valve " +
+      "in heating); in cooling the sign works the other way.",
+    tip_dec_trend:
+      "Filtered rate of room-temperature change in K/h. Feeds the trend term " +
+      "— a fast rise toward the setpoint eases the valve early. After a data " +
+      "gap the filter needs ~30–45 min to warm up.",
+    tip_dec_terms:
+      "What the raw opening is made of: P reacts to the current error, I to " +
+      "error persisting over time, Trend damps a fast-moving temperature, FF " +
+      "adds the weather baseline. Their sum = raw valve.",
+    tip_dec_raw_valve:
+      "Opening computed by the controller BEFORE limits: the valve floor, the " +
+      "0–100 % clamp and the safety rules.",
+    tip_dec_final_valve:
+      "Opening actually commanded to the actuators (after limits and safety " +
+      "rules). One value for all of the room's loops.",
+    tip_dec_throttle:
+      "Dew-point throttle factor (cooling only): 100 % = unrestricted, 0 % = " +
+      "valve shut because supply reached the dew point (flag s2_throttle). " +
+      "0 % is also applied conservatively when humidity or supply data is " +
+      "missing.",
+    tip_dec_integrator:
+      "The integral term's memory. 'Frozen' means deliberately paused — e.g. " +
+      "the heat pump is doing DHW/defrost, a sensor is lost or the room is " +
+      "off — so the integral cannot wind up falsely.",
+    tip_dec_saturated:
+      "The valve hit the 0 or 100 % bound. The controller wants more than " +
+      "physics allows; anti-windup keeps the integral from climbing into the " +
+      "wall.",
+    tip_dec_floor:
+      "Whether the heating valve floor (the 'Valve floor' knob) was applied " +
+      "this cycle.",
+    tip_dec_dew:
+      "Dew point computed from room temperature and humidity. Below it water " +
+      "condenses on the floor — hence both cooling protections. Next to it: " +
+      "the reason when the room contributes nothing to the global safe dew " +
+      "point.",
+    tip_dec_fast:
+      "Command for the split/heater: on + direction + target temperature. " +
+      "The split self-regulates; it never replaces the floor, it only assists " +
+      "beyond the boost threshold.",
+    tip_dec_flags:
+      "This cycle's diagnostic flags — each names the protection or limit " +
+      "that acted. The full flag dictionary is in the manual " +
+      "(docs/INSTRUKCJA.md §11).",
+    tip_val_raw:
+      "Opening computed by the controller before limits (valve floor, 0–100 % " +
+      "clamp, safety rules). Hover the value to see the P/I/Trend/FF term " +
+      "contributions.",
+    tip_val_floor:
+      "Whether the heating valve floor (the 'Valve floor' knob) was applied " +
+      "this cycle.",
+    tip_val_sat:
+      "The valve hit the 0 or 100 % bound — the controller wants more than " +
+      "physics allows; anti-windup keeps the integral in check.",
+    tip_val_s2:
+      "Dew-point flow throttling (cooling only): 100 % = unrestricted, 0 % = " +
+      "valve shut (flag s2_throttle; also a conservative 0 % when humidity " +
+      "or supply data is missing).",
+    tip_val_feedback:
+      "The position the actuator reports; a persistent mismatch with the " +
+      "command raises valve_mismatch.",
+    tip_ast_timer:
+      "Min on/off dwell lock: this much time must still pass before the " +
+      "assist may change state. Protects the compressor.",
+    tip_ast_group:
+      "Rooms on a shared outdoor unit (multisplit) must all heat or all cool. " +
+      "The arbitration loser is forced off until the group direction changes " +
+      "(largest need wins; the incumbent direction gets a 0.5 K bonus).",
   },
 };
 
@@ -876,6 +1136,13 @@ class TortoiseUfhPanel extends HTMLElement {
     this._onVisibility = () => this._handleVisibility();
     this._hasHaIcon = false;
 
+    // Shared "i" tooltip: ONE positioned element serves every info button.
+    this._tipEl = null; // the floating bubble (built with the skeleton)
+    this._tipTextEl = null; // its text node holder
+    this._tipArrowEl = null; // its arrow
+    this._tipAnchor = null; // the info button the bubble is open for
+    this._tipHideTimer = null; // delayed-close timer (hover hand-off)
+
     // History-chart data cache, keyed by `${entityId}|${window}`.
     this._histCache = new Map(); // key -> { at: epochMs, data: [{t, v}] }
     this._histInflight = new Map(); // key -> Promise<{at, data}> (dedup in-flight)
@@ -1016,7 +1283,12 @@ class TortoiseUfhPanel extends HTMLElement {
   // --------------------------------------------------------------------------
 
   _resolveLang(hass) {
-    const raw = (hass && (hass.language || hass.selectedLanguage)) || "en";
+    const raw =
+      (hass &&
+        ((hass.locale && hass.locale.language) ||
+          hass.language ||
+          hass.selectedLanguage)) ||
+      "en";
     return String(raw).toLowerCase().startsWith("pl") ? "pl" : "en";
   }
 
@@ -1062,6 +1334,128 @@ class TortoiseUfhPanel extends HTMLElement {
   }
 
   // --------------------------------------------------------------------------
+  // Shared "i" info tooltip (one element; hover + focus + tap; CSP-safe)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Build an accessible "i" info button whose bubble text is `STR[strKey]`.
+   *
+   * Every info button shares the ONE `_tipEl` bubble (never dozens of hidden
+   * copies in the DOM). Desktop: hover shows, with a short close delay so the
+   * pointer can travel onto the bubble; keyboard: focus shows, blur/Escape
+   * hides; mobile: tap toggles (`pointerdown` snapshots the open state so the
+   * tap's focus event cannot re-open what the click just closed).
+   */
+  _infoIcon(strKey) {
+    const btn = h(
+      "button",
+      {
+        class: "info-btn",
+        type: "button",
+        "aria-label": this._t("tooltip_show"),
+        "aria-expanded": "false",
+        on: {
+          pointerdown: () => {
+            btn._tipWasOpen = this._tipAnchor === btn;
+          },
+          click: (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (btn._tipWasOpen) {
+              this._hideTip();
+            } else {
+              this._showTip(btn, strKey);
+            }
+          },
+          mouseenter: () => this._showTip(btn, strKey),
+          mouseleave: () => this._scheduleTipHide(),
+          focus: () => this._showTip(btn, strKey),
+          blur: () => this._hideTip(),
+        },
+      },
+      [this._icon("mdi:information-outline", "ⓘ")],
+    );
+    return btn;
+  }
+
+  /** Show the shared bubble for `btn`, positioned in viewport coordinates. */
+  _showTip(btn, strKey) {
+    const tip = this._tipEl;
+    if (!tip || !btn.isConnected) {
+      return;
+    }
+    this._cancelTipHide();
+    if (this._tipAnchor && this._tipAnchor !== btn) {
+      this._clearTipAnchor();
+    }
+    this._tipAnchor = btn;
+    this._tipTextEl.textContent = this._t(strKey);
+    // Reset before measuring so a previous clamp cannot skew the size.
+    tip.style.left = "0px";
+    tip.style.top = "0px";
+    tip.style.display = "";
+    const rect = btn.getBoundingClientRect();
+    const tw = tip.offsetWidth;
+    const th = tip.offsetHeight;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // Horizontal: centred on the icon, clamped to the viewport.
+    const left = clamp(rect.left + rect.width / 2 - tw / 2, 8, Math.max(8, vw - tw - 8));
+    // Vertical: below the icon by default, flipped above when short of room.
+    let top = rect.bottom + 8;
+    let above = false;
+    if (top + th > vh - 8 && rect.top - th - 8 >= 8) {
+      top = rect.top - th - 8;
+      above = true;
+    }
+    top = Math.max(8, top);
+    tip.style.left = left.toFixed(0) + "px";
+    tip.style.top = top.toFixed(0) + "px";
+    tip.classList.toggle("above", above);
+    // The arrow tracks the icon centre even when the bubble is clamped.
+    const arrowX = clamp(rect.left + rect.width / 2 - left, 12, Math.max(12, tw - 12));
+    this._tipArrowEl.style.left = arrowX.toFixed(0) + "px";
+    btn.setAttribute("aria-expanded", "true");
+    btn.setAttribute("aria-describedby", "tufh-tip");
+    btn.setAttribute("aria-label", this._t("tooltip_hide"));
+  }
+
+  /** Hide the shared bubble and clear the anchor's ARIA state. */
+  _hideTip() {
+    this._cancelTipHide();
+    if (this._tipEl) {
+      this._tipEl.style.display = "none";
+    }
+    this._clearTipAnchor();
+  }
+
+  _clearTipAnchor() {
+    const btn = this._tipAnchor;
+    this._tipAnchor = null;
+    if (btn) {
+      btn.setAttribute("aria-expanded", "false");
+      btn.removeAttribute("aria-describedby");
+      btn.setAttribute("aria-label", this._t("tooltip_show"));
+    }
+  }
+
+  /** Delayed close (hover hand-off from the icon onto the bubble). */
+  _scheduleTipHide() {
+    this._cancelTipHide();
+    this._tipHideTimer = window.setTimeout(() => {
+      this._tipHideTimer = null;
+      this._hideTip();
+    }, 250);
+  }
+
+  _cancelTipHide() {
+    if (this._tipHideTimer !== null) {
+      window.clearTimeout(this._tipHideTimer);
+      this._tipHideTimer = null;
+    }
+  }
+
+  // --------------------------------------------------------------------------
   // Websocket / data layer + user actions
   // --------------------------------------------------------------------------
 
@@ -1075,7 +1469,10 @@ class TortoiseUfhPanel extends HTMLElement {
       return result;
     } catch (err) {
       const detail = err && err.message ? err.message : String(err);
-      this._setError(`${message.type}: ${detail}`);
+      // Localised prefix; the technical detail stays verbatim after it.
+      this._setError(
+        fmtStr(this._t("err_ws"), { detail: `${message.type}: ${detail}` }),
+      );
       return null;
     }
   }
@@ -1421,9 +1818,9 @@ class TortoiseUfhPanel extends HTMLElement {
         fastKind: String(pick(c, ["fast_source_kind"], "none") || "none"),
         // Multisplit outdoor-unit group key (K9, 2026-07-12) — "" ungrouped.
         fastGroup: String(pick(c, ["fast_source_group"], "") || ""),
-        // Canonical three-state control: prefer the polled live value, then the
-        // config value, defaulting to shadow (safe, matches the adapter).
-        state: this._normState(pick(lv, ["control_state"], pick(c, ["control_state"], STATE_SHADOW))),
+        // Canonical two-state control: prefer the polled live value, then the
+        // config value, defaulting to off (safe, matches the adapter).
+        state: this._normState(pick(lv, ["control_state"], pick(c, ["control_state"], STATE_OFF))),
         cooling: !!pick(c, ["cooling_enabled"], false),
         // Additive report fields (F5): why the room is excluded from the global
         // safe dew point, and the fast-source min ON/OFF dwell lock remaining.
@@ -1456,10 +1853,10 @@ class TortoiseUfhPanel extends HTMLElement {
     return rank >= 2 ? "problem" : rank === 1 ? "warn" : "ok";
   }
 
-  /** Coerce any control-state value to one of `ROOM_STATES` (default shadow). */
+  /** Coerce any control-state value to one of `ROOM_STATES` (default off). */
   _normState(value) {
     const s = String(value);
-    return ROOM_STATES.includes(s) ? s : STATE_SHADOW;
+    return ROOM_STATES.includes(s) ? s : STATE_OFF;
   }
 
   /**
@@ -1691,22 +2088,63 @@ class TortoiseUfhPanel extends HTMLElement {
       on: { click: () => this._deselect() },
     });
     const layout = h("div", { class: "layout" }, [main, scrim, detail]);
+
+    // The single shared info tooltip (position: fixed, so no scroll container
+    // — the detail drawer included — can ever clip it).
+    this._tipTextEl = h("span", { class: "info-tip-text" });
+    this._tipArrowEl = h("span", { class: "info-tip-arrow", "aria-hidden": "true" });
+    this._tipEl = h(
+      "div",
+      {
+        class: "info-tip",
+        role: "tooltip",
+        id: "tufh-tip",
+        style: "display:none",
+        on: {
+          // Let the pointer travel onto the bubble (text selection).
+          mouseenter: () => this._cancelTipHide(),
+          mouseleave: () => this._scheduleTipHide(),
+        },
+      },
+      [this._tipArrowEl, this._tipTextEl],
+    );
+    this._tipAnchor = null;
+
     const wrap = h(
       "div",
       {
         class: "wrap",
         on: {
-          // Escape anywhere inside the panel closes the room inspector.
+          // Escape closes the info tooltip first, then the room inspector.
           keydown: (e) => {
+            if (e.key === "Escape" && this._tipAnchor) {
+              e.stopPropagation();
+              this._hideTip();
+              return;
+            }
             if (e.key === "Escape" && this._selectedRoom) {
               e.stopPropagation();
               this._deselect();
             }
           },
+          // A pointer press anywhere outside the tooltip and its anchor
+          // closes it (tap-away on mobile).
+          pointerdown: (e) => {
+            if (!this._tipAnchor) {
+              return;
+            }
+            const path = e.composedPath ? e.composedPath() : [];
+            if (!path.includes(this._tipEl) && !path.includes(this._tipAnchor)) {
+              this._hideTip();
+            }
+          },
         },
       },
-      [banner, hero, tabbar, layout],
+      [banner, hero, tabbar, layout, this._tipEl],
     );
+    // Any inner scroll (table wrap, detail drawer) invalidates the fixed
+    // position — just close the bubble.
+    wrap.addEventListener("scroll", () => this._hideTip(), true);
 
     this._els = {
       wrap,
@@ -2142,14 +2580,14 @@ class TortoiseUfhPanel extends HTMLElement {
   _buildRow(name) {
     const p = {};
 
-    // Column 1: three-state control segment (Off / Shadow / Live).
+    // Column 1: two-state control segment (Off / Live).
     p.stateBtns = {};
-    const seg = h("div", { class: "seg3", role: "group" });
+    const seg = h("div", { class: "seg-state", role: "group" });
     for (const meta of STATE_META) {
       const btn = h(
         "button",
         {
-          class: "seg3-btn",
+          class: "seg-state-btn",
           type: "button",
           title: this._t(meta.key),
           "aria-label": this._t(meta.key),
@@ -2255,7 +2693,7 @@ class TortoiseUfhPanel extends HTMLElement {
     tr.classList.toggle("off", r.state === STATE_OFF);
     p.dot.className = "dot sev-" + r.severity;
 
-    // Three-state segment: highlight the active state's button.
+    // Two-state segment: highlight the active state's button.
     for (const meta of STATE_META) {
       p.stateBtns[meta.state].classList.toggle("active", r.state === meta.state);
     }
@@ -2415,6 +2853,7 @@ class TortoiseUfhPanel extends HTMLElement {
     // Active flags surface first — they explain everything below them.
     D.flagsEl = h("div", { class: "chips" });
     D.flagsBlock = h("div", { class: "detail-flags", style: "display:none" }, [
+      this._infoIcon("tip_dec_flags"),
       D.flagsEl,
     ]);
 
@@ -2441,7 +2880,10 @@ class TortoiseUfhPanel extends HTMLElement {
     D.statAssist = h("span", { class: "fast-badge stat-badge" });
     const tiles = h("div", { class: "stat-tiles" }, [
       h("div", { class: "stat-tile" }, [
-        h("span", { class: "stat-cap", text: this._t("th_measured") }),
+        h("span", { class: "stat-cap" }, [
+          this._t("th_measured"),
+          this._infoIcon("tip_dec_trend"),
+        ]),
         D.statTempVal,
         D.statTempTrend,
       ]),
@@ -2456,7 +2898,10 @@ class TortoiseUfhPanel extends HTMLElement {
         h("div", { class: "valve-track stat-track" }, [D.statValveFill]),
       ]),
       h("div", { class: "stat-tile" }, [
-        h("span", { class: "stat-cap", text: this._t("dec_fast") }),
+        h("span", { class: "stat-cap" }, [
+          this._t("dec_fast"),
+          this._infoIcon("tip_dec_fast"),
+        ]),
         D.statAssist,
       ]),
     ]);
@@ -2511,11 +2956,15 @@ class TortoiseUfhPanel extends HTMLElement {
     ]);
   }
 
-  /** One key-value cell (small muted caption over a strong value) in a grid. */
-  _kv(parent, label) {
+  /**
+   * One key-value cell (small muted caption over a strong value) in a grid.
+   *
+   * An optional `tipKey` appends a shared-"i" info button to the caption.
+   */
+  _kv(parent, label, tipKey) {
     const valEl = h("span", { class: "kv-val" });
     const rowEl = h("div", { class: "kv" }, [
-      h("span", { class: "kv-cap", text: label }),
+      h("span", { class: "kv-cap" }, [label, tipKey ? this._infoIcon(tipKey) : null]),
       valEl,
     ]);
     parent.appendChild(rowEl);
@@ -2626,8 +3075,8 @@ class TortoiseUfhPanel extends HTMLElement {
     // Controller inputs (a 2-column key-value grid; the dew-exclusion cell is
     // hidden entirely while there is no reason to show).
     const gridIn = h("div", { class: "kv-grid" });
-    D.errorEl = this._kv(gridIn, this._t("dec_error")).valEl;
-    D.dewEl = this._kv(gridIn, this._t("dec_dew")).valEl;
+    D.errorEl = this._kv(gridIn, this._t("dec_error"), "tip_dec_error").valEl;
+    D.dewEl = this._kv(gridIn, this._t("dec_dew"), "tip_dec_dew").valEl;
     const dewReason = this._kv(gridIn, this._t("dec_dew_reason"));
     D.dewReasonEl = dewReason.valEl;
     D.dewReasonRow = dewReason.rowEl;
@@ -2654,21 +3103,32 @@ class TortoiseUfhPanel extends HTMLElement {
     }
     body.appendChild(
       h("div", { class: "dec-block" }, [
-        h("div", { class: "dec-block-cap", text: this._t("dec_terms") }),
+        h("div", { class: "dec-block-cap" }, [
+          this._t("dec_terms"),
+          this._infoIcon("tip_dec_terms"),
+        ]),
         termsWrap,
       ]),
     );
 
     // Outputs and limiter state (the throttle cell hides while not cooling).
     const gridOut = h("div", { class: "kv-grid" });
-    D.rawValveEl = this._kv(gridOut, this._t("dec_raw_valve")).valEl;
-    D.finalValveEl = this._kv(gridOut, this._t("dec_final_valve")).valEl;
-    const throttle = this._kv(gridOut, this._t("dec_throttle"));
+    D.rawValveEl = this._kv(
+      gridOut, this._t("dec_raw_valve"), "tip_dec_raw_valve",
+    ).valEl;
+    D.finalValveEl = this._kv(
+      gridOut, this._t("dec_final_valve"), "tip_dec_final_valve",
+    ).valEl;
+    const throttle = this._kv(gridOut, this._t("dec_throttle"), "tip_dec_throttle");
     D.throttleEl = throttle.valEl;
     D.throttleRow = throttle.rowEl;
-    D.integratorEl = this._kv(gridOut, this._t("dec_integrator")).valEl;
-    D.saturatedEl = this._kv(gridOut, this._t("dec_saturated")).valEl;
-    D.floorEl = this._kv(gridOut, this._t("dec_floor")).valEl;
+    D.integratorEl = this._kv(
+      gridOut, this._t("dec_integrator"), "tip_dec_integrator",
+    ).valEl;
+    D.saturatedEl = this._kv(
+      gridOut, this._t("dec_saturated"), "tip_dec_saturated",
+    ).valEl;
+    D.floorEl = this._kv(gridOut, this._t("dec_floor"), "tip_dec_floor").valEl;
     body.appendChild(gridOut);
 
     D.explanationEl = h("div", { class: "explanation" });
@@ -2797,11 +3257,17 @@ class TortoiseUfhPanel extends HTMLElement {
     const headCells = [
       h("th", { scope: "col", text: this._t("th_room") }),
       h("th", { scope: "col", text: this._t("val_th_command") }),
-      h("th", { scope: "col", text: this._t("val_th_raw") }),
-      h("th", { scope: "col", text: this._t("val_th_floor") }),
-      h("th", { scope: "col", text: this._t("val_th_sat") }),
-      h("th", { scope: "col", text: this._t("val_th_s2") }),
-      h("th", { scope: "col", text: this._t("val_th_feedback") }),
+      h("th", { scope: "col" }, [this._t("val_th_raw"), this._infoIcon("tip_val_raw")]),
+      h("th", { scope: "col" }, [
+        this._t("val_th_floor"),
+        this._infoIcon("tip_val_floor"),
+      ]),
+      h("th", { scope: "col" }, [this._t("val_th_sat"), this._infoIcon("tip_val_sat")]),
+      h("th", { scope: "col" }, [this._t("val_th_s2"), this._infoIcon("tip_val_s2")]),
+      h("th", { scope: "col" }, [
+        this._t("val_th_feedback"),
+        this._infoIcon("tip_val_feedback"),
+      ]),
     ];
     const thead = h("thead", null, [h("tr", null, headCells)]);
     const tbody = h("tbody");
@@ -3118,18 +3584,20 @@ class TortoiseUfhPanel extends HTMLElement {
     const empty = h("div", { class: "empty", text: this._t("loading") });
     // The Group column (K9) is hidden until any room actually carries a
     // multisplit group; `_renderAssist` toggles it together with the cells.
-    const groupTh = h("th", {
-      scope: "col",
-      text: this._t("ast_th_group"),
-      style: "display:none",
-    });
+    const groupTh = h("th", { scope: "col", style: "display:none" }, [
+      this._t("ast_th_group"),
+      this._infoIcon("tip_ast_group"),
+    ]);
     const headCells = [
       h("th", { scope: "col", text: this._t("th_room") }),
       h("th", { scope: "col", text: this._t("ast_th_kind") }),
       groupTh,
       h("th", { scope: "col", text: this._t("ast_th_command") }),
       h("th", { scope: "col", text: this._t("ast_th_actual") }),
-      h("th", { scope: "col", text: this._t("ast_th_timer") }),
+      h("th", { scope: "col" }, [
+        this._t("ast_th_timer"),
+        this._infoIcon("tip_ast_timer"),
+      ]),
       h("th", { scope: "col", text: this._t("ast_th_flags") }),
       h("th", { scope: "col", text: this._t("ast_th_entity") }),
     ];
@@ -3531,6 +3999,10 @@ class TortoiseUfhPanel extends HTMLElement {
     const unit = field.unit
       ? h("span", { class: "tune-unit", text: "[" + field.unit + "]" })
       : null;
+    // Every knob card carries an "i" explaining what the knob does, its unit,
+    // default and when to touch it (guarded: only when the STR key exists).
+    const tipKey = "tip_knob_" + name;
+    const info = tipKey in STR.en ? this._infoIcon(tipKey) : null;
     const badge = h("span", {
       class: "tune-badge",
       text: this._t("tune_overridden"),
@@ -3545,7 +4017,13 @@ class TortoiseUfhPanel extends HTMLElement {
       on: { click: () => this._revertTuneField(name) },
     });
     revert.appendChild(this._icon("mdi:backup-restore", "⟲"));
-    const head = h("div", { class: "tune-card-head" }, [label, unit, badge, revert]);
+    const head = h("div", { class: "tune-card-head" }, [
+      label,
+      unit,
+      info,
+      badge,
+      revert,
+    ]);
 
     const refs = { field, badge, revert, valEl: null, minus: null, plus: null, toggle: null };
     let control;
@@ -4675,22 +5153,22 @@ button { font-family: inherit; cursor: pointer; }
 .rooms-table tbody tr.selected { box-shadow: inset 3px 0 0 var(--t-primary); }
 .rooms-table tbody tr.off { opacity: .55; }
 
-/* Three-state segment control (column 1) */
+/* Two-state segment control (column 1) */
 .col-state { width: 1%; }
-.seg3 {
+.seg-state {
   display: inline-flex; border: 1px solid var(--t-line);
   border-radius: 8px; overflow: hidden; background: var(--t-card);
 }
-.seg3-btn {
+.seg-state-btn {
   border: 0; background: transparent; color: var(--t-muted);
-  padding: 4px 7px; display: inline-flex; align-items: center; justify-content: center;
+  padding: 4px 8px; display: inline-flex; align-items: center; justify-content: center;
   border-right: 1px solid var(--t-line);
 }
-.seg3-btn:last-child { border-right: 0; }
-.seg3-btn:hover { background: var(--t-chip); color: var(--t-fg); }
-.seg3-btn.active { background: var(--t-primary); color: var(--t-on-primary); }
-.seg3-btn .hicon { --mdc-icon-size: 16px; color: inherit; }
-.seg3-btn .hicon-fallback { color: inherit; font-size: 13px; }
+.seg-state-btn:last-child { border-right: 0; }
+.seg-state-btn:hover { background: var(--t-chip); color: var(--t-fg); }
+.seg-state-btn.active { background: var(--t-primary); color: var(--t-on-primary); }
+.seg-state-btn .hicon { --mdc-icon-size: 16px; color: inherit; }
+.seg-state-btn .hicon-fallback { color: inherit; font-size: 13px; }
 
 .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; background: var(--t-muted); }
 .dot.sev-ok { background: var(--t-ok); }
@@ -4877,6 +5355,36 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 .leg-valve { background: var(--t-accent); }
 .leg-lab { font-size: 12px; color: var(--t-muted); }
 .leg-val { font-size: 12px; font-weight: 600; }
+
+/* Shared "i" info tooltip */
+.info-btn {
+  border: 0; background: transparent; color: var(--t-muted); cursor: pointer;
+  padding: 0 2px; margin-left: 2px; display: inline-flex; align-items: center;
+  vertical-align: middle; border-radius: 50%; line-height: 1;
+}
+.info-btn:hover { color: var(--t-primary); }
+.info-btn[aria-expanded="true"] { color: var(--t-primary); }
+.info-btn:focus-visible { outline: 2px solid var(--t-primary); outline-offset: 1px; }
+.info-btn .hicon { --mdc-icon-size: 14px; color: inherit; }
+.info-btn .hicon-fallback { color: inherit; font-size: 12px; }
+.info-tip {
+  position: fixed; z-index: 40; max-width: 300px;
+  background: var(--t-card); color: var(--t-fg);
+  border: 1px solid var(--t-line); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; line-height: 1.45;
+  font-weight: 400; text-transform: none; letter-spacing: normal;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+  overflow-wrap: anywhere; white-space: normal; pointer-events: auto;
+}
+.info-tip-arrow {
+  position: absolute; top: -5.5px; width: 10px; height: 10px;
+  transform: translateX(-50%) rotate(45deg); background: var(--t-card);
+  border-left: 1px solid var(--t-line); border-top: 1px solid var(--t-line);
+}
+.info-tip.above .info-tip-arrow {
+  top: auto; bottom: -5.5px; border: 0;
+  border-right: 1px solid var(--t-line); border-bottom: 1px solid var(--t-line);
+}
 
 /* Chart tooltip */
 .chart-tip {

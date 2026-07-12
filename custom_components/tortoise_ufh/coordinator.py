@@ -15,8 +15,8 @@ Every 5 minutes this coordinator:
 4. For rooms in the ``live`` control state, WRITES the commands to the actuators
    (``number.set_value`` or ``valve.set_valve_position`` per valve entity,
    dispatched by the entity's domain; ``climate.set_hvac_mode`` +
-   ``climate.set_temperature`` for the split). An ``off`` or ``shadow`` room
-   means: compute and report, but emit no commands.
+   ``climate.set_temperature`` for the split). An ``off`` room is computed
+   against ``Mode.OFF`` and never written.
 
 The global home temperature and per-room offsets are the single source of truth
 for setpoints and live in this coordinator; the writable ``number`` entities and
@@ -175,8 +175,6 @@ class RoomRuntime:
         report: The under-the-hood :class:`~tortoise_ufh.models.RoomReport`.
             Always the same object as ``outputs.report`` (surfaced for
             convenience to the panel/websocket).
-        live_control_enabled: Whether this room is in live control (``True``) or
-            shadow / dry-run (``False``, commands computed but not written).
         setpoint_c: The effective target temperature [degC] used this cycle,
             equal to the global home temperature plus the room's offset.
 
@@ -187,7 +185,6 @@ class RoomRuntime:
 
     outputs: RoomOutputs
     report: RoomReport
-    live_control_enabled: bool
     setpoint_c: float
 
     def __post_init__(self) -> None:
@@ -325,9 +322,9 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         )
         self._setpoints_loaded: bool = False
 
-        # Canonical per-room control state (off / shadow / live). Seeded for
+        # Canonical per-room control state (off / live). Seeded for
         # every configured room from the persisted state map; an unknown or
-        # invalid persisted value falls back to the safe default (shadow).
+        # invalid persisted value falls back to the safe default (off).
         state_map: Any = entry.options.get(CONF_ROOM_STATE, {})
         self._room_states: dict[str, str] = {}
         for name in self._room_names:
@@ -554,7 +551,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._schedule_recompute()
 
     def get_room_state(self, room_name: str) -> str:
-        """Return a room's control state (``off`` / ``shadow`` / ``live``).
+        """Return a room's control state (``off`` / ``live``).
 
         Args:
             room_name: The room name.
@@ -567,7 +564,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
     @callback
     def set_room_state(self, room_name: str, state: str) -> None:
-        """Set a room's control state and rebroadcast immediately.
+        """Set a room's control state (``off`` / ``live``) and notify entities.
 
         Updates the in-memory state first (so the running control loop and the
         panel see the change at once), then persists the new state map to
@@ -591,34 +588,19 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         previous = self._room_states[room_name]
         self._room_states[room_name] = state
         if previous == ROOM_STATE_LIVE and state != ROOM_STATE_LIVE:
-            # Farewell command (C5): leaving live orphans the physical
-            # actuators — park them safely once before releasing ownership.
+            # Farewell command (C5): leaving live (= switching off) orphans the
+            # physical actuators — park them safely once before releasing
+            # ownership.
             self._schedule_farewell(room_name)
         state_map: dict[str, Any] = dict(
             self.config_entry.options.get(CONF_ROOM_STATE, {})
         )
         state_map[room_name] = state
         self._persist_options({CONF_ROOM_STATE: state_map})
-        if self.data is not None and room_name in self.data.rooms:
-            old = self.data.rooms[room_name]
-            new_rooms = dict(self.data.rooms)
-            new_rooms[room_name] = RoomRuntime(
-                outputs=old.outputs,
-                report=old.outputs.report,
-                live_control_enabled=state == ROOM_STATE_LIVE,
-                setpoint_c=old.setpoint_c,
-            )
-            self.async_set_updated_data(
-                CoordinatorData(
-                    rooms=new_rooms,
-                    global_safe_dew_point_c=self.data.global_safe_dew_point_c,
-                    algorithm_status=self.data.algorithm_status,
-                    watchdog_state=self.data.watchdog_state,
-                    last_update_timestamp=self.data.last_update_timestamp,
-                    mode=self.data.mode,
-                    sensor_lost_rooms=self.data.sensor_lost_rooms,
-                )
-            )
+        # Refresh the entities (notably the control-state select) without
+        # rebuilding the cached payload: the state lives on the coordinator,
+        # not inside RoomRuntime.
+        self.async_update_listeners()
 
     def options_require_reload(self, new_options: Mapping[str, Any]) -> bool:
         """Return whether an options change needs a full config-entry reload.
@@ -764,7 +746,6 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             new_rooms[name] = RoomRuntime(
                 outputs=runtime.outputs,
                 report=runtime.outputs.report,
-                live_control_enabled=runtime.live_control_enabled,
                 setpoint_c=self.get_room_setpoint(name),
             )
         self.async_set_updated_data(
@@ -911,12 +892,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             rooms[name] = RoomRuntime(
                 outputs=room_outputs,
                 report=room_outputs.report,
-                live_control_enabled=self.get_room_state(name) == ROOM_STATE_LIVE,
                 setpoint_c=self.get_room_setpoint(name),
             )
 
-        # Emit commands for LIVE rooms only; OFF and SHADOW rooms are computed
-        # and reported but never written. A coordinator whose unload farewell
+        # Only LIVE rooms write; OFF rooms are computed against Mode.OFF and
+        # never written. A coordinator whose unload farewell
         # has already parked the actuators writes NOTHING any more (K3,
         # 2026-07-12) — a cycle sneaking into the unload window used to
         # re-open a farewell-parked cooling valve.
@@ -927,7 +907,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 self._room_configs, self._room_names, strict=True
             ):
                 runtime = rooms.get(name)
-                if runtime is None or not runtime.live_control_enabled:
+                if runtime is None or self.get_room_state(name) != ROOM_STATE_LIVE:
                     continue
                 await self._write_valves(room_cfg, name, runtime.outputs)
                 await self._write_fast_source(room_cfg, name, runtime.outputs)
@@ -962,8 +942,8 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         cooling_enabled = bool(room_cfg.get(CONF_COOLING_ENABLED, True))
         # A room participates in control unless it is switched fully off; an
         # OFF room is fed Mode.OFF so the core holds the valve and idles the
-        # fast source. SHADOW and LIVE both participate (compute); only LIVE is
-        # written (gated below in _async_update_data).
+        # fast source. Only a LIVE room's commands are written (gated in
+        # _async_update_data).
         participates = self.get_room_state(name) != ROOM_STATE_OFF
         mode = self._mode if participates else Mode.OFF
         # Validate humidity independently: an out-of-range reading only nulls
@@ -1026,10 +1006,10 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 cooling_enabled=cooling_enabled,
                 last_update_age_minutes=age_minutes,
                 # K1 (2026-07-12): only a LIVE room votes in the multisplit
-                # group arbitration. A SHADOW room's command is never written,
-                # yet its (uncontrolled, so never-shrinking) error used to win
-                # every re-engage and permanently strangle the LIVE rooms'
-                # split — and shadow is the DEFAULT state of a new room.
+                # group arbitration. An OFF room is fed Mode.OFF and never
+                # writes, but its direction machine (with dwell timers) still
+                # exists — an empty group keeps it from voting in or pinning
+                # the group's arbitration: belt and braces.
                 fast_source_group=(
                     str(room_cfg.get(CONF_FAST_SOURCE_GROUP, "") or "")
                     if self.get_room_state(name) == ROOM_STATE_LIVE
@@ -1234,7 +1214,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             room_cfg.get(CONF_ENTITY_FAST_SOURCE), name, outputs
         )
 
-    # -- Internal: farewell command (live -> shadow/off, unload) -------------
+    # -- Internal: farewell command (live -> off, unload) --------------------
 
     @callback
     def _schedule_farewell(self, room_name: str) -> None:
@@ -1258,9 +1238,9 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         valve driven to 0 in COOLING, left holding in HEATING), passing the
         coordinator's current global mode. Afterwards the CORE machine is
         synchronised with the out-of-band OFF (K10, 2026-07-12): without it
-        the direction machine kept "emitting" ON in shadow, so a return to
-        live could write ON seconds after the farewell OFF — now the way back
-        passes through an honest min-OFF dwell.
+        the direction machine kept emitting ON after the farewell, so a
+        return to live could write ON seconds after the farewell OFF — now
+        the way back passes through an honest min-OFF dwell.
 
         Args:
             room_cfg: The room's configuration dict.

@@ -2,10 +2,11 @@
 
 Exercises the single writable control surface that replaced the retired
 kill-switch and per-room live-control switches (BUILD_SPEC / prd-control-brain.md
-§8, RoomControlState refactor):
+§8, RoomControlState refactor; reduced to the two-state ``off`` / ``live``
+2026-07-12 — DECISIONS §13):
 
-* one ``control_state`` select per configured room, options ``off`` / ``shadow``
-  / ``live``, each starting in the safe default ``shadow``;
+* one ``control_state`` select per configured room, options ``off`` / ``live``,
+  each starting in the safe default ``off``;
 * selecting an option flips ``coordinator.get_room_state(room)`` and persists the
   new value under ``CONF_ROOM_STATE`` in ``entry.options`` WITHOUT reloading the
   entry (the PID integrator survives — see ``options_require_reload``);
@@ -23,7 +24,7 @@ from custom_components.tortoise_ufh.const import (
     CONF_ROOM_STATE,
     DOMAIN,
     ROOM_STATE_LIVE,
-    ROOM_STATE_SHADOW,
+    ROOM_STATE_OFF,
     ROOM_STATES,
 )
 
@@ -56,7 +57,7 @@ async def _select(hass: HomeAssistant, entity_id: str, option: str) -> None:
 async def test_select_entities_exist(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
-    """One control-state select per room, options off/shadow/live, all shadow."""
+    """One control-state select per room, options off/live, all off."""
     entry = setup_integration
 
     salon_id = _control_state_entity_id(hass, entry, "Salon")
@@ -68,19 +69,28 @@ async def test_select_entities_exist(
     for entity_id in (salon_id, lazienka_id):
         state = hass.states.get(entity_id)
         assert state is not None
-        # New rooms start in the safe shadow default.
-        assert state.state == ROOM_STATE_SHADOW
+        # New rooms start in the safe off default (nothing is written).
+        assert state.state == ROOM_STATE_OFF
+        # Exactly the two-state option list (shadow removed in v0.7.0).
         assert state.attributes["options"] == ROOM_STATES
+        assert state.attributes["options"] == [ROOM_STATE_OFF, ROOM_STATE_LIVE]
 
     coordinator = entry.runtime_data.coordinator
-    assert coordinator.get_room_state("Salon") == ROOM_STATE_SHADOW
-    assert coordinator.get_room_state("Lazienka") == ROOM_STATE_SHADOW
+    assert coordinator.get_room_state("Salon") == ROOM_STATE_OFF
+    assert coordinator.get_room_state("Lazienka") == ROOM_STATE_OFF
 
 
 async def test_select_option_flips_state_and_persists_without_reload(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
     """Selecting ``live`` flips only that room and persists it (no reload)."""
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    # The promoted room starts writing on the next cycle: capture, not dispatch.
+    async_mock_service(hass, "number", "set_value")
+    async_mock_service(hass, "climate", "set_hvac_mode")
+    async_mock_service(hass, "climate", "set_temperature")
+
     entry = setup_integration
     coordinator_before = entry.runtime_data.coordinator
     salon_id = _control_state_entity_id(hass, entry, "Salon")
@@ -93,11 +103,11 @@ async def test_select_option_flips_state_and_persists_without_reload(
     coordinator = entry.runtime_data.coordinator
     assert coordinator.get_room_state("Salon") == ROOM_STATE_LIVE
     # The other room is untouched by a per-room selection.
-    assert coordinator.get_room_state("Lazienka") == ROOM_STATE_SHADOW
+    assert coordinator.get_room_state("Lazienka") == ROOM_STATE_OFF
 
     assert hass.states.get(salon_id).state == ROOM_STATE_LIVE
     lazienka_id = _control_state_entity_id(hass, entry, "Lazienka")
-    assert hass.states.get(lazienka_id).state == ROOM_STATE_SHADOW
+    assert hass.states.get(lazienka_id).state == ROOM_STATE_OFF
 
     # Persisted under the canonical control-state map.
     state_map = entry.options.get(CONF_ROOM_STATE, {})
@@ -108,6 +118,12 @@ async def test_persisted_state_survives_reload(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
     """A fresh coordinator restores the control state from options on reload."""
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    async_mock_service(hass, "number", "set_value")
+    async_mock_service(hass, "climate", "set_hvac_mode")
+    async_mock_service(hass, "climate", "set_temperature")
+
     entry = setup_integration
     salon_id = _control_state_entity_id(hass, entry, "Salon")
 
@@ -121,6 +137,6 @@ async def test_persisted_state_survives_reload(
     # A genuinely rebuilt coordinator, seeded purely from entry.options.
     assert after is not before
     assert after.get_room_state("Salon") == ROOM_STATE_LIVE
-    assert after.get_room_state("Lazienka") == ROOM_STATE_SHADOW
+    assert after.get_room_state("Lazienka") == ROOM_STATE_OFF
 
     assert hass.states.get(salon_id).state == ROOM_STATE_LIVE

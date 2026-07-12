@@ -9,7 +9,7 @@ re-assert (S3) and the farewell parking write (C5) — now lives in one
 testable without the whole coordinator.
 
 The coordinator owns exactly one :class:`CommandWriter` and delegates; the
-LIVE/SHADOW gating (who may be written at all) stays in the coordinator.
+LIVE gating (who may be written at all) stays in the coordinator.
 
 Units: temperatures degrees Celsius, valve percent 0..100, cache ages in
 seconds (monotonic).
@@ -239,7 +239,7 @@ class CommandWriter:
     ) -> None:
         """Park a room's actuators safely when releasing live ownership (C5).
 
-        Emitted exactly once on a live -> shadow/off transition and on entry
+        Emitted exactly once on a live -> off transition and on entry
         unload. The split is always commanded OFF (nobody regulates it any
         more). The valve is mode-dependent: in COOLING it is driven to 0 —
         an orphaned open valve would keep passing chilled water while the room
