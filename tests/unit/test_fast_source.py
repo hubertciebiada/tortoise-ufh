@@ -29,6 +29,7 @@ import pytest
 
 from custom_components.tortoise_ufh.core.config import ControllerConfig
 from custom_components.tortoise_ufh.core.controller import RoomController
+from custom_components.tortoise_ufh.core.fast_source import window_allows
 from custom_components.tortoise_ufh.core.models import (
     FastSourceKind,
     FastSourceMode,
@@ -498,6 +499,47 @@ class TestFastDirectionMachine:
         assert out_c.fast_source.mode is FastSourceMode.COOLING
         assert out_c.fast_source.target_temperature_c == pytest.approx(23.0)
 
+    @pytest.mark.unit
+    def test_boost_target_offset_is_a_knob_and_zero_disables(self) -> None:
+        """fast_target_offset_k (2026-07-13): scales the S12 overdrive; 0 = off."""
+        for offset, expect_h, expect_c in ((0.0, 21.0, 24.0), (2.5, 23.5, 21.5)):
+            heating = RoomController(
+                ControllerConfig(fast_target_offset_k=offset), name="a"
+            )
+            out_h = heating.step(
+                make_inputs(
+                    mode=Mode.HEATING,
+                    setpoint_c=21.0,
+                    room_temperature_c=19.0,
+                    fast_source_kind=FastSourceKind.SPLIT,
+                ),
+                dt_seconds=300.0,
+            )
+            assert out_h.fast_source.target_temperature_c == pytest.approx(expect_h)
+
+            cooling = RoomController(
+                ControllerConfig(fast_target_offset_k=offset), name="b"
+            )
+            out_c = cooling.step(
+                make_inputs(
+                    mode=Mode.COOLING,
+                    setpoint_c=24.0,
+                    room_temperature_c=26.0,
+                    humidity_pct=45.0,
+                    loops=(LoopInput(None, 22.0, None),),
+                    fast_source_kind=FastSourceKind.SPLIT,
+                ),
+                dt_seconds=300.0,
+            )
+            assert out_c.fast_source.target_temperature_c == pytest.approx(expect_c)
+
+    @pytest.mark.unit
+    def test_boost_target_offset_range_is_validated(self) -> None:
+        """fast_target_offset_k outside [0, 3] is rejected at construction."""
+        for bad in (-0.1, 3.5):
+            with pytest.raises(ValueError, match="fast_target_offset_k"):
+                ControllerConfig(fast_target_offset_k=bad)
+
 
 class TestFastPhysicalSync:
     """S4 (2026-07-09): the machine consumes the physical on/off feedback."""
@@ -581,3 +623,158 @@ class TestBoostOffsetValidation:
         """A zero-width hysteresis band is rejected too."""
         with pytest.raises(ValueError, match="boost_offset_c must be > deadband_c"):
             ControllerConfig(boost_offset_c=0.3, deadband_c=0.3)
+
+
+class TestWindowAllows:
+    """Pure quiet-hours window arithmetic (B1, 2026-07-12)."""
+
+    @pytest.mark.unit
+    def test_normal_window_inclusive_start_exclusive_end(self) -> None:
+        """A day window allows start <= t < end."""
+        start, end = 7 * 60, 22 * 60  # 07:00-22:00
+        assert window_allows(7 * 60, start, end) is True
+        assert window_allows(12 * 60, start, end) is True
+        assert window_allows(21 * 60 + 59, start, end) is True
+        assert window_allows(22 * 60, start, end) is False
+        assert window_allows(6 * 60 + 59, start, end) is False
+        assert window_allows(23 * 60, start, end) is False
+
+    @pytest.mark.unit
+    def test_window_crossing_midnight(self) -> None:
+        """A 22:00-07:00 window allows the night and blocks the day."""
+        start, end = 22 * 60, 7 * 60
+        assert window_allows(23 * 60, start, end) is True
+        assert window_allows(0, start, end) is True
+        assert window_allows(6 * 60 + 59, start, end) is True
+        assert window_allows(22 * 60, start, end) is True
+        assert window_allows(7 * 60, start, end) is False
+        assert window_allows(12 * 60, start, end) is False
+        assert window_allows(21 * 60 + 59, start, end) is False
+
+    @pytest.mark.unit
+    def test_degenerate_equal_edges_is_empty(self) -> None:
+        """start == end (rejected by the flow) reads as an EMPTY window."""
+        assert window_allows(12 * 60, 8 * 60, 8 * 60) is False
+
+    @pytest.mark.unit
+    def test_out_of_range_arguments_rejected(self) -> None:
+        """Minutes outside [0, 1439] are a caller bug and raise."""
+        with pytest.raises(ValueError, match="minute_of_day"):
+            window_allows(1440, 0, 60)
+        with pytest.raises(ValueError, match="start_minute"):
+            window_allows(0, -1, 60)
+        with pytest.raises(ValueError, match="end_minute"):
+            window_allows(0, 0, 2000)
+
+
+class TestQuietHours:
+    """B1 (2026-07-12): fast_source_allowed=False suppresses the fast source."""
+
+    @pytest.mark.unit
+    def test_quiet_blocks_engagement_despite_demand(self) -> None:
+        """An idle split does not engage during quiet hours; flag raised."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(
+                setpoint_c=21.0,
+                room_temperature_c=18.0,  # demand 3 K >> boost 1 K
+                fast_source_kind=FastSourceKind.SPLIT,
+                fast_source_allowed=False,
+            ),
+            dt_seconds=300.0,
+        )
+        assert out.fast_source.on is False
+        assert "fast_source_quiet_hours" in out.report.flags
+        # The floor keeps working: quiet hours only silence the AIR side.
+        assert out.valve_position_pct > 0.0
+
+    @pytest.mark.unit
+    def test_window_end_honours_min_on_dwell(self) -> None:
+        """A running split at the window edge stops only after min-ON."""
+        cfg = ControllerConfig(fast_min_on_minutes=10.0)
+        controller = RoomController(cfg, name="salon")
+        engaged = controller.step(
+            make_inputs(
+                setpoint_c=21.0,
+                room_temperature_c=19.0,
+                fast_source_kind=FastSourceKind.SPLIT,
+            ),
+            dt_seconds=300.0,
+        )
+        assert engaged.fast_source.on is True
+
+        # Quiet hours begin 5 min in: min-ON (10 min) still holds the unit ON.
+        held = controller.step(
+            make_inputs(
+                setpoint_c=21.0,
+                room_temperature_c=19.0,
+                fast_source_kind=FastSourceKind.SPLIT,
+                fast_source_allowed=False,
+            ),
+            dt_seconds=300.0,
+        )
+        assert held.fast_source.on is True
+        assert "fast_source_min_runtime" in held.report.flags
+        assert "fast_source_quiet_hours" in held.report.flags
+
+        # Another 5 min reaches the 10-min dwell: the unit releases.
+        released = controller.step(
+            make_inputs(
+                setpoint_c=21.0,
+                room_temperature_c=19.0,
+                fast_source_kind=FastSourceKind.SPLIT,
+                fast_source_allowed=False,
+            ),
+            dt_seconds=300.0,
+        )
+        assert released.fast_source.on is False
+        assert "fast_source_quiet_hours" in released.report.flags
+
+    @pytest.mark.unit
+    def test_transitional_quiet_suppresses_the_only_source(self) -> None:
+        """TRANSITIONAL quiet hours idle the split too (quiet is quiet)."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(
+                mode=Mode.TRANSITIONAL,
+                setpoint_c=21.0,
+                room_temperature_c=18.0,
+                fast_source_kind=FastSourceKind.SPLIT,
+                fast_source_allowed=False,
+            ),
+            dt_seconds=300.0,
+        )
+        assert out.fast_source.on is False
+        assert "fast_source_quiet_hours" in out.report.flags
+
+    @pytest.mark.unit
+    def test_s3_emergency_heat_breaks_quiet_hours(self) -> None:
+        """A frost emergency (S3) forces the split ON despite quiet hours."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(
+                setpoint_c=21.0,
+                room_temperature_c=4.0,  # below the 5 degC S3 frost limit
+                fast_source_kind=FastSourceKind.SPLIT,
+                fast_source_allowed=False,
+            ),
+            dt_seconds=300.0,
+        )
+        assert "s3_emergency_heat" in out.report.flags
+        assert out.fast_source.on is True
+        assert out.fast_source.mode is FastSourceMode.HEATING
+
+    @pytest.mark.unit
+    def test_no_flag_or_change_when_allowed(self) -> None:
+        """The default fast_source_allowed=True changes nothing (regression)."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(
+                setpoint_c=21.0,
+                room_temperature_c=19.0,
+                fast_source_kind=FastSourceKind.SPLIT,
+            ),
+            dt_seconds=300.0,
+        )
+        assert out.fast_source.on is True
+        assert "fast_source_quiet_hours" not in out.report.flags

@@ -145,6 +145,21 @@ the core then arbitrates ONE direction per group each cycle. Empty (default)
 = an independent unit, no arbitration.
 """
 
+CONF_FAST_WINDOW_START: str = "fast_source_window_start"
+"""Per-room quiet-hours window START, ``"HH:MM"`` local time (B1, 2026-07-12).
+
+The window is when the fast source MAY run (e.g. ``"07:00"``-``"22:00"``);
+outside it the split does not engage (quiet hours). May cross midnight
+(start > end). Empty / absent together with the end = no restriction.
+"""
+
+CONF_FAST_WINDOW_END: str = "fast_source_window_end"
+"""Per-room quiet-hours window END, ``"HH:MM"`` local time (B1, 2026-07-12).
+
+See :data:`CONF_FAST_WINDOW_START`; the pair is all-or-nothing (validated in
+the config flow, error ``quiet_window_invalid``).
+"""
+
 CONF_ROOM_OFFSET: str = "room_offset"
 """Per-room offset from the global home setpoint, K. Room target = home + offset."""
 
@@ -158,6 +173,36 @@ control state (``participates := state != off``).
 
 CONF_COOLING_ENABLED: str = "cooling_enabled"
 """Whether the room participates in floor cooling (``udzial w chlodzeniu``)."""
+
+# ---------------------------------------------------------------------------
+# Configuration keys — OPTIONAL heat-pump link (B2, 2026-07-12; options flow)
+# ---------------------------------------------------------------------------
+
+CONF_HEAT_PUMP: str = "heat_pump"
+"""Options dict of the opt-in heat-pump link (``entry.options``). All keys are
+optional; an absent/empty section keeps Tortoise entirely away from the pump
+(the pre-0.8.0 behaviour). See ``prd-control-brain.md`` §8.13."""
+
+CONF_ENTITY_HP_MODE: str = "entity_hp_mode"
+"""Pump-mode select entity (HeishaMon-style options, e.g. ``"Heat only"`` /
+``"Heat+DHW"``). Tortoise synchronises only the DIRECTION and always preserves
+the ``+DHW`` flag (owned by the external DHW automation)."""
+
+CONF_ENTITY_HP_HEATING_SETPOINT: str = "entity_hp_heating_setpoint"
+"""Optional heating-water setpoint ``number`` entity. Unset (the default) the
+pump follows its own weather curve — the owner's default, fully supported."""
+
+CONF_ENTITY_HP_COOLING_SETPOINT: str = "entity_hp_cooling_setpoint"
+"""Optional cooling-water setpoint ``number`` entity (HeishaMon-style
+``z1_cool_request_temp``). The ONLY cooling write path; when set and the home
+cools, Tortoise writes ``max(cooling_supply_base_c, global safe dew point)``."""
+
+CONF_ENTITY_HP_ACTIVE: str = "entity_hp_active"
+"""Optional "pump serves the UFH" entity (binary_sensor / switch /
+input_boolean / sensor). ``off`` during DHW/defrost freezes every room's
+integrator (``RoomInputs.hp_active_for_ufh``). Moved here from the
+coordinator's dead zone (B2, 2026-07-12); the legacy per-room key of the same
+name is still honoured as an override."""
 
 # ---------------------------------------------------------------------------
 # Closed option sets (mirror core enum ``.value`` strings verbatim)
@@ -231,6 +276,9 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     # sane compressor hygiene, the core itself still accepts 0 for tests.
     ("fast_min_on_minutes", 3.0, 60.0, 1.0),
     ("fast_min_off_minutes", 3.0, 60.0, 1.0),
+    # A knob since 2026-07-13 (owner request): the S12 boost overdrive of the
+    # split target beyond the room setpoint; 0 disables (plain setpoint).
+    ("fast_target_offset_k", 0.0, 3.0, 0.5),
     # Lower bound 0.5 K (D4, 2026-07-12): margin 0 degenerates the local
     # dew-point throttle ramp into a hard on/off step at the dew point.
     ("dew_margin_k", 0.5, 10.0, 0.1),
@@ -238,6 +286,11 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     ("ff_neutral_c", -30.0, 40.0, 0.5),
     ("ff_gain_pct_per_k", 0.0, 10.0, 0.1),
     ("ff_max_pct", 0.0, 100.0, 1.0),
+    # Heat-pump water setpoints (B2, 2026-07-12): building-level knobs read
+    # only by the opt-in heat-pump link; see HP_GLOBAL_ONLY_KNOBS below.
+    ("cooling_supply_base_c", 10.0, 25.0, 0.5),
+    ("heating_supply_base_c", 20.0, 40.0, 0.5),
+    ("heating_supply_slope", 0.0, 2.0, 0.1),
 )
 """Numeric :class:`~tortoise_ufh.config.ControllerConfig` fields exposed as
 advanced knobs, each as ``(field, min, max, step)``.
@@ -266,15 +319,33 @@ CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "boost_offset_c": "K",
     "fast_min_on_minutes": "min",
     "fast_min_off_minutes": "min",
+    "fast_target_offset_k": "K",
     "dew_margin_k": "K",
     "dew_ramp_k": "K",
     "ff_neutral_c": "°C",
     "ff_gain_pct_per_k": "%/K",
     "ff_max_pct": "%",
+    "cooling_supply_base_c": "°C",
+    "heating_supply_base_c": "°C",
+    "heating_supply_slope": "K/K",
     CONTROLLER_BOOL_KNOB: "",
 }
 """Display unit per controller knob (empty for the boolean knob). Surfaced in the
 ``get_tuning`` payload so the panel labels each stepper with its unit."""
+
+HP_GLOBAL_ONLY_KNOBS: frozenset[str] = frozenset(
+    {
+        "cooling_supply_base_c",
+        "heating_supply_base_c",
+        "heating_supply_slope",
+    }
+)
+"""Knobs that exist ONLY in the global tuning scope (B2, 2026-07-12).
+
+The heat-pump water setpoints are building-level physics — a per-room
+override could be set but would have zero effect, so it is rejected outright:
+``coerce_tuning_values`` raises for a room scope and the panel does not render
+the group outside the Global scope."""
 
 # ---------------------------------------------------------------------------
 # Coordinator / watchdog timing

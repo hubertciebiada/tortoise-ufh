@@ -80,6 +80,7 @@ const TABS = [
   { key: "tuning", label: "tab_tuning" },
   { key: "valves", label: "tab_valves" },
   { key: "assist", label: "tab_assist" },
+  { key: "hp", label: "tab_hp" },
 ];
 const TAB_ORDER = TABS.map((t) => t.key);
 const DEFAULT_TAB = "rooms";
@@ -101,6 +102,7 @@ const WS = {
   setMode: "tortoise_ufh/set_mode",
   getTuning: "tortoise_ufh/get_tuning",
   setTuning: "tortoise_ufh/set_tuning",
+  setHpDhw: "tortoise_ufh/set_hp_dhw",
   // Core recorder commands (read-only history for charts). These are HA
   // built-ins, not part of the tortoise_ufh contract.
   history: "history/history_during_period",
@@ -161,6 +163,7 @@ const STR = {
     tab_tuning: "Strojenie",
     tab_valves: "Zawory",
     tab_assist: "Wspomaganie",
+    tab_hp: "Pompa ciepła",
     manage_rooms: "Zarządzaj pokojami",
     loading: "Ładowanie…",
     no_rooms: "Brak skonfigurowanych pokoi.",
@@ -173,21 +176,33 @@ const STR = {
     th_return: "Powrót",
     th_assist_mode: "Tryb",
     th_assist_temp: "Temp.",
+    th_assist_group: "Wspomaganie",
     th_state: "Sterowanie",
     card_setpoint: "Zadana",
     card_offset: "korekta {v}",
     state_off: "Wyłączony",
     state_live: "Steruje",
+    confirm_state_live:
+      "Włączyć sterowanie pokojem „{room}”? Tortoise zacznie zapisywać " +
+      "komendy do zaworów i wspomagania.",
+    confirm_state_off:
+      "Wyłączyć sterowanie pokojem „{room}”? Siłowniki zostaną bezpiecznie " +
+      "zaparkowane i nic więcej nie będzie zapisywane.",
+    confirm_mode: "Zmienić tryb domu na „{mode}”? Dotyczy wszystkich pokoi.",
+    confirm_yes: "Tak, zmień",
+    confirm_cancel: "Anuluj",
     assist_split: "Split",
     assist_heater: "Grzałka",
     assist_none: "—",
+    assist_no_source: "brak wspomagania",
     assist_state_off: "wył.",
     assist_state_heating: "grzeje",
     assist_state_cooling: "chłodzi",
     kind_split: "Klimatyzator (split)",
     kind_heater: "Grzałka elektryczna",
     detail_close: "Zamknij",
-    sec_wiring: "Okablowanie",
+    sec_wiring: "Czujniki i sygnały",
+    wire_source_tip: "Pokaż źródło (encję)",
     sec_decision: "Decyzja regulatora",
     sec_history: "Historia",
     sec_diagnostics: "Encje diagnostyczne",
@@ -243,20 +258,31 @@ const STR = {
     tune_revert: "Wróć do globalnej",
     tune_on: "wł.",
     tune_off: "wył.",
-    tune_kp: "Wzmocnienie P",
-    tune_ki: "Wzmocnienie I",
-    tune_kt: "Człon trendu",
-    tune_deadband_c: "Strefa nieczułości",
-    tune_valve_floor_pct: "Minimalne otwarcie zaworu",
-    tune_boost_offset_c: "Próg dogrzewu",
-    tune_fast_min_on_minutes: "Min. czas pracy wspomagania",
-    tune_fast_min_off_minutes: "Min. czas postoju wspomagania",
-    tune_dew_margin_k: "Margines punktu rosy",
-    tune_dew_ramp_k: "Rampa dławienia rosy",
-    tune_outdoor_ff_enabled: "Sprzężenie pogodowe",
-    tune_ff_neutral_c: "FF: temp. neutralna",
-    tune_ff_gain_pct_per_k: "FF: wzmocnienie",
-    tune_ff_max_pct: "FF: limit",
+    tune_grp_pid: "Regulator PI i trend",
+    tune_grp_band: "Pasmo komfortu i zawór",
+    tune_grp_weather: "Człon pogodowy (otwarcie zaworu)",
+    tune_grp_fast: "Szybkie źródło (split/grzałka)",
+    tune_grp_dew: "Ochrona przed kondensacją (chłodzenie)",
+    tune_grp_hp: "Pompa ciepła — woda (tylko globalnie)",
+    tune_grp_other: "Pozostałe",
+    tune_kp: "Wzmocnienie części proporcjonalnej (P)",
+    tune_ki: "Wzmocnienie części całkującej (I)",
+    tune_kt: "Tłumienie trendu temperatury",
+    tune_deadband_c: "Strefa nieczułości wokół zadanej",
+    tune_valve_floor_pct: "Minimalne otwarcie zaworu przy grzaniu",
+    tune_boost_offset_c: "Próg włączenia wspomagania",
+    tune_fast_min_on_minutes: "Minimalny czas pracy wspomagania",
+    tune_fast_min_off_minutes: "Minimalny czas postoju wspomagania",
+    tune_fast_target_offset_k: "Podbicie nastawy wspomagania",
+    tune_dew_margin_k: "Margines bezpieczeństwa nad punktem rosy",
+    tune_dew_ramp_k: "Szerokość rampy dławienia chłodzenia",
+    tune_outdoor_ff_enabled: "Człon pogodowy włączony",
+    tune_ff_neutral_c: "Temperatura neutralna członu pogodowego",
+    tune_ff_gain_pct_per_k: "Wzmocnienie członu pogodowego",
+    tune_ff_max_pct: "Górny limit członu pogodowego",
+    tune_cooling_supply_base_c: "Bazowa temperatura wody chłodzenia",
+    tune_heating_supply_base_c: "Bazowa temperatura wody grzania",
+    tune_heating_supply_slope: "Nachylenie krzywej wody grzania",
     val_th_command: "Komenda",
     val_th_raw: "Surowy",
     val_th_floor: "Podłoga",
@@ -281,6 +307,9 @@ const STR = {
     ast_th_command: "Komenda",
     ast_th_actual: "Stan rzeczywisty",
     ast_th_timer: "Timer",
+    ast_th_hours: "Dozwolone godziny",
+    ast_hours_always: "zawsze",
+    assist_window_sub: "dozwolone {start}–{end}",
     ast_th_flags: "Flagi",
     ast_th_entity: "Encja",
     ast_none_line: "Bez wspomagania: {rooms}",
@@ -335,6 +364,13 @@ const STR = {
     tip_knob_fast_min_off_minutes:
       "Minimalny czas postoju szybkiego źródła po wyłączeniu, zanim wolno je " +
       "włączyć ponownie. Domyślnie 10 min; minimum 3.",
+    tip_knob_fast_target_offset_k:
+      "O ile kelwinów nastawa wysyłana do splita jest podbijana poza zadaną " +
+      "pokoju podczas dogrzewu/dochładzania (grzanie: zadana + wartość, " +
+      "chłodzenie: zadana − wartość). Czujnik splita pod sufitem czyta " +
+      "cieplej niż czujnik pokojowy — bez podbicia split dławi się przed " +
+      "dostarczeniem dogrzewu. O wyłączeniu i tak decyduje czujnik pokojowy. " +
+      "0 = bez podbicia (split dostaje dokładnie zadaną). Domyślnie 1 K.",
     tip_knob_dew_margin_k:
       "Chłodzenie: gdy zasilanie jest co najmniej o tyle K powyżej punktu " +
       "rosy, zawór działa bez ograniczeń; bliżej rosy zaczyna się dławienie " +
@@ -358,8 +394,38 @@ const STR = {
     tip_knob_ff_max_pct:
       "Górny limit członu pogodowego — sprzężenie nigdy nie doda więcej niż " +
       "tyle procent otwarcia. Domyślnie 20 %.",
+    tip_knob_cooling_supply_base_c:
+      "Nastawa wody chłodzenia pisana do pompy, gdy dom chłodzi: zapisywana " +
+      "wartość to maksimum z tej bazy i globalnego bezpiecznego punktu rosy " +
+      "— nigdy poniżej punktu rosy. Działa tylko przy skonfigurowanej encji " +
+      "nastawy chłodzenia (opcje → Pompa ciepła). Parametr globalny — nie da " +
+      "się go nadpisać per pokój. Domyślnie 18 °C.",
+    tip_knob_heating_supply_base_c:
+      "Zasilanie wody grzewczej przy neutralnej temperaturze zewnętrznej " +
+      "(parametr „Temperatura neutralna członu pogodowego”, domyślnie " +
+      "15 °C). Poniżej niej nastawa rośnie według nachylenia krzywej; całość " +
+      "obcinana do 20–40 °C. Pisana do pompy tylko przy skonfigurowanej " +
+      "encji nastawy grzania — domyślnie pompa jedzie na własnej krzywej. " +
+      "Parametr globalny. Domyślnie 26 °C.",
+    tip_knob_heating_supply_slope:
+      "O ile kelwinów rośnie nastawa wody grzania na każdy 1 K temperatury " +
+      "zewnętrznej poniżej temperatury neutralnej. Domyślnie 0,5 K/K; " +
+      "typowo 0,3–0,8 dla dobrze ocieplonego domu z podłogówką.",
     // Tooltipy szczegółów pokoju (tip_dec_*) i nagłówków tabel (tip_val_* /
-    // tip_ast_*) — treść wspólna z docs/INSTRUKCJA.md: zmieniaj razem.
+    // tip_ast_* / tip_th_*) — treść wspólna z docs/INSTRUKCJA.md: zmieniaj razem.
+    tip_th_assist:
+      "Komenda dla szybkiego źródła pokoju (split/grzałka): kierunek pracy " +
+      "i temperatura zadana dla urządzenia. „—” = pokój nie ma wspomagania; " +
+      "„wył.” = wspomaganie stoi (pokój trzyma podłoga).",
+    tip_assist_target:
+      "Nastawa splita celowo różni się od zadanej pokoju o „podbicie " +
+      "nastawy wspomagania” (domyślnie 1 K; grzanie: +, chłodzenie: −). " +
+      "Czujnik splita wisi pod sufitem i czyta cieplej niż nasz czujnik " +
+      "pokojowy — nastawa równa zadanej gasiłaby split, zanim " +
+      "dogrzanie/dochłodzenie faktycznie dotrze do pokoju. O wyłączeniu " +
+      "i tak decyduje NASZ czujnik pokojowy z histerezą, więc pokój nie " +
+      "„ucieknie”. Wartość zmienisz w Strojeniu (0 = bez podbicia). " +
+      "W trybie przejściowym nastawa = zadana.",
     tip_dec_error:
       "Uchyb = zadana − zmierzona. Dodatni znaczy: za zimno (w grzaniu " +
       "otwiera zawór); w chłodzeniu znak działa odwrotnie.",
@@ -404,7 +470,7 @@ const STR = {
     tip_dec_flags:
       "Flagi diagnostyczne tego cyklu — każda mówi, które zabezpieczenie lub " +
       "ograniczenie zadziałało. Pełny słownik flag znajdziesz w instrukcji " +
-      "(docs/INSTRUKCJA.md §11).",
+      "(docs/INSTRUKCJA.md §12).",
     tip_val_raw:
       "Otwarcie policzone przez regulator przed limitami (minimalne otwarcie, " +
       "obcięcie 0–100 %, reguły bezpieczeństwa). Najedź na wartość, by " +
@@ -430,6 +496,74 @@ const STR = {
       "razem. Przegrany arbitrażu jest przymusowo wyłączony do czasu zmiany " +
       "kierunku grupy (wygrywa większa potrzeba, urzędujący kierunek ma bonus " +
       "0,5 K).",
+    tip_ast_hours:
+      "Okno, w którym wspomaganie tego pokoju może pracować (np. " +
+      "07:00–22:00; okno może przechodzić przez północ). Poza oknem split " +
+      "się nie załącza; jeśli pracuje, gdy okno się kończy, wyłącza się " +
+      "dopiero po minimalnym czasie pracy — ochrona sprężarki jest " +
+      "ważniejsza niż punktualność. Awaryjne grzanie/chłodzenie (S3/S4) ma " +
+      "prawo złamać ciszę. Puste = zawsze wolno.",
+    // Zakładka Pompa ciepła (B2) — treść wspólna z docs/INSTRUKCJA.md §11.
+    hp_empty:
+      "Sprzężenie z pompą ciepła nie jest skonfigurowane. Wskaż encje pompy " +
+      "w opcjach integracji: Ustawienia → Urządzenia i usługi → Tortoise-UFH " +
+      "→ Konfiguruj → Pompa ciepła. Wszystko jest opcjonalne — bez " +
+      "konfiguracji Tortoise pompy nie dotyka.",
+    hp_sec_mode: "Tryb pracy",
+    hp_tortoise_mode: "Tryb Tortoise",
+    hp_current_option: "Tryb pompy",
+    hp_desired_option: "Tryb docelowy",
+    hp_in_sync: "zgodny",
+    hp_diverged: "rozjazd",
+    hp_dhw_only_note:
+      "Pompa grzeje teraz tylko CWU („DHW only”) — Tortoise nie pisze " +
+      "trybu, dopóki automatyka CWU nie odda kierunku.",
+    hp_no_force:
+      "W trybie Przejściowy i Wył. Tortoise nie wymusza kierunku — pompą " +
+      "rządzi jej własna automatyka i CWU.",
+    tip_hp_mode:
+      "Tortoise synchronizuje wyłącznie KIERUNEK trybu pompy: grzanie → " +
+      "wariant „Heat”, chłodzenie → wariant „Cool”, zawsze z zachowaniem " +
+      "członu „+DHW” (flaga CWU należy do zewnętrznej automatyki). Zapis " +
+      "jest rzadki: przy zmianie trybu Tortoise albo gdy rozjazd utrzymuje " +
+      "się przez ≥2 cykle, nie częściej niż co 15 minut. Sprężarką i krzywą " +
+      "pompy Tortoise nie steruje.",
+    hp_sec_dhw: "Ciepła woda (CWU)",
+    hp_dhw_switch: "Flaga CWU (+DHW)",
+    hp_dhw_warning:
+      "Uwaga: zewnętrzna automatyka CWU jest właścicielem tej flagi i może " +
+      "ją w każdej chwili nadpisać — to jej prawo. Ten przełącznik to " +
+      "ręczna prośba „dogrzej wodę teraz / przestań”, nie blokada.",
+    tip_hp_dhw:
+      "Dokłada lub zdejmuje człon „+DHW” w encji trybu pompy (np. „Heat " +
+      "only” ↔ „Heat+DHW”). Gdy pompa jest w „DHW only”, zdjęcie flagi jest " +
+      "niemożliwe — nie ma kierunku, do którego można wrócić.",
+    hp_sec_setpoints: "Nastawy wody",
+    hp_cool_target: "Nastawa wody chłodzenia",
+    hp_cool_calc: "max(baza {base}, bezpieczny punkt rosy {dew})",
+    hp_heat_target: "Nastawa wody grzania",
+    hp_heat_calc: "krzywa: {base} + {slope} · ({neutral} − T zewn. {tout})",
+    hp_not_written: "nie zapisywana w tym trybie",
+    hp_not_configured_entity: "encja nieskonfigurowana",
+    tip_hp_cool:
+      "W trybie chłodzenia Tortoise pisze do pompy nastawę wody = maksimum " +
+      "z bazy (parametr strojenia) i globalnego bezpiecznego punktu rosy " +
+      "(najwyższy punkt rosy chłodzonych pokoi + 2 K) — woda nigdy nie " +
+      "zejdzie do strefy kondensacji. Zapis przy zmianie ≥ 0,5 K, wymuszany " +
+      "ponownie co ~45 min.",
+    tip_hp_heat:
+      "Opcjonalne: w trybie grzania Tortoise pisze nastawę wody z prostej " +
+      "krzywej pogodowej (baza + nachylenie × niedobór względem temperatury " +
+      "neutralnej, obcięte do 20–40 °C). Jeśli encji nie skonfigurujesz, " +
+      "pompa jedzie na własnej krzywej — to domyślne i w pełni wspierane.",
+    hp_active_cap: "Pompa dostępna dla podłogówki",
+    hp_active_unknown: "nieznane",
+    tip_hp_active:
+      "Sygnał „pompa pracuje dla podłogówki”: gdy jest wyłączony " +
+      "(CWU/odszranianie), regulatory pokojów zamrażają człon całkujący, " +
+      "żeby nie nabijać całki, kiedy woda i tak nie płynie w podłogę.",
+    hp_writes_paused:
+      "Zapisy wstrzymane — żaden pokój nie steruje (Steruje).",
   },
   en: {
     status_running: "Running · cycle {age}",
@@ -454,6 +588,7 @@ const STR = {
     tab_tuning: "Tuning",
     tab_valves: "Valves",
     tab_assist: "Assist",
+    tab_hp: "Heat pump",
     manage_rooms: "Manage rooms",
     loading: "Loading…",
     no_rooms: "No rooms configured.",
@@ -466,21 +601,33 @@ const STR = {
     th_return: "Return",
     th_assist_mode: "Mode",
     th_assist_temp: "Temp.",
+    th_assist_group: "Assist",
     th_state: "Control",
     card_setpoint: "Setpoint",
     card_offset: "offset {v}",
     state_off: "Off",
     state_live: "Live",
+    confirm_state_live:
+      "Enable control of “{room}”? Tortoise will start writing commands to " +
+      "the valves and the assist unit.",
+    confirm_state_off:
+      "Disable control of “{room}”? The actuators will be parked safely and " +
+      "nothing more will be written.",
+    confirm_mode: "Change the home mode to “{mode}”? This affects every room.",
+    confirm_yes: "Yes, change",
+    confirm_cancel: "Cancel",
     assist_split: "Split",
     assist_heater: "Heater",
     assist_none: "—",
+    assist_no_source: "no assist",
     assist_state_off: "off",
     assist_state_heating: "heating",
     assist_state_cooling: "cooling",
     kind_split: "Air-con (split)",
     kind_heater: "Electric heater",
     detail_close: "Close",
-    sec_wiring: "Wiring",
+    sec_wiring: "Sensors & signals",
+    wire_source_tip: "Show source (entity)",
     sec_decision: "Controller decision",
     sec_history: "History",
     sec_diagnostics: "Diagnostic entities",
@@ -536,20 +683,31 @@ const STR = {
     tune_revert: "Revert to global",
     tune_on: "on",
     tune_off: "off",
-    tune_kp: "P gain",
-    tune_ki: "I gain",
-    tune_kt: "Trend damping",
-    tune_deadband_c: "Deadband",
-    tune_valve_floor_pct: "Valve floor",
-    tune_boost_offset_c: "Boost threshold",
-    tune_fast_min_on_minutes: "Assist min on-time",
-    tune_fast_min_off_minutes: "Assist min off-time",
-    tune_dew_margin_k: "Dew-point margin",
-    tune_dew_ramp_k: "Dew throttle ramp",
-    tune_outdoor_ff_enabled: "Weather feedforward",
-    tune_ff_neutral_c: "FF: neutral temp",
-    tune_ff_gain_pct_per_k: "FF: gain",
-    tune_ff_max_pct: "FF: cap",
+    tune_grp_pid: "PI controller & trend",
+    tune_grp_band: "Comfort band & valve",
+    tune_grp_weather: "Weather feedforward (valve opening)",
+    tune_grp_fast: "Fast source (split/heater)",
+    tune_grp_dew: "Condensation protection (cooling)",
+    tune_grp_hp: "Heat pump — water (global only)",
+    tune_grp_other: "Other",
+    tune_kp: "Proportional gain (P)",
+    tune_ki: "Integral gain (I)",
+    tune_kt: "Temperature-trend damping",
+    tune_deadband_c: "Deadband around the setpoint",
+    tune_valve_floor_pct: "Minimum valve opening when heating",
+    tune_boost_offset_c: "Assist engage threshold",
+    tune_fast_min_on_minutes: "Assist minimum run time",
+    tune_fast_min_off_minutes: "Assist minimum rest time",
+    tune_fast_target_offset_k: "Assist target overdrive",
+    tune_dew_margin_k: "Safety margin above the dew point",
+    tune_dew_ramp_k: "Cooling throttle ramp width",
+    tune_outdoor_ff_enabled: "Weather feedforward enabled",
+    tune_ff_neutral_c: "Feedforward neutral outdoor temperature",
+    tune_ff_gain_pct_per_k: "Feedforward gain",
+    tune_ff_max_pct: "Feedforward upper limit",
+    tune_cooling_supply_base_c: "Cooling water base temperature",
+    tune_heating_supply_base_c: "Heating water base temperature",
+    tune_heating_supply_slope: "Heating water curve slope",
     val_th_command: "Command",
     val_th_raw: "Raw",
     val_th_floor: "Floor",
@@ -574,6 +732,9 @@ const STR = {
     ast_th_command: "Command",
     ast_th_actual: "Actual state",
     ast_th_timer: "Timer",
+    ast_th_hours: "Allowed hours",
+    ast_hours_always: "always",
+    assist_window_sub: "allowed {start}–{end}",
     ast_th_flags: "Flags",
     ast_th_entity: "Entity",
     ast_none_line: "No assist: {rooms}",
@@ -627,6 +788,14 @@ const STR = {
     tip_knob_fast_min_off_minutes:
       "Minimum off-time of the fast source before it may start again. " +
       "Default 10 min; minimum 3.",
+    tip_knob_fast_target_offset_k:
+      "How many kelvin the setpoint sent to the split is pushed beyond the " +
+      "room setpoint during a boost (heating: setpoint + value, cooling: " +
+      "setpoint − value). The split's ceiling-mounted sensor reads warmer " +
+      "than the room sensor — without the overdrive the unit throttles " +
+      "itself before the boost is delivered. Release is still decided by " +
+      "the room sensor. 0 = no overdrive (the split gets the plain " +
+      "setpoint). Default 1 K.",
     tip_knob_dew_margin_k:
       "Cooling: while supply is at least this many K above the dew point the " +
       "valve runs unrestricted; closer to the dew point the flow gets " +
@@ -649,8 +818,39 @@ const STR = {
     tip_knob_ff_max_pct:
       "Upper cap on the weather term — the feedforward never adds more than " +
       "this many percent of opening. Default 20 %.",
+    tip_knob_cooling_supply_base_c:
+      "The cooling-water setpoint written to the heat pump while the home " +
+      "cools: the written value is the maximum of this base and the global " +
+      "safe dew point — never below the dew point. Active only with the " +
+      "cooling-setpoint entity configured (options → Heat pump). Global " +
+      "parameter — cannot be overridden per room. Default 18 °C.",
+    tip_knob_heating_supply_base_c:
+      "Heating supply water at the neutral outdoor temperature (the " +
+      "“Feedforward neutral outdoor temperature” knob, default 15 °C). " +
+      "Below it the setpoint rises along the curve slope; the result is " +
+      "clamped to 20–40 °C. Written to the pump only with the " +
+      "heating-setpoint entity configured — by default the pump follows its " +
+      "own curve. Global parameter. Default 26 °C.",
+    tip_knob_heating_supply_slope:
+      "How many kelvins the heating-water setpoint rises per 1 K of outdoor " +
+      "temperature below the neutral point. Default 0.5 K/K; typically " +
+      "0.3–0.8 for a well-insulated UFH house.",
     // Room-detail tooltips (tip_dec_*) and table-header tooltips (tip_val_* /
-    // tip_ast_*) — content shared with docs/INSTRUKCJA.md: change together.
+    // tip_ast_* / tip_th_*) — content shared with docs/INSTRUKCJA.md: change
+    // together.
+    tip_th_assist:
+      "The command for the room's fast source (split/heater): running " +
+      "direction and the unit's target temperature. “—” = the room has no " +
+      "assist; “off” = the assist is idle (the floor holds the room).",
+    tip_assist_target:
+      "The split's setpoint deliberately differs from the room target by " +
+      "the “assist target overdrive” knob (default 1 K; heating: +, " +
+      "cooling: −). The split's own sensor sits near the ceiling and reads " +
+      "warmer than our room sensor — a setpoint equal to the target would " +
+      "throttle the unit before the boost actually reaches the room. " +
+      "Release is still decided by OUR room sensor with hysteresis, so the " +
+      "room cannot run away. Adjust it in Tuning (0 = no overdrive). In " +
+      "transitional mode the setpoint equals the target.",
     tip_dec_error:
       "Error = setpoint − measured. Positive means too cold (opens the valve " +
       "in heating); in cooling the sign works the other way.",
@@ -696,7 +896,7 @@ const STR = {
     tip_dec_flags:
       "This cycle's diagnostic flags — each names the protection or limit " +
       "that acted. The full flag dictionary is in the manual " +
-      "(docs/INSTRUKCJA.md §11).",
+      "(docs/INSTRUKCJA.md §12).",
     tip_val_raw:
       "Opening computed by the controller before limits (valve floor, 0–100 % " +
       "clamp, safety rules). Hover the value to see the P/I/Trend/FF term " +
@@ -721,6 +921,74 @@ const STR = {
       "Rooms on a shared outdoor unit (multisplit) must all heat or all cool. " +
       "The arbitration loser is forced off until the group direction changes " +
       "(largest need wins; the incumbent direction gets a 0.5 K bonus).",
+    tip_ast_hours:
+      "The window in which this room's assist may run (e.g. 07:00–22:00; " +
+      "the window may cross midnight). Outside it the split does not " +
+      "engage; if it is running when the window ends, it stops only after " +
+      "its minimum run time — compressor protection outranks punctuality. " +
+      "Emergency heat/cool (S3/S4) may break the quiet hours. Empty = " +
+      "always allowed.",
+    // Heat-pump tab (B2) — content shared with docs/INSTRUKCJA.md §11.
+    hp_empty:
+      "The heat-pump link is not configured. Point the integration at the " +
+      "pump's entities in Settings → Devices & services → Tortoise-UFH → " +
+      "Configure → Heat pump. Everything is optional — unconfigured, " +
+      "Tortoise never touches the pump.",
+    hp_sec_mode: "Operating mode",
+    hp_tortoise_mode: "Tortoise mode",
+    hp_current_option: "Heat-pump mode",
+    hp_desired_option: "Target mode",
+    hp_in_sync: "in sync",
+    hp_diverged: "diverged",
+    hp_dhw_only_note:
+      "The pump is currently DHW-only — Tortoise does not write the mode " +
+      "until the DHW automation hands the direction back.",
+    hp_no_force:
+      "In Transitional and Off, Tortoise never forces a direction — the " +
+      "pump's own automation and DHW stay in charge.",
+    tip_hp_mode:
+      "Tortoise synchronises only the DIRECTION of the pump mode: heating → " +
+      "the “Heat” variant, cooling → the “Cool” variant, always preserving " +
+      "the “+DHW” part (the DHW flag belongs to the external automation). " +
+      "Writes are rare: on a Tortoise mode change or when a divergence " +
+      "persists for ≥2 cycles, at most every 15 minutes. Tortoise never " +
+      "controls the compressor or the pump's curve.",
+    hp_sec_dhw: "Domestic hot water (DHW)",
+    hp_dhw_switch: "DHW flag (+DHW)",
+    hp_dhw_warning:
+      "Note: the external DHW automation owns this flag and may overwrite " +
+      "it at any time — that is its right. This switch is a manual request " +
+      "(“heat water now / stop”), not a lock.",
+    tip_hp_dhw:
+      "Adds or removes the “+DHW” part of the pump-mode entity (e.g. “Heat " +
+      "only” ↔ “Heat+DHW”). While the pump is in “DHW only”, removing the " +
+      "flag is impossible — there is no direction to fall back to.",
+    hp_sec_setpoints: "Water setpoints",
+    hp_cool_target: "Cooling water setpoint",
+    hp_cool_calc: "max(base {base}, safe dew point {dew})",
+    hp_heat_target: "Heating water setpoint",
+    hp_heat_calc: "curve: {base} + {slope} · ({neutral} − outdoor {tout})",
+    hp_not_written: "not written in this mode",
+    hp_not_configured_entity: "entity not configured",
+    tip_hp_cool:
+      "While cooling, Tortoise writes a water setpoint = the maximum of the " +
+      "base (a tuning knob) and the global safe dew point (highest dew " +
+      "point of the cooled rooms + 2 K) — the water never enters the " +
+      "condensation zone. Written on a ≥ 0.5 K change, re-asserted every " +
+      "~45 min.",
+    tip_hp_heat:
+      "Optional: while heating, Tortoise writes the water setpoint from a " +
+      "simple weather curve (base + slope × shortfall below the neutral " +
+      "temperature, clamped to 20–40 °C). If you leave the entity " +
+      "unconfigured, the pump follows its own curve — the default and fully " +
+      "supported.",
+    hp_active_cap: "Pump available for UFH",
+    hp_active_unknown: "unknown",
+    tip_hp_active:
+      "The “pump serves the UFH” signal: while it is off (DHW/defrost), the " +
+      "room controllers freeze their integral term so it does not wind up " +
+      "while no water reaches the floor.",
+    hp_writes_paused: "Writes paused — no room is in control (Live).",
   },
 };
 
@@ -785,6 +1053,11 @@ const FLAG_LABELS = {
     en: "Assist: min-runtime lock",
     sev: "warn",
   },
+  fast_source_quiet_hours: {
+    pl: "Ciche godziny wspomagania",
+    en: "Assist quiet hours",
+    sev: "ok",
+  },
   cooling_disabled: {
     pl: "Chłodzenie wyłączone w tym pokoju",
     en: "Cooling disabled in this room",
@@ -793,6 +1066,60 @@ const FLAG_LABELS = {
 };
 
 const SEV_RANK = { ok: 0, warn: 1, problem: 2 };
+
+/**
+ * Tuning-tab knob groups (A4, 2026-07-12): the Tuning tab renders a vertical
+ * list of parameters split into these titled groups instead of a flat card
+ * grid. Every exposed knob must appear in EXACTLY one group (enforced by
+ * tests/unit/test_panel_i18n.py); a knob the backend exposes but no group
+ * lists falls into a trailing "other" group instead of silently vanishing.
+ * `globalOnly` groups render only in the Global scope (the heat-pump water
+ * setpoints are building-level physics; the backend rejects per-room
+ * overrides too).
+ */
+const KNOB_GROUPS = [
+  { key: "pid", labelKey: "tune_grp_pid", knobs: ["kp", "ki", "kt"] },
+  {
+    key: "band",
+    labelKey: "tune_grp_band",
+    knobs: ["deadband_c", "valve_floor_pct"],
+  },
+  {
+    key: "weather",
+    labelKey: "tune_grp_weather",
+    knobs: [
+      "outdoor_ff_enabled",
+      "ff_neutral_c",
+      "ff_gain_pct_per_k",
+      "ff_max_pct",
+    ],
+  },
+  {
+    key: "fast",
+    labelKey: "tune_grp_fast",
+    knobs: [
+      "boost_offset_c",
+      "fast_min_on_minutes",
+      "fast_min_off_minutes",
+      "fast_target_offset_k",
+    ],
+  },
+  {
+    key: "dew",
+    labelKey: "tune_grp_dew",
+    knobs: ["dew_margin_k", "dew_ramp_k"],
+  },
+  {
+    key: "hp",
+    labelKey: "tune_grp_hp",
+    knobs: [
+      "cooling_supply_base_c",
+      "heating_supply_base_c",
+      "heating_supply_slope",
+    ],
+    globalOnly: true,
+  },
+];
 
 /** Ordered wiring roles (config `entities` dict keys → i18n label keys). */
 const WIRING_ROLES = [
@@ -1115,7 +1442,8 @@ class TortoiseUfhPanel extends HTMLElement {
     this._rows = new Map(); // room name -> table <tr> element
     this._detail = null; // detail part refs
     this._detailRoom = null; // room name the detail is currently built for
-    this._wiringOpen = true; // wiring <details> state, persists across rooms
+    this._wiringOpen = true; // signals <details> state, persists across rooms
+    this._diagOpen = false; // diagnostics <details> state (A5: collapsed)
 
     this._view = []; // normalized room view-models
     this._viewByName = new Map();
@@ -1127,6 +1455,7 @@ class TortoiseUfhPanel extends HTMLElement {
     this._tuningDraft = null; // { values: {field: val}, overridden: Set<field> }
     this._tuningEls = null; // stable Tuning-section refs
     this._tuningLoading = false; // in-flight guard for the lazy fetch
+    this._hpEls = null; // stable Heat-pump-section refs (B2)
     // Errors are suppressed until this epoch-ms (a save reloads the entry, so
     // get_live / get_tuning briefly return not_found — that is expected).
     this._suppressErrorUntil = 0;
@@ -1142,6 +1471,12 @@ class TortoiseUfhPanel extends HTMLElement {
     this._tipArrowEl = null; // its arrow
     this._tipAnchor = null; // the info button the bubble is open for
     this._tipHideTimer = null; // delayed-close timer (hover hand-off)
+
+    // Shared confirmation popover (A2): ONE fixed-position mini-dialog serves
+    // the room-state segment and the home-mode switch. Never the native
+    // confirm() — it blocks the event loop and cannot be styled.
+    this._confirmEls = null; // { el, text, yes } built with the skeleton
+    this._confirmResolve = null; // pending Promise resolver, or null
 
     // History-chart data cache, keyed by `${entityId}|${window}`.
     this._histCache = new Map(); // key -> { at: epochMs, data: [{t, v}] }
@@ -1347,12 +1682,26 @@ class TortoiseUfhPanel extends HTMLElement {
    * tap's focus event cannot re-open what the click just closed).
    */
   _infoIcon(strKey) {
+    return this._infoBtn(() => this._t(strKey), null);
+  }
+
+  /**
+   * "i" info button whose bubble shows a LITERAL text (A6: e.g. the source
+   * entity id of a signal row) instead of an STR key; `ariaKey` names the
+   * accessible label (localised).
+   */
+  _infoIconText(text, ariaKey) {
+    return this._infoBtn(() => text, this._t(ariaKey));
+  }
+
+  /** Shared builder behind `_infoIcon` / `_infoIconText`. */
+  _infoBtn(getText, ariaLabel) {
     const btn = h(
       "button",
       {
         class: "info-btn",
         type: "button",
-        "aria-label": this._t("tooltip_show"),
+        "aria-label": ariaLabel || this._t("tooltip_show"),
         "aria-expanded": "false",
         on: {
           pointerdown: () => {
@@ -1364,22 +1713,26 @@ class TortoiseUfhPanel extends HTMLElement {
             if (btn._tipWasOpen) {
               this._hideTip();
             } else {
-              this._showTip(btn, strKey);
+              this._showTip(btn, getText());
             }
           },
-          mouseenter: () => this._showTip(btn, strKey),
+          mouseenter: () => this._showTip(btn, getText()),
           mouseleave: () => this._scheduleTipHide(),
-          focus: () => this._showTip(btn, strKey),
+          focus: () => this._showTip(btn, getText()),
           blur: () => this._hideTip(),
         },
       },
       [this._icon("mdi:information-outline", "ⓘ")],
     );
+    // Fixed accessible labels (a literal-text icon keeps its own label; the
+    // STR-key icons toggle show/hide like before).
+    btn._ariaShow = ariaLabel || this._t("tooltip_show");
+    btn._ariaHide = ariaLabel || this._t("tooltip_hide");
     return btn;
   }
 
-  /** Show the shared bubble for `btn`, positioned in viewport coordinates. */
-  _showTip(btn, strKey) {
+  /** Show the shared bubble for `btn` with `text`, in viewport coordinates. */
+  _showTip(btn, text) {
     const tip = this._tipEl;
     if (!tip || !btn.isConnected) {
       return;
@@ -1389,7 +1742,7 @@ class TortoiseUfhPanel extends HTMLElement {
       this._clearTipAnchor();
     }
     this._tipAnchor = btn;
-    this._tipTextEl.textContent = this._t(strKey);
+    this._tipTextEl.textContent = text;
     // Reset before measuring so a previous clamp cannot skew the size.
     tip.style.left = "0px";
     tip.style.top = "0px";
@@ -1417,7 +1770,7 @@ class TortoiseUfhPanel extends HTMLElement {
     this._tipArrowEl.style.left = arrowX.toFixed(0) + "px";
     btn.setAttribute("aria-expanded", "true");
     btn.setAttribute("aria-describedby", "tufh-tip");
-    btn.setAttribute("aria-label", this._t("tooltip_hide"));
+    btn.setAttribute("aria-label", btn._ariaHide || this._t("tooltip_hide"));
   }
 
   /** Hide the shared bubble and clear the anchor's ARIA state. */
@@ -1435,7 +1788,7 @@ class TortoiseUfhPanel extends HTMLElement {
     if (btn) {
       btn.setAttribute("aria-expanded", "false");
       btn.removeAttribute("aria-describedby");
-      btn.setAttribute("aria-label", this._t("tooltip_show"));
+      btn.setAttribute("aria-label", btn._ariaShow || this._t("tooltip_show"));
     }
   }
 
@@ -1452,6 +1805,65 @@ class TortoiseUfhPanel extends HTMLElement {
     if (this._tipHideTimer !== null) {
       window.clearTimeout(this._tipHideTimer);
       this._tipHideTimer = null;
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Shared confirmation popover (A2; CSP-safe, no native confirm())
+  // --------------------------------------------------------------------------
+
+  /**
+   * Ask an inline "are you sure?" anchored at `anchor`; resolves to a boolean.
+   *
+   * One shared fixed-position mini-dialog (mirror of the shared tooltip):
+   * Escape / click-outside / Cancel resolve false, the primary button true.
+   * Focus moves onto the confirm button so Enter confirms from the keyboard.
+   * A second ask while one is pending cancels the first.
+   */
+  _confirm(anchor, text) {
+    const C = this._confirmEls;
+    if (!C || !anchor || !anchor.isConnected) {
+      return Promise.resolve(true);
+    }
+    this._resolveConfirm(false);
+    this._hideTip();
+    return new Promise((resolve) => {
+      this._confirmResolve = resolve;
+      C.text.textContent = text;
+      // Reset before measuring so a previous clamp cannot skew the size.
+      C.el.style.left = "0px";
+      C.el.style.top = "0px";
+      C.el.style.display = "";
+      const rect = anchor.getBoundingClientRect();
+      const tw = C.el.offsetWidth;
+      const th = C.el.offsetHeight;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const left = clamp(
+        rect.left + rect.width / 2 - tw / 2,
+        8,
+        Math.max(8, vw - tw - 8),
+      );
+      let top = rect.bottom + 8;
+      if (top + th > vh - 8 && rect.top - th - 8 >= 8) {
+        top = rect.top - th - 8;
+      }
+      top = Math.max(8, top);
+      C.el.style.left = left.toFixed(0) + "px";
+      C.el.style.top = top.toFixed(0) + "px";
+      C.yes.focus();
+    });
+  }
+
+  /** Settle a pending confirm (hides the popover; no-op when none pending). */
+  _resolveConfirm(result) {
+    const resolve = this._confirmResolve;
+    this._confirmResolve = null;
+    if (this._confirmEls) {
+      this._confirmEls.el.style.display = "none";
+    }
+    if (resolve) {
+      resolve(result);
     }
   }
 
@@ -1664,8 +2076,21 @@ class TortoiseUfhPanel extends HTMLElement {
     this._poll();
   }
 
-  async _setMode(mode) {
+  async _setMode(mode, anchor) {
     if (!MODES.includes(mode)) {
+      return;
+    }
+    // No-op click on the already-active mode: no question, no write.
+    const current = pick(this._live || {}, ["mode"], pick(this._config || {}, ["mode"], null));
+    if (mode === current) {
+      return;
+    }
+    // Light confirmation (A2): the whole-home mode is too easy to fat-finger.
+    const ok = await this._confirm(
+      anchor,
+      fmtStr(this._t("confirm_mode"), { mode: this._modeLabel(mode) }),
+    );
+    if (!ok) {
       return;
     }
     // Optimistically patch both payloads: `live.mode` (polled, authoritative
@@ -1682,12 +2107,19 @@ class TortoiseUfhPanel extends HTMLElement {
     this._poll();
   }
 
-  async _setRoomState(room, state) {
+  async _setRoomState(room, state, anchor) {
     if (!ROOM_STATES.includes(state)) {
       return;
     }
     const view = this._viewByName.get(room);
     if (view && view.state === state) {
+      return;
+    }
+    // Light confirmation (A2): the two-state segment is too easy to hit by
+    // accident, and Live starts writing to the actuators immediately.
+    const key = state === STATE_LIVE ? "confirm_state_live" : "confirm_state_off";
+    const ok = await this._confirm(anchor, fmtStr(this._t(key), { room }));
+    if (!ok) {
       return;
     }
     // Optimistic patch of both payloads: config (authoritative on next
@@ -1818,6 +2250,9 @@ class TortoiseUfhPanel extends HTMLElement {
         fastKind: String(pick(c, ["fast_source_kind"], "none") || "none"),
         // Multisplit outdoor-unit group key (K9, 2026-07-12) — "" ungrouped.
         fastGroup: String(pick(c, ["fast_source_group"], "") || ""),
+        // Quiet-hours window (B1, 2026-07-12) — "" when unrestricted.
+        fastWindowStart: String(pick(c, ["fast_source_window_start"], "") || ""),
+        fastWindowEnd: String(pick(c, ["fast_source_window_end"], "") || ""),
         // Canonical two-state control: prefer the polled live value, then the
         // config value, defaulting to off (safe, matches the adapter).
         state: this._normState(pick(lv, ["control_state"], pick(c, ["control_state"], STATE_OFF))),
@@ -2070,6 +2505,7 @@ class TortoiseUfhPanel extends HTMLElement {
       tuning: this._buildTuningSection(),
       valves: this._buildValvesSection(),
       assist: this._buildAssistSection(),
+      hp: this._buildHpSection(),
     };
     this._tabs.sections = sections;
 
@@ -2110,13 +2546,56 @@ class TortoiseUfhPanel extends HTMLElement {
     );
     this._tipAnchor = null;
 
+    // The single shared confirmation popover (A2): text + [yes] [cancel],
+    // positioned next to the clicked control (same fixed-position pattern as
+    // the tooltip). Escape / click-outside cancels; focus lands on "yes" so
+    // the keyboard flow works.
+    const confirmText = h("div", { class: "confirm-text" });
+    const confirmYes = h("button", {
+      class: "confirm-yes",
+      type: "button",
+      text: this._t("confirm_yes"),
+      on: { click: () => this._resolveConfirm(true) },
+    });
+    const confirmNo = h("button", {
+      class: "confirm-no",
+      type: "button",
+      text: this._t("confirm_cancel"),
+      on: { click: () => this._resolveConfirm(false) },
+    });
+    const confirmEl = h(
+      "div",
+      {
+        class: "confirm-pop",
+        role: "dialog",
+        "aria-modal": "false",
+        style: "display:none",
+        on: {
+          keydown: (e) => {
+            if (e.key === "Escape") {
+              e.stopPropagation();
+              this._resolveConfirm(false);
+            }
+          },
+        },
+      },
+      [confirmText, h("div", { class: "confirm-btns" }, [confirmYes, confirmNo])],
+    );
+    this._confirmEls = { el: confirmEl, text: confirmText, yes: confirmYes };
+
     const wrap = h(
       "div",
       {
         class: "wrap",
         on: {
-          // Escape closes the info tooltip first, then the room inspector.
+          // Escape closes the confirm popover / info tooltip first, then the
+          // room inspector.
           keydown: (e) => {
+            if (e.key === "Escape" && this._confirmResolve) {
+              e.stopPropagation();
+              this._resolveConfirm(false);
+              return;
+            }
             if (e.key === "Escape" && this._tipAnchor) {
               e.stopPropagation();
               this._hideTip();
@@ -2127,24 +2606,34 @@ class TortoiseUfhPanel extends HTMLElement {
               this._deselect();
             }
           },
-          // A pointer press anywhere outside the tooltip and its anchor
-          // closes it (tap-away on mobile).
+          // A pointer press anywhere outside the tooltip / confirm popover
+          // closes it (tap-away on mobile; a press outside = cancel).
           pointerdown: (e) => {
+            const path = e.composedPath ? e.composedPath() : [];
+            if (this._confirmResolve && !path.includes(confirmEl)) {
+              this._resolveConfirm(false);
+            }
             if (!this._tipAnchor) {
               return;
             }
-            const path = e.composedPath ? e.composedPath() : [];
             if (!path.includes(this._tipEl) && !path.includes(this._tipAnchor)) {
               this._hideTip();
             }
           },
         },
       },
-      [banner, hero, tabbar, layout, this._tipEl],
+      [banner, hero, tabbar, layout, this._tipEl, confirmEl],
     );
     // Any inner scroll (table wrap, detail drawer) invalidates the fixed
-    // position — just close the bubble.
-    wrap.addEventListener("scroll", () => this._hideTip(), true);
+    // positions — just close the bubble and cancel a pending confirm.
+    wrap.addEventListener(
+      "scroll",
+      () => {
+        this._hideTip();
+        this._resolveConfirm(false);
+      },
+      true,
+    );
 
     this._els = {
       wrap,
@@ -2242,6 +2731,8 @@ class TortoiseUfhPanel extends HTMLElement {
       this._renderValves();
     } else if (this._activeTab === "assist") {
       this._renderAssist();
+    } else if (this._activeTab === "hp") {
+      this._renderHp();
     }
   }
 
@@ -2333,7 +2824,7 @@ class TortoiseUfhPanel extends HTMLElement {
           type: "button",
           text: this._modeLabel(m),
           dataset: { mode: m },
-          on: { click: () => this._setMode(m) },
+          on: { click: () => this._setMode(m, b) },
         });
         H.modeBtns[m] = b;
         return b;
@@ -2508,21 +2999,60 @@ class TortoiseUfhPanel extends HTMLElement {
   _buildRoomsSection() {
     const empty = h("div", { class: "empty", text: this._t("loading") });
 
-    const headCells = [
-      h("th", { class: "col-state", scope: "col" }, [
+    // Two-row header (A3): the first eight columns span both rows; the two
+    // assist columns ("Tryb"/"Temp.") sit under a shared "Wspomaganie" group
+    // header so an idle split / a room without assist reads in context.
+    const topCells = [
+      h("th", { class: "col-state", scope: "col", rowspan: "2" }, [
         h("span", { class: "sr-only", text: this._t("th_state") }),
       ]),
-      h("th", { class: "col-room", scope: "col", text: this._t("th_room") }),
-      h("th", { class: "col-measured", scope: "col", text: this._t("th_measured") }),
-      h("th", { class: "col-setpoint", scope: "col", text: this._t("th_setpoint") }),
-      h("th", { class: "col-error", scope: "col", text: this._t("th_error") }),
-      h("th", { class: "col-valve", scope: "col", text: this._t("th_valve") }),
-      h("th", { class: "col-supply", scope: "col", text: this._t("th_supply") }),
-      h("th", { class: "col-return", scope: "col", text: this._t("th_return") }),
-      h("th", { class: "col-assist-mode", scope: "col", text: this._t("th_assist_mode") }),
-      h("th", { class: "col-assist-temp", scope: "col", text: this._t("th_assist_temp") }),
+      h("th", {
+        class: "col-room", scope: "col", rowspan: "2", text: this._t("th_room"),
+      }),
+      h("th", {
+        class: "col-measured",
+        scope: "col",
+        rowspan: "2",
+        text: this._t("th_measured"),
+      }),
+      h("th", {
+        class: "col-setpoint",
+        scope: "col",
+        rowspan: "2",
+        text: this._t("th_setpoint"),
+      }),
+      h("th", {
+        class: "col-error", scope: "col", rowspan: "2", text: this._t("th_error"),
+      }),
+      h("th", {
+        class: "col-valve", scope: "col", rowspan: "2", text: this._t("th_valve"),
+      }),
+      h("th", {
+        class: "col-supply", scope: "col", rowspan: "2", text: this._t("th_supply"),
+      }),
+      h("th", {
+        class: "col-return", scope: "col", rowspan: "2", text: this._t("th_return"),
+      }),
+      h("th", { class: "col-assist-group", scope: "colgroup", colspan: "2" }, [
+        this._t("th_assist_group"),
+        this._infoIcon("tip_th_assist"),
+      ]),
     ];
-    const thead = h("thead", null, [h("tr", null, headCells)]);
+    const subCells = [
+      h("th", {
+        class: "col-assist-mode",
+        scope: "col",
+        text: this._t("th_assist_mode"),
+      }),
+      h("th", { class: "col-assist-temp", scope: "col" }, [
+        this._t("th_assist_temp"),
+        this._infoIcon("tip_assist_target"),
+      ]),
+    ];
+    const thead = h("thead", null, [
+      h("tr", null, topCells),
+      h("tr", { class: "subhead" }, subCells),
+    ]);
     const tbody = h("tbody");
     const table = h("table", { class: "rooms-table" }, [thead, tbody]);
     const wrapEl = h("div", { class: "table-wrap" }, [table]);
@@ -2595,7 +3125,7 @@ class TortoiseUfhPanel extends HTMLElement {
           on: {
             click: (e) => {
               e.stopPropagation();
-              this._setRoomState(name, meta.state);
+              this._setRoomState(name, meta.state, btn);
             },
           },
         },
@@ -2737,12 +3267,19 @@ class TortoiseUfhPanel extends HTMLElement {
       "°",
     );
 
-    // Assist mode + target temperature (split from the old combined badge).
+    // Assist mode + target temperature (grouped under "Wspomaganie", A3).
+    // A room without a fast source reads as muted em dashes with a plain
+    // "no assist" title; an idle split keeps its "off" badge.
     const assistMode = this._assistModeLabel(r);
     p.assistMode.className = "fast-badge " + assistMode.cls;
     p.assistMode.textContent = assistMode.text;
+    const noSource = r.fastKind === "none";
+    const noSourceTitle = noSource ? this._t("assist_no_source") : "";
+    p.assistMode.title = noSourceTitle;
     const assistActive = r.fastKind !== "none" && r.fastOn && r.fastMode !== "off";
     p.assistTemp.textContent = assistActive ? fmt(r.fastTarget, 1, "°") : "—";
+    p.assistTemp.classList.toggle("muted", !assistActive);
+    p.assistTemp.title = noSourceTitle;
   }
 
   _chip(code) {
@@ -2878,6 +3415,7 @@ class TortoiseUfhPanel extends HTMLElement {
     D.statValveVal = h("span", { class: "stat-val" });
     D.statValveFill = h("span", { class: "valve-fill" });
     D.statAssist = h("span", { class: "fast-badge stat-badge" });
+    D.statAssistSub = h("span", { class: "stat-sub", style: "display:none" });
     const tiles = h("div", { class: "stat-tiles" }, [
       h("div", { class: "stat-tile" }, [
         h("span", { class: "stat-cap" }, [
@@ -2903,6 +3441,7 @@ class TortoiseUfhPanel extends HTMLElement {
           this._infoIcon("tip_dec_fast"),
         ]),
         D.statAssist,
+        D.statAssistSub,
       ]),
     ]);
 
@@ -2917,8 +3456,10 @@ class TortoiseUfhPanel extends HTMLElement {
     this._buildHistory(D, name, historyMount);
     const history = this._section(this._t("sec_history"), historyMount);
 
-    // Section: wiring — reference material, foldable, at the bottom; the
-    // disclosure state persists across room switches (instance-level).
+    // Section: sensors & signals (A6) — reference material, foldable, at the
+    // bottom; the disclosure state persists across room switches
+    // (instance-level). The current VALUE of each signal is the headline;
+    // the source entity id hides behind an "i" icon.
     D.wiringBody = h("div", { class: "wire-list" });
     const wiring = h(
       "details",
@@ -2936,6 +3477,26 @@ class TortoiseUfhPanel extends HTMLElement {
         D.wiringBody,
       ],
     );
+    // Section: diagnostic entities — an OWN fold, collapsed by default (A5),
+    // no longer inheriting the signals section's disclosure state.
+    D.diagBody = h("div", { class: "wire-list" });
+    D.diagFold = h(
+      "details",
+      {
+        class: "sub sub-fold",
+        open: this._diagOpen ? true : null,
+        style: "display:none",
+        on: {
+          toggle: (e) => {
+            this._diagOpen = e.target.open;
+          },
+        },
+      },
+      [
+        h("summary", { class: "sub-title", text: this._t("sec_diagnostics") }),
+        D.diagBody,
+      ],
+    );
     this._buildWiring(D, name);
 
     const body = h("div", { class: "detail-body" }, [
@@ -2944,6 +3505,7 @@ class TortoiseUfhPanel extends HTMLElement {
       dec,
       history,
       wiring,
+      D.diagFold,
     ]);
     detail.appendChild(header);
     detail.appendChild(body);
@@ -2992,24 +3554,27 @@ class TortoiseUfhPanel extends HTMLElement {
       }
     }
 
-    // Optional future field: per-room diagnostic entities (role -> id/list).
+    // Per-room diagnostic entities live in their OWN collapsed fold (A5).
     const diag = room.diagnosticEntities;
     if (diag && Object.keys(diag).length) {
-      D.wiringBody.appendChild(
-        h("div", { class: "wire-group-cap", text: this._t("sec_diagnostics") }),
-      );
+      D.diagFold.style.display = "";
       for (const [key, value] of Object.entries(diag)) {
         const ids = Array.isArray(value) ? value.filter(Boolean) : value ? [value] : [];
         const roleKey = "role_" + key;
         const label = roleKey in STR.en ? this._t(roleKey) : key;
         for (const id of ids) {
-          this._addWireRow(D, label, id);
+          this._addWireRow(D, label, id, D.diagBody);
         }
       }
     }
   }
 
-  _addWireRow(D, label, id) {
+  /**
+   * One signal row (A6): role caption, the CURRENT VALUE as the headline,
+   * the unavailable badge, an "i" icon revealing the source entity id, and
+   * the more-info affordance (the whole row opens the native dialog).
+   */
+  _addWireRow(D, label, id, body) {
     const stateEl = h("span", { class: "wire-state" });
     const badgeEl = h("span", {
       class: "wire-badge",
@@ -3021,7 +3586,6 @@ class TortoiseUfhPanel extends HTMLElement {
       {
         class: "wire-row link",
         tabindex: "0",
-        title: id,
         on: {
           click: () => this._moreInfo(id),
           keydown: (e) => {
@@ -3034,14 +3598,14 @@ class TortoiseUfhPanel extends HTMLElement {
       },
       [
         h("span", { class: "wire-role", text: label }),
-        h("span", { class: "wire-id", text: id }),
         stateEl,
         badgeEl,
+        this._infoIconText(id, "wire_source_tip"),
         this._icon("mdi:open-in-new", "›"),
       ],
     );
     D.rows.push({ entityId: id, stateEl, badgeEl, rowEl });
-    D.wiringBody.appendChild(rowEl);
+    (body || D.wiringBody).appendChild(rowEl);
   }
 
   _refreshWiringStates() {
@@ -3184,6 +3748,17 @@ class TortoiseUfhPanel extends HTMLElement {
     const assist = this._assistLabel(r);
     D.statAssist.className = "fast-badge stat-badge " + assist.cls;
     D.statAssist.textContent = assist.text;
+    // Quiet-hours sub-line (B1): the allowed window, when one is configured.
+    if (r.fastKind !== "none" && r.fastWindowStart && r.fastWindowEnd) {
+      D.statAssistSub.textContent = fmtStr(this._t("assist_window_sub"), {
+        start: r.fastWindowStart,
+        end: r.fastWindowEnd,
+      });
+      D.statAssistSub.style.display = "";
+    } else {
+      D.statAssistSub.textContent = "";
+      D.statAssistSub.style.display = "none";
+    }
 
     D.errorEl.textContent = fmt(r.errorC, 2, " K");
     D.dewEl.textContent = fmt(r.dew, 1, " °C");
@@ -3592,11 +4167,18 @@ class TortoiseUfhPanel extends HTMLElement {
       h("th", { scope: "col", text: this._t("th_room") }),
       h("th", { scope: "col", text: this._t("ast_th_kind") }),
       groupTh,
-      h("th", { scope: "col", text: this._t("ast_th_command") }),
+      h("th", { scope: "col" }, [
+        this._t("ast_th_command"),
+        this._infoIcon("tip_assist_target"),
+      ]),
       h("th", { scope: "col", text: this._t("ast_th_actual") }),
       h("th", { scope: "col" }, [
         this._t("ast_th_timer"),
         this._infoIcon("tip_ast_timer"),
+      ]),
+      h("th", { scope: "col" }, [
+        this._t("ast_th_hours"),
+        this._infoIcon("tip_ast_hours"),
       ]),
       h("th", { scope: "col", text: this._t("ast_th_flags") }),
       h("th", { scope: "col", text: this._t("ast_th_entity") }),
@@ -3699,6 +4281,9 @@ class TortoiseUfhPanel extends HTMLElement {
     p.timer = h("span");
     const timerCell = h("td", null, [p.timer]);
 
+    p.hours = h("span");
+    const hoursCell = h("td", null, [p.hours]);
+
     p.flags = h("div", { class: "chips" });
     const flagsCell = h("td", null, [p.flags]);
 
@@ -3759,6 +4344,7 @@ class TortoiseUfhPanel extends HTMLElement {
         cmdCell,
         actualCell,
         timerCell,
+        hoursCell,
         flagsCell,
         entityCell,
       ],
@@ -3823,11 +4409,21 @@ class TortoiseUfhPanel extends HTMLElement {
       p.timer.textContent = "—";
     }
 
+    // Allowed hours (B1): the configured window, or "always" when free.
+    if (r.fastWindowStart && r.fastWindowEnd) {
+      p.hours.className = "mono";
+      p.hours.textContent = r.fastWindowStart + "–" + r.fastWindowEnd;
+    } else {
+      p.hours.className = "muted";
+      p.hours.textContent = this._t("ast_hours_always");
+    }
+
     // Flags: the assist-relevant subset (K9 extended it with the group
-    // conflict and the physical-state mismatch, previously dropped here).
+    // conflict and the physical-state mismatch; B1 added the quiet hours).
     p.flags.textContent = "";
     for (const f of [
       "fast_source_min_runtime",
+      "fast_source_quiet_hours",
       "fast_source_cannot_cool",
       "fast_source_group_conflict",
       "fast_source_mismatch",
@@ -3840,6 +4436,232 @@ class TortoiseUfhPanel extends HTMLElement {
     // Entity link visibility.
     p.link.style.display = entityId ? "" : "none";
     p.link.title = entityId || "";
+  }
+
+  // --------------------------------------------------------------------------
+  // Heat-pump tab (B2, 2026-07-12)
+  // --------------------------------------------------------------------------
+
+  /** Build the Heat-pump section skeleton (values updated by `_renderHp`). */
+  _buildHpSection() {
+    const P = {};
+    P.empty = h("div", { class: "empty", text: this._t("hp_empty") });
+
+    // Card: operating mode (Tortoise vs pump; sync badge; DHW-only note).
+    P.tortoiseMode = h("span", { class: "kv-val" });
+    P.currentOpt = h("span", { class: "kv-val" });
+    P.desiredOpt = h("span", { class: "kv-val" });
+    P.syncBadge = h("span", { class: "chip", style: "display:none" });
+    const modeGrid = h("div", { class: "kv-grid hp-grid" }, [
+      h("div", { class: "kv" }, [
+        h("span", { class: "kv-cap", text: this._t("hp_tortoise_mode") }),
+        P.tortoiseMode,
+      ]),
+      h("div", { class: "kv" }, [
+        h("span", { class: "kv-cap", text: this._t("hp_current_option") }),
+        P.currentOpt,
+      ]),
+      h("div", { class: "kv" }, [
+        h("span", { class: "kv-cap", text: this._t("hp_desired_option") }),
+        P.desiredOpt,
+      ]),
+    ]);
+    P.dhwOnlyNote = h("div", {
+      class: "hp-note hp-warn",
+      text: this._t("hp_dhw_only_note"),
+      style: "display:none",
+    });
+    P.modeCard = h("div", { class: "hp-card" }, [
+      h("div", { class: "hp-card-cap" }, [
+        this._t("hp_sec_mode"),
+        this._infoIcon("tip_hp_mode"),
+        P.syncBadge,
+      ]),
+      modeGrid,
+      P.dhwOnlyNote,
+      h("div", { class: "hp-note muted", text: this._t("hp_no_force") }),
+    ]);
+
+    // Card: the manual DHW switch (+ the permanent ownership warning).
+    P.dhwToggle = h("button", {
+      class: "tune-toggle",
+      type: "button",
+      on: { click: () => this._toggleHpDhw() },
+    });
+    P.dhwCard = h("div", { class: "hp-card" }, [
+      h("div", { class: "hp-card-cap" }, [
+        this._t("hp_sec_dhw"),
+        this._infoIcon("tip_hp_dhw"),
+      ]),
+      h("div", { class: "hp-dhw-row" }, [
+        h("span", { class: "kv-cap", text: this._t("hp_dhw_switch") }),
+        P.dhwToggle,
+      ]),
+      h("div", { class: "hp-note hp-warn", text: this._t("hp_dhw_warning") }),
+    ]);
+
+    // Card: water setpoints (what we write and why — the components).
+    P.coolVal = h("span", { class: "kv-val" });
+    P.coolCalc = h("span", { class: "hp-calc muted" });
+    P.heatVal = h("span", { class: "kv-val" });
+    P.heatCalc = h("span", { class: "hp-calc muted" });
+    P.setpointsCard = h("div", { class: "hp-card" }, [
+      h("div", { class: "hp-card-cap", text: this._t("hp_sec_setpoints") }),
+      h("div", { class: "kv" }, [
+        h("span", { class: "kv-cap" }, [
+          this._t("hp_cool_target"),
+          this._infoIcon("tip_hp_cool"),
+        ]),
+        P.coolVal,
+        P.coolCalc,
+      ]),
+      h("div", { class: "kv" }, [
+        h("span", { class: "kv-cap" }, [
+          this._t("hp_heat_target"),
+          this._infoIcon("tip_hp_heat"),
+        ]),
+        P.heatVal,
+        P.heatCalc,
+      ]),
+    ]);
+
+    // Card: "pump available for UFH" (only when the entity is configured).
+    P.activeVal = h("span", { class: "kv-val" });
+    P.activeCard = h("div", { class: "hp-card", style: "display:none" }, [
+      h("div", { class: "hp-card-cap" }, [
+        this._t("hp_active_cap"),
+        this._infoIcon("tip_hp_active"),
+      ]),
+      P.activeVal,
+    ]);
+
+    P.paused = h("div", {
+      class: "hp-note hp-warn",
+      text: this._t("hp_writes_paused"),
+      style: "display:none",
+    });
+    P.body = h("div", { class: "hp", style: "display:none" }, [
+      P.paused,
+      P.modeCard,
+      P.dhwCard,
+      P.setpointsCard,
+      P.activeCard,
+    ]);
+
+    const el = h(
+      "section",
+      {
+        class: "tab-section",
+        role: "tabpanel",
+        style: "display:none",
+        dataset: { tab: "hp" },
+      },
+      [P.empty, P.body],
+    );
+    this._hpEls = P;
+    return el;
+  }
+
+  /** Update the Heat-pump tab in place from the polled live payload. */
+  _renderHp() {
+    const P = this._hpEls;
+    if (!P) {
+      return;
+    }
+    const hp = (this._live && this._live.heat_pump) || null;
+    if (!hp) {
+      P.empty.style.display = "";
+      P.body.style.display = "none";
+      return;
+    }
+    P.empty.style.display = "none";
+    P.body.style.display = "";
+    P.paused.style.display = hp.writes_enabled ? "none" : "";
+
+    // Mode + DHW cards need the pump-mode select.
+    const hasMode = !!hp.mode_entity_id;
+    P.modeCard.style.display = hasMode ? "" : "none";
+    P.dhwCard.style.display = hasMode ? "" : "none";
+    if (hasMode) {
+      const mode = pick(this._live || {}, ["mode"], "heating");
+      P.tortoiseMode.textContent = this._modeLabel(mode);
+      P.currentOpt.textContent = hp.current_option || "—";
+      P.desiredOpt.textContent = hp.desired_option || "—";
+      if (hp.in_sync === null || hp.in_sync === undefined) {
+        P.syncBadge.style.display = "none";
+      } else {
+        P.syncBadge.style.display = "";
+        P.syncBadge.className = "chip " + (hp.in_sync ? "chip-ok" : "chip-warn");
+        P.syncBadge.textContent = this._t(hp.in_sync ? "hp_in_sync" : "hp_diverged");
+      }
+      P.dhwOnlyNote.style.display = hp.dhw_only ? "" : "none";
+      P.dhwToggle.classList.toggle("on", !!hp.dhw_active);
+      P.dhwToggle.textContent = this._t(hp.dhw_active ? "tune_on" : "tune_off");
+      P.dhwToggle.setAttribute("aria-pressed", hp.dhw_active ? "true" : "false");
+    }
+
+    // Water setpoints: value + the components that produced it.
+    const setRow = (valEl, calcEl, payload, calcKey, calcParams) => {
+      if (!payload) {
+        valEl.textContent = this._t("hp_not_configured_entity");
+        valEl.className = "kv-val muted";
+        calcEl.textContent = "";
+        return;
+      }
+      if (payload.target_c === null || payload.target_c === undefined) {
+        valEl.textContent = this._t("hp_not_written");
+        valEl.className = "kv-val muted";
+      } else {
+        valEl.textContent = fmt(payload.target_c, 1, " °C");
+        valEl.className = "kv-val";
+      }
+      calcEl.textContent = fmtStr(this._t(calcKey), calcParams(payload));
+    };
+    setRow(P.coolVal, P.coolCalc, hp.cooling, "hp_cool_calc", (c) => ({
+      base: fmt(c.base_c, 1, " °C"),
+      dew: fmt(c.safe_dew_c, 1, " °C"),
+    }));
+    setRow(P.heatVal, P.heatCalc, hp.heating, "hp_heat_calc", (hh) => ({
+      base: fmt(hh.base_c, 1, " °C"),
+      slope: fmt(hh.slope, 1),
+      neutral: fmt(hh.neutral_c, 1, " °C"),
+      tout: fmt(hh.t_out_c, 1, " °C"),
+    }));
+
+    // "Pump available for UFH" — only with a configured entity.
+    P.activeCard.style.display = hp.hp_active_configured ? "" : "none";
+    if (hp.hp_active_configured) {
+      P.activeVal.textContent =
+        hp.hp_active === null || hp.hp_active === undefined
+          ? this._t("hp_active_unknown")
+          : this._t(hp.hp_active ? "yes" : "no");
+      P.activeVal.classList.toggle("warn", hp.hp_active === false);
+    }
+  }
+
+  /** Toggle the pump's +DHW flag (optimistic patch; the poll reconciles). */
+  async _toggleHpDhw() {
+    const hp = (this._live && this._live.heat_pump) || null;
+    const P = this._hpEls;
+    if (!hp || !hp.mode_entity_id || !P) {
+      return;
+    }
+    const want = !hp.dhw_active;
+    P.dhwToggle.disabled = true;
+    const res = await this._callWS({ type: WS.setHpDhw, dhw: want });
+    P.dhwToggle.disabled = false;
+    if (res) {
+      this._live = {
+        ...this._live,
+        heat_pump: {
+          ...hp,
+          dhw_active: want,
+          current_option: res.option || hp.current_option,
+        },
+      };
+      this._renderHp();
+    }
+    this._poll();
   }
 
   // --------------------------------------------------------------------------
@@ -3968,7 +4790,7 @@ class TortoiseUfhPanel extends HTMLElement {
     }
   }
 
-  /** (Re)build the scope chips + knob cards from the current payload + scope. */
+  /** (Re)build the scope chips + grouped knob list (A4) for the active scope. */
   _renderTuning() {
     const E = this._tuningEls;
     if (!E) {
@@ -3977,7 +4799,10 @@ class TortoiseUfhPanel extends HTMLElement {
     // Scope chips: Global + one per configured room.
     this._renderTuningScopes();
 
-    // Knob cards.
+    // Grouped vertical knob list (A4): one titled section per KNOB_GROUPS
+    // entry, parameters one under another. Global-only groups (heat-pump
+    // water) never render in a room scope; a knob the backend exposes but no
+    // group lists lands in a trailing "other" section — never silently lost.
     E.body.textContent = "";
     E.fields = new Map();
     const fields = (this._tuning && this._tuning.fields) || [];
@@ -3985,8 +4810,34 @@ class TortoiseUfhPanel extends HTMLElement {
       E.body.appendChild(h("div", { class: "empty", text: this._t("loading") }));
       return;
     }
-    for (const field of fields) {
-      E.body.appendChild(this._buildTuneCard(field));
+    const byName = new Map(fields.map((f) => [f.name, f]));
+    const isRoom = this._tuningScope !== "global";
+    const grouped = new Set();
+    for (const group of KNOB_GROUPS) {
+      for (const knob of group.knobs) {
+        grouped.add(knob);
+      }
+    }
+    const leftovers = fields.map((f) => f.name).filter((n) => !grouped.has(n));
+    const sections = [...KNOB_GROUPS];
+    if (leftovers.length) {
+      sections.push({ key: "other", labelKey: "tune_grp_other", knobs: leftovers });
+    }
+    for (const group of sections) {
+      if (group.globalOnly && isRoom) {
+        continue;
+      }
+      const present = group.knobs.filter((n) => byName.has(n));
+      if (!present.length) {
+        continue;
+      }
+      const section = h("div", { class: "tune-group" }, [
+        h("div", { class: "tune-group-cap", text: this._t(group.labelKey) }),
+      ]);
+      for (const name of present) {
+        section.appendChild(this._buildTuneCard(byName.get(name)));
+      }
+      E.body.appendChild(section);
     }
     E.saveNote.textContent = "";
   }
@@ -5055,17 +5906,26 @@ button { font-family: inherit; cursor: pointer; }
 .tune-scope:hover { border-color: var(--t-primary); }
 .tune-scope.active { background: var(--t-primary); color: var(--t-on-primary); border-color: var(--t-primary); }
 .tune-scope:focus-visible { outline: 2px solid var(--t-primary); outline-offset: 2px; }
-.tune-body {
-  display: grid; gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+/* Grouped vertical parameter list (A4): titled sections, one knob per row. */
+.tune-body { display: flex; flex-direction: column; gap: 14px; max-width: 860px; }
+.tune-group {
+  border: 1px solid var(--t-line); border-radius: var(--t-radius);
+  background: var(--t-card); overflow: hidden;
+}
+.tune-group-cap {
+  padding: 10px 14px; font-size: 13px; font-weight: 700;
+  border-bottom: 1px solid var(--t-line);
+  background: color-mix(in srgb, var(--t-chip) 55%, transparent);
 }
 .tune-card {
-  border: 1px solid var(--t-line); border-radius: var(--t-radius);
-  background: var(--t-card); padding: 12px 14px;
-  display: flex; flex-direction: column; gap: 10px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--t-line);
 }
+.tune-card:last-child { border-bottom: 0; }
 .tune-card.inherited { opacity: .62; }
-.tune-card-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.tune-card-head {
+  flex: 1 1 auto; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px;
+}
 .tune-label { font-size: 13px; font-weight: 600; color: var(--t-fg); }
 .tune-unit { font-size: 11px; color: var(--t-muted); }
 .tune-badge {
@@ -5081,9 +5941,9 @@ button { font-family: inherit; cursor: pointer; }
 }
 .tune-revert:hover { border-color: var(--t-primary); color: var(--t-primary); }
 .tune-toggle {
-  align-self: flex-start; border: 1px solid var(--t-line); background: var(--t-card);
+  border: 1px solid var(--t-line); background: var(--t-card);
   color: var(--t-fg); border-radius: 999px; padding: 6px 16px; font-size: 13px; font-weight: 600;
-  min-width: 68px;
+  min-width: 68px; flex: none;
 }
 .tune-toggle.on { background: var(--t-primary); color: var(--t-on-primary); border-color: var(--t-primary); }
 .tune-footer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -5137,12 +5997,20 @@ button { font-family: inherit; cursor: pointer; }
   background: var(--t-card);
 }
 .rooms-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* Sentence-case headers (A1): no uppercase transform, one step larger. */
 .rooms-table thead th {
   position: sticky; top: 0; z-index: 1;
   background: var(--t-card); text-align: left; white-space: nowrap;
-  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  font-size: 12px; font-weight: 600;
   color: var(--t-muted); padding: 8px 10px; border-bottom: 1px solid var(--t-line);
 }
+/* Two-row header (A3): the grouped assist header is centred and underlined;
+   the sub-row sticks right below the first row (fixed first-row height). */
+.rooms-table thead tr:first-child th { height: 34px; }
+.rooms-table thead th.col-assist-group {
+  text-align: center; border-bottom: 1px solid var(--t-line);
+}
+.rooms-table thead tr.subhead th { top: 34px; }
 .rooms-table tbody td {
   padding: 8px 10px; border-bottom: 1px solid var(--t-line); vertical-align: middle;
 }
@@ -5198,9 +6066,10 @@ button { font-family: inherit; cursor: pointer; }
 
 /* Valves + Assist tables (share the room-table look) */
 .valves-table, .assist-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* Sentence-case headers (A1) — consistent with the Rooms table. */
 .valves-table thead th, .assist-table thead th {
   position: sticky; top: 0; z-index: 1; background: var(--t-card); text-align: left; white-space: nowrap;
-  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  font-size: 12px; font-weight: 600;
   color: var(--t-muted); padding: 8px 10px; border-bottom: 1px solid var(--t-line);
 }
 .valves-table tbody td, .assist-table tbody td {
@@ -5232,7 +6101,9 @@ button { font-family: inherit; cursor: pointer; }
 .chip-dew .chip-sub { font-size: 11px; color: var(--t-muted); line-height: 1.3; max-width: 260px; }
 
 /* Narrow sidebar: drop the least-critical columns (data stays in the detail);
-   Measured/Setpoint/Valve/Assist-mode stay visible. */
+   Measured/Setpoint/Valve/Assist-mode stay visible. The "Wspomaganie" group
+   header keeps its colspan=2 — with the Temp. column hidden the browser
+   clamps it over the remaining Tryb sub-column. */
 @media (max-width: ${NARROW_MAX_PX}px) {
   .rooms-table .col-error,
   .rooms-table .col-supply,
@@ -5288,9 +6159,13 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 .wire-row.link { cursor: pointer; }
 .wire-row.link:hover { background: var(--t-chip); }
 .wire-row.link:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; }
-.wire-role { font-size: 12px; color: var(--t-muted); min-width: 92px; }
+.wire-role { font-size: 12px; color: var(--t-muted); min-width: 118px; }
 .wire-id { font-family: ui-monospace, "Roboto Mono", monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
-.wire-state { font-size: 12px; font-weight: 600; white-space: nowrap; }
+/* The live VALUE is the row's headline (A6); the source id hides behind "i". */
+.wire-state {
+  font-size: 13px; font-weight: 600; white-space: nowrap; flex: 1 1 auto;
+  font-variant-numeric: tabular-nums;
+}
 .wire-badge { font-size: 10px; padding: 2px 7px; border-radius: 999px; background: var(--t-error); color: var(--t-on-primary); }
 .wire-row.wire-bad .wire-state { color: var(--t-error); }
 .wire-row .hicon, .wire-row .hicon-fallback { margin-left: auto; }
@@ -5385,6 +6260,48 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
   top: auto; bottom: -5.5px; border: 0;
   border-right: 1px solid var(--t-line); border-bottom: 1px solid var(--t-line);
 }
+
+/* Shared confirmation popover (A2) */
+.confirm-pop {
+  position: fixed; z-index: 41; max-width: 320px;
+  background: var(--t-card); color: var(--t-fg);
+  border: 1px solid var(--t-line); border-radius: 10px;
+  padding: 12px 14px; font-size: 13px; line-height: 1.45;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+}
+.confirm-text { margin-bottom: 10px; overflow-wrap: anywhere; }
+.confirm-btns { display: flex; gap: 8px; justify-content: flex-end; }
+.confirm-yes {
+  border: 1px solid var(--t-primary); background: var(--t-primary);
+  color: var(--t-on-primary); border-radius: 8px; padding: 6px 14px;
+  font-size: 13px; font-weight: 600;
+}
+.confirm-yes:hover { filter: brightness(1.05); }
+.confirm-yes:focus-visible { outline: 2px solid var(--t-fg); outline-offset: 1px; }
+.confirm-no {
+  border: 1px solid var(--t-line); background: var(--t-card); color: var(--t-fg);
+  border-radius: 8px; padding: 6px 14px; font-size: 13px;
+}
+.confirm-no:hover { border-color: var(--t-primary); color: var(--t-primary); }
+
+/* Heat-pump tab (B2) */
+.hp { display: flex; flex-direction: column; gap: 14px; max-width: 720px; }
+.hp-card {
+  border: 1px solid var(--t-line); border-radius: var(--t-radius);
+  background: var(--t-card); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.hp-card-cap {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 700;
+}
+.hp-card-cap .chip { margin-left: auto; }
+.hp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.hp-note { font-size: 12px; line-height: 1.45; }
+.hp-warn { color: var(--t-warn); }
+.hp-calc { font-size: 12px; }
+.hp-dhw-row { display: flex; align-items: center; gap: 12px; }
+.chip-ok { background: color-mix(in srgb, var(--t-ok) 18%, transparent); color: var(--t-ok); }
 
 /* Chart tooltip */
 .chart-tip {

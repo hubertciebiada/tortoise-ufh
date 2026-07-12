@@ -641,3 +641,31 @@ class TestSaturatedSemantics:
         assert out.report.dew_throttle_factor == 0.0
         assert "s2_throttle" in out.report.flags
         assert out.report.saturated is False
+
+
+class TestQuietHoursDefaults:
+    """B1 (2026-07-12): quiet hours are a fast-source-only concern."""
+
+    @pytest.mark.unit
+    def test_room_without_fast_source_never_flags_quiet_hours(self) -> None:
+        """A floor-only room ignores the quiet-hours verdict entirely."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(room_temperature_c=19.0, fast_source_allowed=False),
+            dt_seconds=300.0,
+        )
+        assert "fast_source_quiet_hours" not in out.report.flags
+        assert out.valve_position_pct > 0.0
+
+    @pytest.mark.unit
+    def test_default_allowed_true_is_transparent(self) -> None:
+        """The additive RoomInputs default leaves existing behaviour intact."""
+        baseline = RoomController(ControllerConfig(), name="a")
+        explicit = RoomController(ControllerConfig(), name="b")
+        base_out = baseline.step(make_inputs(room_temperature_c=19.0), dt_seconds=300.0)
+        expl_out = explicit.step(
+            make_inputs(room_temperature_c=19.0, fast_source_allowed=True),
+            dt_seconds=300.0,
+        )
+        assert base_out.valve_position_pct == expl_out.valve_position_pct
+        assert base_out.report.flags == expl_out.report.flags

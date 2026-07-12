@@ -82,6 +82,11 @@ class CommandWriter:
         # entity_id -> (hvac_mode, target_temp_c or None, monotonic timestamp).
         # An unchanged command younger than _FAST_REASSERT_SECONDS is skipped.
         self._last_written_fast: dict[str, tuple[str, float | None, float]] = {}
+        # Heat-pump link caches (B2, 2026-07-12):
+        # pump-mode select -> (option, monotonic); setpoint number ->
+        # (value_c, monotonic). Same re-assert philosophy as the splits (S3).
+        self._last_written_hp_mode: dict[str, tuple[str, float]] = {}
+        self._last_written_hp_setpoint: dict[str, tuple[float, float]] = {}
 
     def last_written_valve(self, entity_id: str) -> float | None:
         """Return the last position written to a valve entity, if any.
@@ -228,6 +233,81 @@ class CommandWriter:
             )
         else:
             self._last_written_fast[entity_id] = (hvac_mode, target, now_monotonic)
+
+    async def write_hp_mode(self, entity_id: str, option: str) -> bool:
+        """Write a pump-mode option via ``select.select_option`` (B2).
+
+        The anti-flap gating (mode-change / persistent-divergence / 15-min
+        minimum between rewrites) lives in the coordinator's
+        ``_sync_heat_pump``; this method performs the write and records it.
+
+        Args:
+            entity_id: The pump-mode select entity id.
+            option: The option to select — must already be canonicalised to
+                the entity's OWN option list (a ``select_option`` with an
+                unknown option raises inside HA).
+
+        Returns:
+            ``True`` when the service call was issued successfully.
+        """
+        try:
+            await self._hass.services.async_call(
+                "select",
+                "select_option",
+                {"entity_id": entity_id, "option": option},
+                blocking=False,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Failed to set heat-pump mode %s on %s", option, entity_id
+            )
+            return False
+        self._last_written_hp_mode[entity_id] = (option, time.monotonic())
+        _LOGGER.info("Heat-pump mode written: %s -> %s", entity_id, option)
+        return True
+
+    async def write_hp_setpoint(
+        self, entity_id: str, value_c: float, *, threshold_k: float = 0.5
+    ) -> None:
+        """Write a water setpoint via ``number.set_value``, rarely (B2).
+
+        Mirrors the fast-source command cache (S3): the value is written only
+        when it moved by at least ``threshold_k`` from the last written value
+        OR the last write is older than the re-assert period (45 min) — the
+        pump is a slow device and Tortoise stays the owner without spamming
+        it, self-healing after a manual change.
+
+        Args:
+            entity_id: The setpoint ``number`` entity id.
+            value_c: The setpoint to write [degC]. Rounded to the 0.5 K grid
+                pump number entities typically use, so the pump UI never
+                shows a curve/dew artefact like 27.35.
+            threshold_k: Minimum change that triggers a fresh write [K].
+        """
+        value_c = round(value_c * 2.0) / 2.0
+        cached = self._last_written_hp_setpoint.get(entity_id)
+        now_monotonic = time.monotonic()
+        if (
+            cached is not None
+            and abs(value_c - cached[0]) < threshold_k
+            and now_monotonic - cached[1] < _FAST_REASSERT_SECONDS
+        ):
+            return
+        try:
+            await self._hass.services.async_call(
+                "number",
+                "set_value",
+                {"entity_id": entity_id, "value": value_c},
+                blocking=False,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Failed to write heat-pump setpoint %.1f degC to %s",
+                value_c,
+                entity_id,
+            )
+        else:
+            self._last_written_hp_setpoint[entity_id] = (value_c, now_monotonic)
 
     async def farewell_room(
         self,

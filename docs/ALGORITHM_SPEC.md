@@ -515,9 +515,10 @@ belt-and-braces (Aneks §8.4). This is distinct from the independent hard-safety
 ## 8. Fast-source coordination and anti priority-inversion
 
 Only when `fast_source_kind != NONE`. Command shape (`FastSourceCommand`): `on` +
-`mode ∈ {HEATING, COOLING, OFF}` + `target_temperature_c` (S12, 2026-07-09: `setpoint + 1 K`
-while HEATING / `setpoint - 1 K` while COOLING — `FAST_TARGET_OFFSET_K`; exactly `setpoint` in
-TRANSITIONAL). We set the split's own setpoint and mode (`climate.set_hvac_mode` +
+`mode ∈ {HEATING, COOLING, OFF}` + `target_temperature_c` (S12, 2026-07-09: `setpoint + offset`
+while HEATING / `setpoint - offset` while COOLING — the `fast_target_offset_k` tuning knob since
+2026-07-13, default 1 K, `0` disables, previously the fixed `FAST_TARGET_OFFSET_K`; exactly
+`setpoint` in TRANSITIONAL regardless of the knob). We set the split's own setpoint and mode (`climate.set_hvac_mode` +
 `climate.set_temperature`); we never touch compressor power — the split self-regulates. The
 adapter caches the last written `(hvac_mode, target)` per entity and re-sends only on change or
 after a ~45-min re-assert (S3).

@@ -227,7 +227,9 @@ the dew-point layers (§2), and the control law (Q4).
   the previous cycle's command raises the additive `fast_source_mismatch` flag. Rooms without
   feedback (`fast_source_on is None`) keep the legacy free first transition.
 - **S12 — boost target offset + transitional bias removal.** In HEATING/COOLING the split target
-  is `setpoint + 1.0 K` / `setpoint - 1.0 K` (fixed `FAST_TARGET_OFFSET_K`): the split's own
+  is `setpoint + 1.0 K` / `setpoint - 1.0 K` (fixed `FAST_TARGET_OFFSET_K`; since 2026-07-13 the
+  `fast_target_offset_k` tuning knob, default 1.0, 0 disables — owner found the silent offset
+  confusing in the panel): the split's own
   ceiling-mounted sensor reads warm, so `target = setpoint` throttled the unit before the boost
   was delivered; the release still belongs to OUR room sensor (hysteresis + min-ON), so the room
   cannot run away. In TRANSITIONAL the target stays exactly `setpoint` and the release moves to
@@ -760,3 +762,82 @@ multisplit arbiter; K10: phantom ON after farewell in shadow).
 
 Unchanged: the three external outputs, the safe-degrade contract, the dew-point layers,
 the control law, and the no-reload-on-state-change rule (PID integrator preserved).
+
+---
+
+## 14. Revision — opt-in heat-pump link + per-room quiet hours (2026-07-12, v0.8.0)
+
+> **Status: this EXTENDS a frozen contract.** PRD §8.10 excludes heat-pump control and
+> Q8/§8.8 defines "three outputs"; the extension is recorded as a deliberate, dated
+> owner decision (2026-07-12) in `prd-control-brain.md` §8.13. Tortoise STILL never
+> controls the compressor, the power or the pump's own weather curve. Everything below
+> is **opt-in**: an unconfigured "Heat pump" options section keeps the pre-0.8.0
+> behaviour bit-for-bit.
+
+**A. Heat-pump link (B2).** New pure core module `core/hp_link.py` (no `homeassistant`),
+adapter plumbing in `coordinator._sync_heat_pump` / `readers.read_select_option` /
+`writers.write_hp_mode` + `write_hp_setpoint`, options-flow leaf `heat_pump`, websocket
+`get_live.heat_pump` + `set_hp_dhw`, and a new panel tab.
+
+- **Direction sync write table** (`direction_option(mode, current)`; HeishaMon-style
+  select, matching case-insensitive, output canonical, the WRITE re-canonicalised to the
+  live entity's own option list — no match ⇒ skip + log, never a blind
+  `select_option`):
+
+  | Tortoise \ pump | Heat only | Cool only | Auto | Heat+DHW | Cool+DHW | Auto+DHW | DHW only | unknown/None |
+  |---|---|---|---|---|---|---|---|---|
+  | heating | (in sync) | Heat only | Heat only | (in sync) | Heat+DHW | Heat+DHW | **skip** | skip |
+  | cooling | Cool only | (in sync) | Cool only | Cool+DHW | (in sync) | Cool+DHW | **skip** | skip |
+  | transitional / off | — never forces a direction — | | | | | | | |
+
+- **DHW rules (the race with the external DHW automation):** the `+DHW` part ALWAYS
+  survives a direction write; `"DHW only"` is never written as a direction; a pump
+  currently in `"DHW only"` is never written at all (the DHW automation is mid-cycle and
+  restores its remembered direction itself — writing would race it; the panel shows the
+  divergence with a DHW-only note instead). Because `Heat+DHW` counts as "in sync" for
+  heating, the DHW automation's normal operation produces ZERO false divergences.
+- **Anti-flap:** a direction write needs (Tortoise mode changed since our last write OR
+  divergence persisting ≥ 2 consecutive cycles) AND ≥ 15 min since our last direction
+  write. Water setpoints go through a 0.5 K threshold + the 45-min re-assert (the same
+  S3 philosophy as the splits: the machine stays the owner, self-heals a manual change).
+- **Water setpoints:** cooling = `max(cooling_supply_base_c, global safe dew point)`
+  (never into the condensation zone); heating = optional
+  `WeatherCompCurve(heating_supply_base_c, heating_supply_slope, ff_neutral_c)` clamped
+  to fixed 20–40 °C (firmware/screed limits, deliberately not knobs). No outdoor
+  reading ⇒ no heating write that cycle (the pump keeps its last setpoint — bounded by
+  its own firmware).
+- **Gating:** pump writes only while NOT parked and ≥ 1 room is `live` (a global
+  actuator may be touched only while somebody handed Tortoise the controls). The panel
+  shows "writes paused" so a divergence in an all-off home does not look like a bug.
+  The farewell/unload deliberately does NOT touch the pump.
+- **New GLOBAL-ONLY knobs** `cooling_supply_base_c` (18 °C, 10–25),
+  `heating_supply_base_c` (26 °C, 20–40), `heating_supply_slope` (0.5 K/K, 0–2):
+  building-level physics, so `coerce_tuning_values` rejects them for a room scope and
+  the panel renders their tuning group only in the Global scope
+  (`HP_GLOBAL_ONLY_KNOBS`).
+- The dormant `CONF_ENTITY_HP_ACTIVE` moved from the coordinator's dead zone into the
+  same options section; the global entity feeds `hp_active_for_ufh` of EVERY room
+  (integrator freeze during DHW/defrost); a legacy per-room key still overrides.
+
+**B. Per-room assist quiet hours (B1).** Optional per-room window (`"HH:MM"` pair, may
+cross midnight) in which the fast source MAY run. THE ONE HARD RULE preserved: the
+adapter evaluates the window against HA's LOCAL clock and hands the core a plain
+`RoomInputs.fast_source_allowed` bool (additive, default `True`); the pure window
+arithmetic (`window_allows`) lives in `core/fast_source.py` so the midnight/edge cases
+are unit-tested offline. Outside the window the controller requests OFF through the
+NORMAL `decide()` path: an idle unit never engages, a running unit stops only after its
+min-ON dwell (compressor protection outranks punctuality; flag
+`fast_source_quiet_hours`, severity "ok"). TRANSITIONAL suppresses the split too (quiet
+is quiet — a deliberate, documented trade-off), while the S3/S4 emergency force-on
+IGNORES the window (room safety outranks acoustic comfort). The window edge is honoured
+at control-cycle granularity (5 min) — deliberately no extra time listener. Validation:
+both times or neither, `start != end` (`quiet_window_invalid`).
+
+**C. Panel UX round (A1–A7, same release):** sentence-case table headers; a shared
+inline confirmation popover for the room-state segment and the home-mode switch (no
+native `confirm()`); the Rooms table's Tryb/Temp columns grouped under a "Wspomaganie"
+two-row header with honest empty states; the Tuning tab re-laid as titled vertical
+groups with full knob names; diagnostics folded into their own collapsed section;
+"Okablowanie" renamed to "Czujniki i sygnały" with the live VALUE as the headline and
+the entity id behind an "i" icon; a tooltip + manual paragraph explaining the deliberate
+±1 K split-target offset (S12).

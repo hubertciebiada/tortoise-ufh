@@ -17,9 +17,15 @@
           "room_area": "Powierzchnia podłogi (m²)",
           "fast_source_kind": "Szybkie źródło (split / grzałka)",
           "fast_source_group": "Grupa wspólnego agregatu (multisplit, opcjonalnie)",
+          "fast_source_window_start": "Wspomaganie dozwolone od (opcjonalnie)",
+          "fast_source_window_end": "Wspomaganie dozwolone do (opcjonalnie)",
           "has_fast_source": "To pomieszczenie ma szybkie źródło pomocnicze",
           "cooling_enabled": "Udział w chłodzeniu podłogowym",
           "add_another": "Dodaj kolejne pomieszczenie"
+        },
+        "data_description": {
+          "fast_source_window_start": "Poza tym oknem split/grzałka pokoju się nie załączy (ciche godziny); pracująca jednostka zatrzyma się dopiero po minimalnym czasie pracy. Okno może przechodzić przez północ (np. 07:00–22:00 albo 22:00–07:00). Zostaw oba pola puste, by nie ograniczać. Dotyczy tylko pokoi ze wspomaganiem.",
+          "fast_source_window_end": "Poza tym oknem split/grzałka pokoju się nie załączy (ciche godziny); pracująca jednostka zatrzyma się dopiero po minimalnym czasie pracy. Okno może przechodzić przez północ (np. 07:00–22:00 albo 22:00–07:00). Zostaw oba pola puste, by nie ograniczać. Dotyczy tylko pokoi ze wspomaganiem."
         }
       },
       "entities": {
@@ -49,8 +55,12 @@
           "boost_offset_c": "Próg załączenia szybkiego źródła (K)",
           "fast_min_on_minutes": "Minimalny czas załączenia szybkiego źródła (min)",
           "fast_min_off_minutes": "Minimalny czas wyłączenia szybkiego źródła (min)",
+          "fast_target_offset_k": "Podbicie nastawy wspomagania (K, 0 = brak)",
           "dew_margin_k": "Margines punktu rosy (K)",
           "dew_ramp_k": "Pasmo narastania punktu rosy (K)",
+          "cooling_supply_base_c": "Bazowa temperatura wody chłodzenia (°C, globalne)",
+          "heating_supply_base_c": "Bazowa temperatura wody grzania (°C, globalne)",
+          "heating_supply_slope": "Nachylenie krzywej wody grzania (K/K, globalne)",
           "ff_neutral_c": "Temperatura neutralna sprzężenia pogodowego (°C)",
           "ff_gain_pct_per_k": "Wzmocnienie sprzężenia pogodowego (%/K)",
           "ff_max_pct": "Limit sprzężenia pogodowego (%)",
@@ -75,7 +85,8 @@
       "invalid_unit": "Encja ma nieprawidłową jednostkę miary",
       "invalid_device_class": "Encja ma nieprawidłową klasę urządzenia",
       "entity_unavailable": "Encja jest obecnie niedostępna — może pojawić się później",
-      "valve_no_set_position": "Ta encja valve nie obsługuje ustawiania pozycji (SET_POSITION). Wybierz zawór z obsługą pozycji lub encję number."
+      "valve_no_set_position": "Ta encja valve nie obsługuje ustawiania pozycji (SET_POSITION). Wybierz zawór z obsługą pozycji lub encję number.",
+      "quiet_window_invalid": "Podaj obie godziny okna (od i do, różne od siebie) albo żadną."
     },
     "abort": {
       "already_configured": "Tortoise-UFH jest już skonfigurowany dla tej lokalizacji"
@@ -90,7 +101,8 @@
           "add_room": "Dodaj pomieszczenie",
           "edit_room": "Edytuj pomieszczenie",
           "remove_room": "Usuń pomieszczenie",
-          "settings": "Ustawienia sterowania i strojenia"
+          "settings": "Ustawienia sterowania i strojenia",
+          "heat_pump": "Pompa ciepła"
         }
       },
       "settings": {
@@ -105,8 +117,12 @@
           "boost_offset_c": "Próg załączenia szybkiego źródła (K)",
           "fast_min_on_minutes": "Minimalny czas załączenia szybkiego źródła (min)",
           "fast_min_off_minutes": "Minimalny czas wyłączenia szybkiego źródła (min)",
+          "fast_target_offset_k": "Podbicie nastawy wspomagania (K, 0 = brak)",
           "dew_margin_k": "Margines punktu rosy (K)",
           "dew_ramp_k": "Pasmo narastania punktu rosy (K)",
+          "cooling_supply_base_c": "Bazowa temperatura wody chłodzenia (°C, globalne)",
+          "heating_supply_base_c": "Bazowa temperatura wody grzania (°C, globalne)",
+          "heating_supply_slope": "Nachylenie krzywej wody grzania (K/K, globalne)",
           "ff_neutral_c": "Temperatura neutralna sprzężenia pogodowego (°C)",
           "ff_gain_pct_per_k": "Wzmocnienie sprzężenia pogodowego (%/K)",
           "ff_max_pct": "Limit sprzężenia pogodowego (%)",
@@ -123,7 +139,13 @@
           "has_fast_source": "To pomieszczenie ma szybkie źródło pomocnicze",
           "fast_source_kind": "Szybkie źródło (split / grzałka)",
           "fast_source_group": "Grupa wspólnego agregatu (multisplit, opcjonalnie)",
+          "fast_source_window_start": "Wspomaganie dozwolone od (opcjonalnie)",
+          "fast_source_window_end": "Wspomaganie dozwolone do (opcjonalnie)",
           "cooling_enabled": "Udział w chłodzeniu podłogowym"
+        },
+        "data_description": {
+          "fast_source_window_start": "Poza tym oknem split/grzałka pokoju się nie załączy (ciche godziny); pracująca jednostka zatrzyma się dopiero po minimalnym czasie pracy. Okno może przechodzić przez północ (np. 07:00–22:00 albo 22:00–07:00). Zostaw oba pola puste, by nie ograniczać. Dotyczy tylko pokoi ze wspomaganiem.",
+          "fast_source_window_end": "Poza tym oknem split/grzałka pokoju się nie załączy (ciche godziny); pracująca jednostka zatrzyma się dopiero po minimalnym czasie pracy. Okno może przechodzić przez północ (np. 07:00–22:00 albo 22:00–07:00). Zostaw oba pola puste, by nie ograniczać. Dotyczy tylko pokoi ze wspomaganiem."
         }
       },
       "edit_room": {
@@ -142,7 +164,13 @@
           "has_fast_source": "To pomieszczenie ma szybkie źródło pomocnicze",
           "fast_source_kind": "Szybkie źródło (split / grzałka)",
           "fast_source_group": "Grupa wspólnego agregatu (multisplit, opcjonalnie)",
+          "fast_source_window_start": "Wspomaganie dozwolone od (opcjonalnie)",
+          "fast_source_window_end": "Wspomaganie dozwolone do (opcjonalnie)",
           "cooling_enabled": "Udział w chłodzeniu podłogowym"
+        },
+        "data_description": {
+          "fast_source_window_start": "Poza tym oknem split/grzałka pokoju się nie załączy (ciche godziny); pracująca jednostka zatrzyma się dopiero po minimalnym czasie pracy. Okno może przechodzić przez północ (np. 07:00–22:00 albo 22:00–07:00). Zostaw oba pola puste, by nie ograniczać. Dotyczy tylko pokoi ze wspomaganiem.",
+          "fast_source_window_end": "Poza tym oknem split/grzałka pokoju się nie załączy (ciche godziny); pracująca jednostka zatrzyma się dopiero po minimalnym czasie pracy. Okno może przechodzić przez północ (np. 07:00–22:00 albo 22:00–07:00). Zostaw oba pola puste, by nie ograniczać. Dotyczy tylko pokoi ze wspomaganiem."
         }
       },
       "remove_room": {
@@ -163,6 +191,20 @@
           "entity_return": "Czujniki temperatury powrotu (po jednym na pętlę)",
           "entity_fast_source": "Encja klimatyzacji szybkiego źródła (split / grzałka)"
         }
+      },
+      "heat_pump": {
+        "title": "Pompa ciepła (opcjonalne sprzężenie)",
+        "description": "Wszystkie pola są opcjonalne — zostaw puste, a Tortoise nie dotknie pompy. Synchronizacja kierunku zawsze zachowuje człon „+DHW”; jego właścicielem pozostaje zewnętrzna automatyka CWU. Przykładowe encje w stylu HeishaMon: select.heat_pump_mode, number.z1_cool_request_temp.",
+        "data": {
+          "entity_hp_mode": "Encja trybu pompy (select)",
+          "entity_hp_heating_setpoint": "Encja nastawy wody grzania (number, opcjonalna)",
+          "entity_hp_cooling_setpoint": "Encja nastawy wody chłodzenia (number, opcjonalna)",
+          "entity_hp_active": "Encja „pompa dostępna dla podłogówki” (opcjonalna)"
+        },
+        "data_description": {
+          "entity_hp_mode": "Select w stylu HeishaMon z opcjami typu „Heat only” / „Cool only” / „Heat+DHW”. Tortoise pisze tylko kierunek i nigdy nie zdejmuje flagi CWU.",
+          "entity_hp_active": "Wyłączona, gdy pompa robi CWU/odszranianie — regulatory pokojów zamrażają wtedy całkę."
+        }
       }
     },
     "error": {
@@ -177,7 +219,8 @@
       "invalid_unit": "Encja ma nieprawidłową jednostkę miary",
       "invalid_device_class": "Encja ma nieprawidłową klasę urządzenia",
       "entity_unavailable": "Encja jest obecnie niedostępna — może pojawić się później",
-      "valve_no_set_position": "Ta encja valve nie obsługuje ustawiania pozycji (SET_POSITION). Wybierz zawór z obsługą pozycji lub encję number."
+      "valve_no_set_position": "Ta encja valve nie obsługuje ustawiania pozycji (SET_POSITION). Wybierz zawór z obsługą pozycji lub encję number.",
+      "quiet_window_invalid": "Podaj obie godziny okna (od i do, różne od siebie) albo żadną."
     },
     "abort": {
       "no_rooms": "Brak pomieszczeń do zarządzania",

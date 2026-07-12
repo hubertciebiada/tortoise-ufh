@@ -873,3 +873,163 @@ async def test_off_room_does_not_vote_in_group_arbitration(
     assert live.fast_source.on is True
     assert live.fast_source.mode.value == "heating"
     assert "fast_source_group_conflict" not in live.report.flags
+
+
+async def test_heat_pump_unconfigured_payload_is_none(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Without the heat-pump options section the link stays entirely off."""
+    coordinator = _get_coordinator(setup_integration)
+    assert coordinator.data.heat_pump is None
+
+
+async def test_heat_pump_cooling_setpoint_and_mode_written_rarely(
+    hass: HomeAssistant,
+    register_sources: None,
+    entry_data: dict[str, Any],
+) -> None:
+    """B2: cooling water = max(base, safe dew); direction write preserves DHW.
+
+    The first LIVE cycle writes both the cooling setpoint and the direction
+    (Heat+DHW -> Cool+DHW). The immediately following cycle writes NEITHER:
+    the setpoint is unchanged (< 0.5 K, < 45 min) and the persisting mode
+    divergence has not yet been seen for two consecutive cycles since the
+    last write (and the 15-min minimum spacing applies anyway).
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.tortoise_ufh.const import (
+        CONF_ENTITY_HP_COOLING_SETPOINT,
+        CONF_ENTITY_HP_MODE,
+        CONF_HEAT_PUMP,
+        DOMAIN,
+    )
+
+    hp_options = [
+        "Heat only",
+        "Cool only",
+        "Auto",
+        "DHW only",
+        "Heat+DHW",
+        "Cool+DHW",
+        "Auto+DHW",
+    ]
+    hass.states.async_set("number.z1_cool_request_temp", "18.0", {})
+    hass.states.async_set("select.heat_pump_mode", "Heat+DHW", {"options": hp_options})
+    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    # RH 85 % lifts the safe dew point above the 18 degC cooling base.
+    hass.states.async_set("sensor.salon_humidity", "85", {"unit_of_measurement": "%"})
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=entry_data,
+        options={
+            CONF_HEAT_PUMP: {
+                CONF_ENTITY_HP_MODE: "select.heat_pump_mode",
+                CONF_ENTITY_HP_COOLING_SETPOINT: "number.z1_cool_request_temp",
+            }
+        },
+        title="Tortoise-UFH",
+        unique_id="50.5_19.5",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = _get_coordinator(entry)
+
+    # Mocks are registered AFTER setup: forwarding the entity platforms loads
+    # the real number/select components, whose service registrations would
+    # otherwise replace earlier mock handlers.
+    mocks = _mock_actuator_services(hass)
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    select_calls = async_mock_service(hass, "select", "select_option")
+
+    # The setup refresh ran with every room OFF: reported, never written.
+    first = coordinator.data.heat_pump
+    assert first is not None
+    assert first.writes_enabled is False
+    assert select_calls == []
+
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    await _refresh(hass, coordinator)
+
+    data = coordinator.data
+    expected_target = max(18.0, dew_point(21.5, 85.0) + GLOBAL_SAFE_DEW_MARGIN_K)
+    hp = data.heat_pump
+    assert hp is not None and hp.writes_enabled is True
+    assert hp.dhw_active is True and hp.dhw_only is False
+    assert hp.desired_option == "Cool+DHW"
+    assert hp.in_sync is False  # the mocked select never changes state
+    assert hp.cooling is not None
+    assert hp.cooling["target_c"] == pytest.approx(expected_target)
+
+    # Exactly one direction write, DHW preserved; one setpoint write.
+    assert [c.data["option"] for c in select_calls] == ["Cool+DHW"]
+    cool_writes = [
+        c
+        for c in mocks[("number", "set_value")]
+        if c.data["entity_id"] == "number.z1_cool_request_temp"
+    ]
+    assert len(cool_writes) == 1
+    # The WRITTEN value is snapped to the pump's typical 0.5 K number grid
+    # (review nit, 2026-07-13); the report keeps the exact target.
+    assert cool_writes[0].data["value"] == pytest.approx(
+        round(expected_target * 2.0) / 2.0
+    )
+
+    # The very next cycle re-writes NOTHING (threshold + anti-flap).
+    await _refresh(hass, coordinator)
+    assert [c.data["option"] for c in select_calls] == ["Cool+DHW"]
+    cool_writes = [
+        c
+        for c in mocks[("number", "set_value")]
+        if c.data["entity_id"] == "number.z1_cool_request_temp"
+    ]
+    assert len(cool_writes) == 1
+
+
+async def test_heat_pump_dhw_only_is_never_overwritten(
+    hass: HomeAssistant,
+    register_sources: None,
+    entry_data: dict[str, Any],
+) -> None:
+    """B2: a pump mid-DHW ("DHW only") is a hard direction-write skip."""
+    from pytest_homeassistant_custom_component.common import (
+        MockConfigEntry,
+        async_mock_service,
+    )
+
+    from custom_components.tortoise_ufh.const import (
+        CONF_ENTITY_HP_MODE,
+        CONF_HEAT_PUMP,
+        DOMAIN,
+    )
+
+    hass.states.async_set(
+        "select.heat_pump_mode", "DHW only", {"options": ["Heat only", "DHW only"]}
+    )
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=entry_data,
+        options={CONF_HEAT_PUMP: {CONF_ENTITY_HP_MODE: "select.heat_pump_mode"}},
+        title="Tortoise-UFH",
+        unique_id="50.5_19.5",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = _get_coordinator(entry)
+    # Mocks AFTER setup — the real platforms' service registrations would
+    # otherwise replace earlier mock handlers (see the cooling test above).
+    _mock_actuator_services(hass)
+    select_calls = async_mock_service(hass, "select", "select_option")
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    await _refresh(hass, coordinator)
+    await _refresh(hass, coordinator)
+
+    hp = coordinator.data.heat_pump
+    assert hp is not None
+    assert hp.dhw_only is True
+    assert hp.desired_option is None  # no direction is forced
+    assert select_calls == []

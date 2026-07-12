@@ -605,3 +605,53 @@ class TestSetpointScheduleValidation:
         """A schedule setpoint outside [0, 35] degC raises ``ValueError``."""
         with pytest.raises(ValueError, match=r"in \[0, 35\]"):
             self._with_schedule(((0.0, 40.0),))
+
+
+class TestHeatPumpWaterKnobs:
+    """B2 (2026-07-12): the global heat-pump water setpoints validate."""
+
+    @pytest.mark.unit
+    def test_defaults_valid(self) -> None:
+        """The library defaults (18 / 26 / 0.5) construct cleanly."""
+        cfg = ControllerConfig()
+        assert cfg.cooling_supply_base_c == pytest.approx(18.0)
+        assert cfg.heating_supply_base_c == pytest.approx(26.0)
+        assert cfg.heating_supply_slope == pytest.approx(0.5)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("value", [9.9, 25.1, -5.0])
+    def test_cooling_supply_base_out_of_range_rejected(self, value: float) -> None:
+        """cooling_supply_base_c must sit in [10, 25]."""
+        with pytest.raises(ValueError, match="cooling_supply_base_c"):
+            ControllerConfig(cooling_supply_base_c=value)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("value", [19.9, 40.1])
+    def test_heating_supply_base_out_of_range_rejected(self, value: float) -> None:
+        """heating_supply_base_c must sit in [20, 40]."""
+        with pytest.raises(ValueError, match="heating_supply_base_c"):
+            ControllerConfig(heating_supply_base_c=value)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("value", [-0.1, 2.1])
+    def test_heating_supply_slope_out_of_range_rejected(self, value: float) -> None:
+        """heating_supply_slope must sit in [0, 2]."""
+        with pytest.raises(ValueError, match="heating_supply_slope"):
+            ControllerConfig(heating_supply_slope=value)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("field_name", "value"),
+        [
+            ("cooling_supply_base_c", 10.0),
+            ("cooling_supply_base_c", 25.0),
+            ("heating_supply_base_c", 20.0),
+            ("heating_supply_base_c", 40.0),
+            ("heating_supply_slope", 0.0),
+            ("heating_supply_slope", 2.0),
+        ],
+    )
+    def test_boundaries_allowed(self, field_name: str, value: float) -> None:
+        """The inclusive range boundaries construct cleanly."""
+        cfg = ControllerConfig(**{field_name: value})
+        assert getattr(cfg, field_name) == pytest.approx(value)

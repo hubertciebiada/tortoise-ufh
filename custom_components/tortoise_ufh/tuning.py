@@ -26,6 +26,7 @@ from .const import (
     CONTROLLER_BOOL_KNOB,
     CONTROLLER_KNOB_UNITS,
     CONTROLLER_NUMBER_KNOBS,
+    HP_GLOBAL_ONLY_KNOBS,
 )
 from .core.config import ControllerConfig
 
@@ -133,10 +134,13 @@ def room_overrides(entry: ConfigEntry) -> dict[str, dict[str, Any]]:
 
     Returns:
         ``{room: {field: value}}`` containing only recognised knob fields; rooms
-        or fields that are not valid knobs are dropped.
+        or fields that are not valid knobs are dropped. The global-only
+        heat-pump knobs (:data:`~const.HP_GLOBAL_ONLY_KNOBS`) are dropped too —
+        a hand-edited per-room override of a building-level water setpoint
+        would have zero effect and must never surface as "overridden".
     """
     raw: Any = entry.options.get(CONF_ROOM_TUNING, {})
-    knobs = set(knob_names())
+    knobs = set(knob_names()) - HP_GLOBAL_ONLY_KNOBS
     out: dict[str, dict[str, Any]] = {}
     if not isinstance(raw, dict):
         return out
@@ -161,7 +165,9 @@ def coerce_tuning_values(
     Args:
         raw_values: The ``{field: value}`` payload. A ``None`` value requests
             deletion of that field's override (room scope only).
-        allow_delete: Whether ``None`` values are permitted (room scope).
+        allow_delete: Whether ``None`` values are permitted. ``True`` is the
+            ROOM scope (the only scope with deletable overrides), so it also
+            gates the global-only heat-pump knobs below.
 
     Returns:
         A ``{field: value}`` dict where numeric knobs are floats, the boolean
@@ -169,15 +175,20 @@ def coerce_tuning_values(
         ``None``.
 
     Raises:
-        ValueError: If a field is not an exposed knob, a value has the wrong
-            type, a numeric value is out of range, or a ``None`` is submitted
-            when ``allow_delete`` is ``False``.
+        ValueError: If a field is not an exposed knob, a global-only heat-pump
+            knob is submitted for a room scope (B2 — a per-room water setpoint
+            has no physical meaning), a value has the wrong type, a numeric
+            value is out of range, or a ``None`` is submitted when
+            ``allow_delete`` is ``False``.
     """
     knobs = set(knob_names())
     coerced: dict[str, Any] = {}
     for field_name, value in raw_values.items():
         if field_name not in knobs:
             msg = f"unknown knob {field_name!r}"
+            raise ValueError(msg)
+        if allow_delete and field_name in HP_GLOBAL_ONLY_KNOBS:
+            msg = f"{field_name!r} is a global-only knob (no per-room override)"
             raise ValueError(msg)
         if value is None:
             if not allow_delete:

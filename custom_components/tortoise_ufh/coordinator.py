@@ -41,11 +41,16 @@ from homeassistant.core import callback
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_CONTROLLER,
     CONF_COOLING_ENABLED,
     CONF_ENTITY_FAST_SOURCE,
+    CONF_ENTITY_HP_ACTIVE,
+    CONF_ENTITY_HP_COOLING_SETPOINT,
+    CONF_ENTITY_HP_HEATING_SETPOINT,
+    CONF_ENTITY_HP_MODE,
     CONF_ENTITY_HUMIDITY,
     CONF_ENTITY_MODE,
     CONF_ENTITY_RETURN,
@@ -55,6 +60,9 @@ from .const import (
     CONF_ENTITY_VALVES,
     CONF_FAST_SOURCE_GROUP,
     CONF_FAST_SOURCE_KIND,
+    CONF_FAST_WINDOW_END,
+    CONF_FAST_WINDOW_START,
+    CONF_HEAT_PUMP,
     CONF_HOME_SETPOINT,
     CONF_ROOM_NAME,
     CONF_ROOM_OFFSET,
@@ -72,6 +80,13 @@ from .const import (
 )
 from .core.config import ControllerConfig
 from .core.controller import BuildingController
+from .core.fast_source import window_allows
+from .core.hp_link import (
+    cooling_setpoint_c,
+    dhw_option,
+    direction_option,
+    heating_curve,
+)
 from .core.models import (
     LoopInput,
     Mode,
@@ -128,11 +143,50 @@ _VALVE_MISMATCH_TOLERANCE_PCT: float = 10.0
 _VALVE_MISMATCH_CYCLES: int = 3
 """Consecutive mismatched cycles before the ``valve_mismatch`` flag is raised."""
 
-# Per-room config key for an optional heat-pump-status source entity. Defined
-# here (not in const.py) because this file is the only adapter surface allowed
-# to change; when present its on/off/unavailable state drives the core's
-# integrator freeze during DHW / defrost. Absent -> tri-state None (feature off).
-CONF_ENTITY_HP_ACTIVE: str = "entity_hp_active"
+# NOTE: ``CONF_ENTITY_HP_ACTIVE`` moved to ``const.py`` (B2, 2026-07-12) —
+# it is configurable in the options flow's heat-pump section now. The legacy
+# per-room key of the same name is still honoured as an override in
+# ``_build_room_inputs``.
+
+_HP_MODE_MIN_REWRITE_S: float = 15.0 * 60.0
+"""Minimum spacing between two pump-mode DIRECTION writes [s] (B2).
+
+The heat pump is a slow device and the external DHW automation owns the DHW
+flag; direction rewrites happen only on a Tortoise mode change or a persistent
+divergence, and never more often than this."""
+
+_HP_DIVERGENCE_CYCLES: int = 2
+"""Consecutive divergent cycles before a direction rewrite is allowed (B2)."""
+
+
+class HpNotConfiguredError(ValueError):
+    """The heat-pump link (or its mode entity) is not configured."""
+
+
+class HpDhwUnavailableError(ValueError):
+    """The requested DHW toggle cannot be honoured right now."""
+
+
+def _parse_minute_of_day(raw: str) -> int | None:
+    """Parse an ``"HH:MM"`` (or ``"HH:MM:SS"``) string to a minute-of-day.
+
+    Args:
+        raw: The persisted time string.
+
+    Returns:
+        Minutes after local midnight (0..1439), or ``None`` when unparseable.
+    """
+    parts = raw.split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        hour, minute = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        return None
+    return hour * 60 + minute
+
 
 _ALGORITHM_STATES: frozenset[str] = frozenset({"running", "stale", "error"})
 """Permitted :attr:`CoordinatorData.algorithm_status` values."""
@@ -198,6 +252,76 @@ class RoomRuntime:
 
 
 @dataclass(frozen=True)
+class HeatPumpRuntime:
+    """One cycle's view of the OPTIONAL heat-pump link (B2, 2026-07-12).
+
+    Built by :meth:`TortoiseUfhCoordinator._sync_heat_pump` and consumed by
+    the websocket's ``get_live`` (the panel's heat-pump tab). All temperatures
+    in degrees Celsius. ``None`` sub-payloads mean "entity not configured".
+
+    Attributes:
+        mode_entity_id: The pump-mode select entity id, or ``None``.
+        current_option: The pump's current mode option (raw), or ``None``.
+        desired_option: The direction Tortoise wants (canonical HeishaMon
+            string), or ``None`` when no direction is forced (transitional /
+            off / DHW-only / unknown option).
+        in_sync: Whether the pump's option already matches the desired one;
+            ``None`` when there is no desired direction to compare.
+        dhw_active: Whether the current option carries the DHW flag.
+        dhw_only: Whether the pump is currently in ``"DHW only"``.
+        cooling: Cooling-setpoint payload ``{entity_id, target_c, base_c,
+            safe_dew_c}`` or ``None`` when the entity is not configured.
+        heating: Heating-setpoint payload ``{entity_id, target_c, t_out_c,
+            base_c, slope, neutral_c}`` or ``None``.
+        hp_active: The "pump serves the UFH" reading, or ``None`` (unknown /
+            unconfigured).
+        hp_active_configured: Whether an hp-active entity is configured.
+        writes_enabled: Whether the link may write this cycle (not parked and
+            at least one room is LIVE).
+
+    Raises:
+        ValueError: If mode sub-fields are set without a mode entity.
+    """
+
+    mode_entity_id: str | None
+    current_option: str | None
+    desired_option: str | None
+    in_sync: bool | None
+    dhw_active: bool
+    dhw_only: bool
+    cooling: dict[str, Any] | None
+    heating: dict[str, Any] | None
+    hp_active: bool | None
+    hp_active_configured: bool
+    writes_enabled: bool
+
+    def __post_init__(self) -> None:
+        """Validate internal consistency of the heat-pump payload."""
+        if self.mode_entity_id is None and (
+            self.current_option is not None or self.desired_option is not None
+        ):
+            msg = "mode options require a mode entity"
+            raise ValueError(msg)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable dict for the websocket / panel."""
+        return {
+            "configured": True,
+            "mode_entity_id": self.mode_entity_id,
+            "current_option": self.current_option,
+            "desired_option": self.desired_option,
+            "in_sync": self.in_sync,
+            "dhw_active": self.dhw_active,
+            "dhw_only": self.dhw_only,
+            "cooling": dict(self.cooling) if self.cooling is not None else None,
+            "heating": dict(self.heating) if self.heating is not None else None,
+            "hp_active": self.hp_active,
+            "hp_active_configured": self.hp_active_configured,
+            "writes_enabled": self.writes_enabled,
+        }
+
+
+@dataclass(frozen=True)
 class CoordinatorData:
     """All data produced by the coordinator in one 5-minute update cycle.
 
@@ -216,6 +340,8 @@ class CoordinatorData:
         sensor_lost_rooms: Number of rooms currently degraded with the
             ``sensor_lost`` flag (building-level staleness counter,
             safety-F13 2026-07-09; surfaced via websocket, no new entity).
+        heat_pump: The optional heat-pump link's per-cycle view (B2,
+            2026-07-12), or ``None`` when the link is not configured.
 
     Raises:
         ValueError: If ``algorithm_status``, ``watchdog_state`` or ``mode`` is
@@ -229,6 +355,7 @@ class CoordinatorData:
     last_update_timestamp: str | None
     mode: str
     sensor_lost_rooms: int = 0
+    heat_pump: HeatPumpRuntime | None = None
 
     def __post_init__(self) -> None:
         """Validate the enumerated status/mode fields."""
@@ -382,11 +509,25 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     exc_info=True,
                 )
                 self._controller_configs[name] = controller_config
+        # The effective GLOBAL tuning (heat-pump water knobs are read from
+        # here only — they are excluded from per-room overrides).
+        self._global_config: ControllerConfig = controller_config
         self._building = (
             BuildingController(self._controller_configs)
             if self._controller_configs
             else None
         )
+
+        # Optional heat-pump link (B2, 2026-07-12): the options section plus
+        # the anti-flap bookkeeping of the direction sync (divergence counter,
+        # the Tortoise mode at our last direction write, its timestamp).
+        raw_hp: Any = entry.options.get(CONF_HEAT_PUMP, {})
+        self._hp_options: dict[str, Any] = (
+            dict(raw_hp) if isinstance(raw_hp, Mapping) else {}
+        )
+        self._hp_divergence_cycles: int = 0
+        self._hp_mode_at_last_write: Mode | None = None
+        self._hp_last_mode_write_monotonic: float | None = None
 
         # Source-entity read path (stale cache + plausibility gates) and the
         # actuator write path (thresholds + command caches), each with its own
@@ -537,17 +678,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._mode = mode
         self._persist_setpoints()
         if self.data is not None:
-            self.async_set_updated_data(
-                CoordinatorData(
-                    rooms=self.data.rooms,
-                    global_safe_dew_point_c=self.data.global_safe_dew_point_c,
-                    algorithm_status=self.data.algorithm_status,
-                    watchdog_state=self.data.watchdog_state,
-                    last_update_timestamp=self.data.last_update_timestamp,
-                    mode=mode.value,
-                    sensor_lost_rooms=self.data.sensor_lost_rooms,
-                )
-            )
+            self.async_set_updated_data(replace(self.data, mode=mode.value))
         self._schedule_recompute()
 
     def get_room_state(self, room_name: str) -> str:
@@ -748,17 +879,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 report=runtime.outputs.report,
                 setpoint_c=self.get_room_setpoint(name),
             )
-        self.async_set_updated_data(
-            CoordinatorData(
-                rooms=new_rooms,
-                global_safe_dew_point_c=self.data.global_safe_dew_point_c,
-                algorithm_status=self.data.algorithm_status,
-                watchdog_state=self.data.watchdog_state,
-                last_update_timestamp=self.data.last_update_timestamp,
-                mode=self.data.mode,
-                sensor_lost_rooms=self.data.sensor_lost_rooms,
-            )
-        )
+        self.async_set_updated_data(replace(self.data, rooms=new_rooms))
 
     @callback
     def _schedule_recompute(self) -> None:
@@ -912,6 +1033,15 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 await self._write_valves(room_cfg, name, runtime.outputs)
                 await self._write_fast_source(room_cfg, name, runtime.outputs)
 
+        # Optional heat-pump link (B2): computed AND written (when gated) at
+        # the end of the cycle so the freshly computed global safe dew point
+        # feeds the cooling setpoint. A link failure never breaks the cycle.
+        heat_pump: HeatPumpRuntime | None = None
+        try:
+            heat_pump = await self._sync_heat_pump(global_dew)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Heat-pump link sync failed")
+
         return CoordinatorData(
             rooms=rooms,
             global_safe_dew_point_c=global_dew,
@@ -920,6 +1050,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             last_update_timestamp=now.isoformat(),
             mode=self._mode.value,
             sensor_lost_rooms=sensor_lost_rooms,
+            heat_pump=heat_pump,
         )
 
     # -- Internal: input assembly -------------------------------------------
@@ -1000,8 +1131,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     room_cfg.get(CONF_FAST_SOURCE_KIND)
                 ),
                 fast_source_on=fast_on,
+                # The global heat-pump-link entity feeds every room (B2); a
+                # legacy per-room key of the same name still overrides it.
                 hp_active_for_ufh=self._reader.read_hp_active_for_ufh(
-                    room_cfg.get(CONF_ENTITY_HP_ACTIVE)
+                    str(room_cfg.get(CONF_ENTITY_HP_ACTIVE) or "")
+                    or str(self._hp_options.get(CONF_ENTITY_HP_ACTIVE) or "")
                 ),
                 cooling_enabled=cooling_enabled,
                 last_update_age_minutes=age_minutes,
@@ -1017,6 +1151,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 ),
                 fast_source_hvac_mode=fast_hvac,
                 humidity_stale_frac=humidity_stale_frac,
+                # Quiet hours (B1): the adapter evaluates the room's allowed-
+                # hours window against HA's LOCAL clock; the core only sees
+                # the verdict. Honoured at control-cycle granularity (5 min)
+                # — the dwell timers weigh more than minute-exact edges.
+                fast_source_allowed=self._fast_source_allowed(room_cfg),
             )
         except ValueError:
             _LOGGER.warning(
@@ -1064,6 +1203,255 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 )
             )
         return tuple(loops)
+
+    def _fast_source_allowed(self, room_cfg: dict[str, Any]) -> bool:
+        """Evaluate a room's quiet-hours window against HA's local clock (B1).
+
+        The pair ``fast_source_window_start`` / ``fast_source_window_end``
+        (``"HH:MM"``) is the window in which the room's fast source MAY run;
+        it may cross midnight. Missing / partial / unparseable configuration
+        fails OPEN (always allowed) — quiet hours are a comfort feature, not
+        a safety rule.
+
+        Args:
+            room_cfg: The room's configuration dict.
+
+        Returns:
+            ``True`` when the fast source is allowed to run right now.
+        """
+        start_raw = str(room_cfg.get(CONF_FAST_WINDOW_START, "") or "")
+        end_raw = str(room_cfg.get(CONF_FAST_WINDOW_END, "") or "")
+        if not start_raw or not end_raw:
+            return True
+        start = _parse_minute_of_day(start_raw)
+        end = _parse_minute_of_day(end_raw)
+        if start is None or end is None or start == end:
+            _LOGGER.debug(
+                "Ignoring invalid quiet-hours window %r-%r", start_raw, end_raw
+            )
+            return True
+        # dt_util.now() is HA's LOCAL time (the household wall clock).
+        now_local = dt_util.now()
+        return window_allows(now_local.hour * 60 + now_local.minute, start, end)
+
+    # -- Internal: optional heat-pump link (B2, 2026-07-12) -------------------
+
+    def _outdoor_entity(self) -> str | None:
+        """Return the first configured outdoor-temperature entity id, if any."""
+        for room_cfg in self._room_configs:
+            entity = str(room_cfg.get(CONF_ENTITY_TEMP_OUTDOOR, "") or "")
+            if entity:
+                return entity
+        return None
+
+    def _match_select_option(self, entity_id: str, option: str) -> str | None:
+        """Canonicalise ``option`` to the select entity's OWN option list.
+
+        HeishaMon builds differ in case/whitespace; ``select.select_option``
+        with an unknown option raises inside HA, so the core's canonical
+        string is matched case-insensitively against the live entity's
+        ``options`` attribute and the ENTITY's exact spelling is returned.
+
+        Args:
+            entity_id: The pump-mode select entity id.
+            option: The canonical HeishaMon option the core computed.
+
+        Returns:
+            The entity's exact option string, or ``None`` when the entity
+            offers no match (the caller skips the write and logs).
+        """
+        options = self._reader.read_select_options(entity_id)
+        key = option.strip().lower()
+        for candidate in options:
+            if candidate.strip().lower() == key:
+                return candidate
+        return None
+
+    @property
+    def _hp_writes_enabled(self) -> bool:
+        """Whether the heat-pump link may write this cycle.
+
+        A GLOBAL actuator may only be touched while somebody has handed
+        Tortoise the controls: not parked by the unload farewell AND at least
+        one room is LIVE.
+        """
+        return not self._parked and any(
+            self.get_room_state(name) == ROOM_STATE_LIVE for name in self._room_names
+        )
+
+    async def _sync_heat_pump(self, global_dew: float | None) -> HeatPumpRuntime | None:
+        """Compute (and, when gated, write) the heat-pump link's cycle (B2).
+
+        Direction sync: ``desired = direction_option(mode, current)`` — the
+        DHW flag is always preserved, ``"DHW only"`` is a hard skip, and
+        TRANSITIONAL / OFF never force a direction. Writes are rare: only on
+        a Tortoise mode change or a divergence persisting for at least
+        :data:`_HP_DIVERGENCE_CYCLES` cycles, never more often than
+        :data:`_HP_MODE_MIN_REWRITE_S`.
+
+        Water setpoints: cooling = ``max(cooling_supply_base_c, global safe
+        dew point)`` while COOLING; heating = the optional weather curve
+        while HEATING (skipped without an outdoor reading — the pump keeps
+        its last setpoint, bounded by its own firmware limits). Both go
+        through :meth:`CommandWriter.write_hp_setpoint` (0.5 K threshold +
+        45-min re-assert).
+
+        Args:
+            global_dew: This cycle's global safe dew point [degC], or ``None``.
+
+        Returns:
+            The :class:`HeatPumpRuntime` payload, or ``None`` when the link is
+            entirely unconfigured.
+        """
+        cfg = self._hp_options
+        mode_entity = str(cfg.get(CONF_ENTITY_HP_MODE) or "")
+        heat_entity = str(cfg.get(CONF_ENTITY_HP_HEATING_SETPOINT) or "")
+        cool_entity = str(cfg.get(CONF_ENTITY_HP_COOLING_SETPOINT) or "")
+        active_entity = str(cfg.get(CONF_ENTITY_HP_ACTIVE) or "")
+        if not (mode_entity or heat_entity or cool_entity or active_entity):
+            return None
+        writes_enabled = self._hp_writes_enabled
+
+        # -- Direction sync ---------------------------------------------------
+        current: str | None = None
+        desired: str | None = None
+        in_sync: bool | None = None
+        if mode_entity:
+            current = self._reader.read_select_option(mode_entity)
+            desired = direction_option(self._mode, current)
+            if desired is not None and current is not None:
+                in_sync = desired.strip().lower() == current.strip().lower()
+            if in_sync is False:
+                self._hp_divergence_cycles += 1
+            else:
+                self._hp_divergence_cycles = 0
+            now_monotonic = time.monotonic()
+            may_rewrite = (
+                self._hp_last_mode_write_monotonic is None
+                or now_monotonic - self._hp_last_mode_write_monotonic
+                >= _HP_MODE_MIN_REWRITE_S
+            )
+            # Coordinator start counts as a mode change on purpose
+            # (_hp_mode_at_last_write is None): the first detected divergence
+            # after an HA restart is asserted IMMEDIATELY as the initial
+            # synchronisation, not held for the anti-flap divergence count.
+            triggered = (
+                self._hp_mode_at_last_write is not self._mode
+                or self._hp_divergence_cycles >= _HP_DIVERGENCE_CYCLES
+            )
+            if writes_enabled and in_sync is False and triggered and may_rewrite:
+                assert desired is not None  # narrowed by in_sync is False
+                target = self._match_select_option(mode_entity, desired)
+                if target is None:
+                    _LOGGER.warning(
+                        "Heat-pump mode entity %s offers no option matching %r; "
+                        "skipping the direction write",
+                        mode_entity,
+                        desired,
+                    )
+                elif await self._writer.write_hp_mode(mode_entity, target):
+                    self._hp_last_mode_write_monotonic = now_monotonic
+                    self._hp_mode_at_last_write = self._mode
+                    self._hp_divergence_cycles = 0
+
+        current_key = (current or "").strip().lower()
+        dhw_active = "dhw" in current_key
+        dhw_only = current_key == "dhw only"
+
+        # -- Cooling water setpoint --------------------------------------------
+        cooling: dict[str, Any] | None = None
+        if cool_entity:
+            base = self._global_config.cooling_supply_base_c
+            cool_target: float | None = None
+            if self._mode is Mode.COOLING:
+                cool_target = cooling_setpoint_c(base, global_dew)
+                if writes_enabled:
+                    await self._writer.write_hp_setpoint(cool_entity, cool_target)
+            cooling = {
+                "entity_id": cool_entity,
+                "target_c": cool_target,
+                "base_c": base,
+                "safe_dew_c": global_dew,
+            }
+
+        # -- Heating water setpoint --------------------------------------------
+        heating: dict[str, Any] | None = None
+        if heat_entity:
+            curve = heating_curve(self._global_config)
+            t_out = self._reader.read_float_state(self._outdoor_entity())
+            heat_target: float | None = None
+            if self._mode is Mode.HEATING and t_out is not None:
+                heat_target = curve.t_supply(t_out)
+                if writes_enabled:
+                    await self._writer.write_hp_setpoint(heat_entity, heat_target)
+            heating = {
+                "entity_id": heat_entity,
+                "target_c": heat_target,
+                "t_out_c": t_out,
+                "base_c": curve.t_supply_base,
+                "slope": curve.slope,
+                "neutral_c": curve.t_neutral,
+            }
+
+        hp_active = (
+            self._reader.read_hp_active_for_ufh(active_entity)
+            if active_entity
+            else None
+        )
+        return HeatPumpRuntime(
+            mode_entity_id=mode_entity or None,
+            current_option=current,
+            desired_option=desired,
+            in_sync=in_sync,
+            dhw_active=dhw_active,
+            dhw_only=dhw_only,
+            cooling=cooling,
+            heating=heating,
+            hp_active=hp_active,
+            hp_active_configured=bool(active_entity),
+            writes_enabled=writes_enabled,
+        )
+
+    async def async_set_hp_dhw(self, want_dhw: bool) -> str:
+        """Add/remove the pump's ``+DHW`` flag on the user's request (B2).
+
+        The manual DHW switch is an explicit user action, so it is NOT gated
+        by the live-rooms write gate. The direction part of the option is
+        never changed, so this cannot race the direction sync; the external
+        DHW automation remains the flag's owner and may overwrite it at any
+        time (its right — documented in the panel).
+
+        Args:
+            want_dhw: ``True`` to add the ``+DHW`` flag, ``False`` to remove.
+
+        Returns:
+            The option actually selected (or already active).
+
+        Raises:
+            HpNotConfiguredError: When no pump-mode entity is configured.
+            HpDhwUnavailableError: When the toggle cannot be honoured (pump in
+                ``"DHW only"`` with a removal request, unknown/unavailable
+                option, or the write failed).
+        """
+        mode_entity = str(self._hp_options.get(CONF_ENTITY_HP_MODE) or "")
+        if not mode_entity:
+            msg = "heat-pump mode entity is not configured"
+            raise HpNotConfiguredError(msg)
+        current = self._reader.read_select_option(mode_entity)
+        desired = dhw_option(current, want_dhw)
+        if desired is None:
+            msg = f"cannot toggle DHW from option {current!r}"
+            raise HpDhwUnavailableError(msg)
+        if current is not None and desired.strip().lower() == current.strip().lower():
+            return current  # already in the requested state — nothing to write
+        target = self._match_select_option(mode_entity, desired)
+        if target is None:
+            msg = f"mode entity offers no option matching {desired!r}"
+            raise HpDhwUnavailableError(msg)
+        if not await self._writer.write_hp_mode(mode_entity, target):
+            msg = "select.select_option call failed"
+            raise HpDhwUnavailableError(msg)
+        return target
 
     def _track_valve_mismatch(
         self, room_cfg: dict[str, Any], name: str, room_inputs: RoomInputs

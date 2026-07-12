@@ -166,13 +166,130 @@ def test_every_knob_has_label_and_tooltip_in_both_languages() -> None:
     """Each exposed knob has tune_<name> and tip_knob_<name> in pl AND en."""
     sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
     knobs = _knob_names()
-    assert len(knobs) == 14, f"expected 14 exposed knobs, parsed {knobs}"
+    assert len(knobs) == 18, f"expected 18 exposed knobs, parsed {knobs}"
     missing: list[str] = []
     for knob in knobs:
         for key in (f"tune_{knob}", f"tip_knob_{knob}"):
             for lang in ("pl", "en"):
                 if key not in sections[lang]:
                     missing.append(f"{lang}:{key}")
+    assert not missing, f"missing STR keys: {missing}"
+
+
+def _knob_groups(source: str) -> list[tuple[str, list[str]]]:
+    """Parse the panel's KNOB_GROUPS table into (labelKey, [knobs]) pairs.
+
+    Args:
+        source: The full JS module text.
+
+    Returns:
+        One tuple per group, in declaration order.
+    """
+    start = source.find("const KNOB_GROUPS = [")
+    assert start >= 0, "KNOB_GROUPS not found in the panel module"
+    end = source.find("\n];", start)
+    assert end >= 0, "unterminated KNOB_GROUPS block"
+    block = source[start:end]
+    groups: list[tuple[str, list[str]]] = []
+    entry_re = re.compile(r"labelKey:\s*\"(\w+)\",\s*knobs:\s*\[([^\]]*)\]", re.DOTALL)
+    for match in entry_re.finditer(block):
+        label_key = match.group(1)
+        knobs = re.findall(r"\"(\w+)\"", match.group(2))
+        groups.append((label_key, knobs))
+    assert groups, "no KNOB_GROUPS entries parsed"
+    return groups
+
+
+@pytest.mark.unit
+def test_knob_groups_cover_every_knob_exactly_once() -> None:
+    """A4: every exposed knob sits in EXACTLY one panel tuning group."""
+    groups = _knob_groups(_PANEL_JS.read_text(encoding="utf-8"))
+    seen: dict[str, str] = {}
+    for label_key, knobs in groups:
+        for knob in knobs:
+            assert knob not in seen, (
+                f"knob {knob} listed in both {seen[knob]} and {label_key}"
+            )
+            seen[knob] = label_key
+    exposed = set(_knob_names())
+    grouped = set(seen)
+    assert grouped == exposed, (
+        f"KNOB_GROUPS vs const.py mismatch — ungrouped: "
+        f"{sorted(exposed - grouped)}; unknown: {sorted(grouped - exposed)}"
+    )
+
+
+@pytest.mark.unit
+def test_knob_group_labels_exist_in_both_languages() -> None:
+    """A4: every KNOB_GROUPS labelKey resolves in STR.pl AND STR.en."""
+    source = _PANEL_JS.read_text(encoding="utf-8")
+    sections = _str_language_keys(source)
+    for label_key, _knobs in _knob_groups(source):
+        for lang in ("pl", "en"):
+            assert label_key in sections[lang], f"missing STR.{lang}.{label_key}"
+
+
+# New v0.8.0 surfaces: the quiet-hours column, the assist group header, the
+# confirmation popover and the whole heat-pump tab. Each key must exist in
+# BOTH languages (the pl/en parity test already enforces the pairing; this
+# list pins the keys themselves so a rename cannot silently drop a surface).
+_REQUIRED_V080_KEYS = (
+    "tab_hp",
+    "confirm_state_live",
+    "confirm_state_off",
+    "confirm_mode",
+    "confirm_yes",
+    "confirm_cancel",
+    "th_assist_group",
+    "assist_no_source",
+    "tip_th_assist",
+    "tip_assist_target",
+    "ast_th_hours",
+    "ast_hours_always",
+    "assist_window_sub",
+    "tip_ast_hours",
+    "sec_wiring",
+    "wire_source_tip",
+    "hp_empty",
+    "hp_sec_mode",
+    "hp_tortoise_mode",
+    "hp_current_option",
+    "hp_desired_option",
+    "hp_in_sync",
+    "hp_diverged",
+    "hp_dhw_only_note",
+    "hp_no_force",
+    "tip_hp_mode",
+    "hp_sec_dhw",
+    "hp_dhw_switch",
+    "hp_dhw_warning",
+    "tip_hp_dhw",
+    "hp_sec_setpoints",
+    "hp_cool_target",
+    "hp_cool_calc",
+    "hp_heat_target",
+    "hp_heat_calc",
+    "hp_not_written",
+    "hp_not_configured_entity",
+    "tip_hp_cool",
+    "tip_hp_heat",
+    "hp_active_cap",
+    "hp_active_unknown",
+    "tip_hp_active",
+    "hp_writes_paused",
+)
+
+
+@pytest.mark.unit
+def test_v080_surfaces_have_their_str_keys() -> None:
+    """The v0.8.0 UI surfaces keep their STR keys in both languages."""
+    sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
+    missing = [
+        f"{lang}:{key}"
+        for key in _REQUIRED_V080_KEYS
+        for lang in ("pl", "en")
+        if key not in sections[lang]
+    ]
     assert not missing, f"missing STR keys: {missing}"
 
 

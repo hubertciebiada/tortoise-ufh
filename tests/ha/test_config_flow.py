@@ -230,7 +230,7 @@ async def test_cooling_room_without_humidity_errors(
 async def test_options_menu_lists_all_leaves(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:
-    """The options entry point is a menu with the four room/settings leaves."""
+    """The options entry point is a menu with the room/settings/pump leaves."""
     entry = setup_integration
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -242,6 +242,7 @@ async def test_options_menu_lists_all_leaves(
         "edit_room",
         "remove_room",
         "settings",
+        "heat_pump",
     }
 
 
@@ -807,3 +808,123 @@ async def test_add_room_heater_group_is_silently_cleared(
     gabinet = entry.data[CONF_ROOMS][-1]
     assert gabinet[CONF_ROOM_NAME] == "Gabinet"
     assert gabinet[CONF_FAST_SOURCE_GROUP] == ""
+
+
+async def test_options_flow_heat_pump_saves_and_clears_entities(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """The heat-pump leaf persists only the filled pickers; empty removes all."""
+    from custom_components.tortoise_ufh.const import (
+        CONF_ENTITY_HP_COOLING_SETPOINT,
+        CONF_ENTITY_HP_MODE,
+        CONF_HEAT_PUMP,
+    )
+
+    entry = setup_integration
+    result = await _open_menu_leaf(hass, entry, "heat_pump")
+    assert result["step_id"] == "heat_pump"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ENTITY_HP_MODE: "select.heat_pump_mode",
+            CONF_ENTITY_HP_COOLING_SETPOINT: "number.z1_cool_request_temp",
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_HEAT_PUMP] == {
+        CONF_ENTITY_HP_MODE: "select.heat_pump_mode",
+        CONF_ENTITY_HP_COOLING_SETPOINT: "number.z1_cool_request_temp",
+    }
+
+    # Clearing every picker removes the whole section (feature fully off).
+    result = await _open_menu_leaf(hass, entry, "heat_pump")
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert CONF_HEAT_PUMP not in entry.options
+
+
+async def test_add_room_quiet_window_pair_validated(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """A lone quiet-hours time (or start == end) raises quiet_window_invalid."""
+    from custom_components.tortoise_ufh.const import (
+        CONF_FAST_WINDOW_END,
+        CONF_FAST_WINDOW_START,
+    )
+
+    entry = setup_integration
+    result = await _open_menu_leaf(hass, entry, "add_room")
+
+    base = {
+        CONF_ROOM_NAME: "Gabinet",
+        CONF_ROOM_AREA: 10.0,
+        CONF_ROOM_OFFSET: 0.0,
+        CONF_HAS_FAST_SOURCE: True,
+        CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_SPLIT,
+        CONF_COOLING_ENABLED: False,
+    }
+    # Only the start set -> rejected.
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {**base, CONF_FAST_WINDOW_START: "07:00:00"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "quiet_window_invalid"}
+
+    # start == end -> rejected too (degenerate window).
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            **base,
+            CONF_FAST_WINDOW_START: "07:00:00",
+            CONF_FAST_WINDOW_END: "07:00:00",
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "quiet_window_invalid"}
+
+
+async def test_add_room_quiet_window_normalised_and_persisted(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """A valid HH:MM:SS window pair is stored normalised to HH:MM."""
+    from custom_components.tortoise_ufh.const import (
+        CONF_FAST_WINDOW_END,
+        CONF_FAST_WINDOW_START,
+    )
+
+    entry = setup_integration
+    hass.states.async_set("sensor.gabinet_temp", "21.0", _TEMP_ATTRS)
+    hass.states.async_set("number.gabinet_valve", "0", _PCT_ATTRS)
+
+    result = await _open_menu_leaf(hass, entry, "add_room")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ROOM_NAME: "Gabinet",
+            CONF_ROOM_AREA: 10.0,
+            CONF_ROOM_OFFSET: 0.0,
+            CONF_HAS_FAST_SOURCE: True,
+            CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_SPLIT,
+            CONF_COOLING_ENABLED: False,
+            CONF_FAST_WINDOW_START: "07:00:00",
+            CONF_FAST_WINDOW_END: "22:30:00",
+        },
+    )
+    assert result["step_id"] == "room_entities"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_ENTITY_TEMP_ROOM: "sensor.gabinet_temp",
+            CONF_ENTITY_VALVES: ["number.gabinet_valve"],
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    gabinet = entry.data[CONF_ROOMS][-1]
+    assert gabinet[CONF_FAST_WINDOW_START] == "07:00"
+    assert gabinet[CONF_FAST_WINDOW_END] == "22:30"

@@ -40,6 +40,10 @@ from .const import (
     CONF_CONTROLLER,
     CONF_COOLING_ENABLED,
     CONF_ENTITY_FAST_SOURCE,
+    CONF_ENTITY_HP_ACTIVE,
+    CONF_ENTITY_HP_COOLING_SETPOINT,
+    CONF_ENTITY_HP_HEATING_SETPOINT,
+    CONF_ENTITY_HP_MODE,
     CONF_ENTITY_HUMIDITY,
     CONF_ENTITY_RETURN,
     CONF_ENTITY_SUPPLY,
@@ -48,6 +52,9 @@ from .const import (
     CONF_ENTITY_VALVES,
     CONF_FAST_SOURCE_GROUP,
     CONF_FAST_SOURCE_KIND,
+    CONF_FAST_WINDOW_END,
+    CONF_FAST_WINDOW_START,
+    CONF_HEAT_PUMP,
     CONF_ROOM_AREA,
     CONF_ROOM_NAME,
     CONF_ROOM_TUNING,
@@ -92,12 +99,15 @@ WS_SET_ROOM_STATE: str = f"{DOMAIN}/set_room_state"
 WS_SET_MODE: str = f"{DOMAIN}/set_mode"
 WS_GET_TUNING: str = f"{DOMAIN}/get_tuning"
 WS_SET_TUNING: str = f"{DOMAIN}/set_tuning"
+WS_SET_HP_DHW: str = f"{DOMAIN}/set_hp_dhw"
 
 # Websocket error codes.
 _ERR_NOT_FOUND: str = "not_found"
 _ERR_UNKNOWN_ROOM: str = "unknown_room"
 _ERR_INVALID_SCOPE: str = "invalid_scope"
 _ERR_INVALID_TUNING: str = "invalid_tuning"
+_ERR_HP_NOT_CONFIGURED: str = "hp_not_configured"
+_ERR_HP_DHW_UNAVAILABLE: str = "hp_dhw_unavailable"
 
 # Scope keyword for the *global* controller tuning (not a room name).
 _TUNING_SCOPE_GLOBAL: str = "global"
@@ -144,6 +154,10 @@ class RoomConfigView:
             ``""`` for an ungrouped unit (additive field 2026-07-12, K9 —
             the panel could not show the group topology, so a room losing
             the arbitration displayed an unexplained OFF).
+        fast_source_window_start: Quiet-hours window start ``"HH:MM"`` (B1,
+            2026-07-12), or ``None`` when the room has no window.
+        fast_source_window_end: Quiet-hours window end ``"HH:MM"``, or
+            ``None``.
         entities: Assigned source entities keyed by their ``CONF_*`` name;
             values are entity-id strings, lists of strings, or ``None``.
         diagnostic_entities: Registered diagnostic ``sensor`` entity ids keyed by
@@ -164,6 +178,8 @@ class RoomConfigView:
     control_state: str
     fast_source_kind: str
     fast_source_group: str = ""
+    fast_source_window_start: str | None = None
+    fast_source_window_end: str | None = None
     entities: dict[str, Any] = field(default_factory=dict)
     diagnostic_entities: dict[str, str] = field(default_factory=dict)
 
@@ -201,6 +217,8 @@ class RoomConfigView:
             "control_state": self.control_state,
             "fast_source_kind": self.fast_source_kind,
             "fast_source_group": self.fast_source_group,
+            "fast_source_window_start": self.fast_source_window_start,
+            "fast_source_window_end": self.fast_source_window_end,
             "entities": dict(self.entities),
             "diagnostic_entities": dict(self.diagnostic_entities),
         }
@@ -217,6 +235,9 @@ class ConfigResult:
         global_safe_dew_point_entity_id: Registered entity id of the global
             safe dew-point ``sensor`` (the cooling-supply lower limit the owner
             feeds the heat pump), or ``None`` when the registry has no match.
+        heat_pump: The configured heat-pump-link entity ids (B2, 2026-07-12)
+            keyed by their ``CONF_ENTITY_HP_*`` names, or ``None`` when the
+            section is not configured (the panel shows the empty state).
 
     Raises:
         ValueError: If ``home_setpoint_c`` is not finite or ``mode`` is not a
@@ -227,6 +248,7 @@ class ConfigResult:
     mode: str
     rooms: tuple[RoomConfigView, ...]
     global_safe_dew_point_entity_id: str | None = None
+    heat_pump: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         """Validate the global fields of the config reply."""
@@ -244,6 +266,7 @@ class ConfigResult:
             "mode": self.mode,
             "rooms": [room.to_dict() for room in self.rooms],
             "global_safe_dew_point_entity_id": self.global_safe_dew_point_entity_id,
+            "heat_pump": dict(self.heat_pump) if self.heat_pump is not None else None,
         }
 
 
@@ -310,6 +333,10 @@ class LiveResult:
         sensor_lost_rooms: Number of rooms currently degraded with the
             ``sensor_lost`` flag (building-level staleness counter,
             safety-F13 2026-07-09).
+        heat_pump: The heat-pump link's per-cycle view (B2, 2026-07-12) as a
+            plain dict (see
+            :meth:`~coordinator.HeatPumpRuntime.to_dict`), or ``None`` when
+            the link is not configured.
 
     Raises:
         ValueError: If ``mode`` is not a recognised mode string or
@@ -323,6 +350,7 @@ class LiveResult:
     last_update_timestamp: str | None
     mode: str
     sensor_lost_rooms: int = 0
+    heat_pump: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         """Validate the global fields of the live reply."""
@@ -348,6 +376,7 @@ class LiveResult:
             "last_update_timestamp": self.last_update_timestamp,
             "mode": self.mode,
             "sensor_lost_rooms": self.sensor_lost_rooms,
+            "heat_pump": dict(self.heat_pump) if self.heat_pump is not None else None,
         }
 
 
@@ -539,6 +568,7 @@ def async_register_ws(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_mode)
     websocket_api.async_register_command(hass, ws_get_tuning)
     websocket_api.async_register_command(hass, ws_set_tuning)
+    websocket_api.async_register_command(hass, ws_set_hp_dhw)
 
 
 # ---------------------------------------------------------------------------
@@ -606,6 +636,12 @@ def ws_get_config(
                     fast_source_group=str(
                         room_cfg.get(CONF_FAST_SOURCE_GROUP, "") or ""
                     ),
+                    fast_source_window_start=(
+                        str(room_cfg.get(CONF_FAST_WINDOW_START) or "") or None
+                    ),
+                    fast_source_window_end=(
+                        str(room_cfg.get(CONF_FAST_WINDOW_END) or "") or None
+                    ),
                     entities=entities,
                     diagnostic_entities=_resolve_diagnostic_entities(
                         registry, entry_id, name
@@ -619,6 +655,20 @@ def ws_get_config(
                 exc_info=True,
             )
 
+    # Heat-pump link entity ids (B2): only the configured, non-empty ones.
+    raw_hp: Any = coordinator.config_entry.options.get(CONF_HEAT_PUMP, {})
+    heat_pump: dict[str, str] = {}
+    if isinstance(raw_hp, dict):
+        for key in (
+            CONF_ENTITY_HP_MODE,
+            CONF_ENTITY_HP_HEATING_SETPOINT,
+            CONF_ENTITY_HP_COOLING_SETPOINT,
+            CONF_ENTITY_HP_ACTIVE,
+        ):
+            value = str(raw_hp.get(key, "") or "")
+            if value:
+                heat_pump[key] = value
+
     result = ConfigResult(
         home_setpoint_c=coordinator.get_home_temperature(),
         mode=coordinator.get_mode().value,
@@ -626,6 +676,7 @@ def ws_get_config(
         global_safe_dew_point_entity_id=_resolve_global_dew_point_entity(
             registry, entry_id
         ),
+        heat_pump=heat_pump or None,
     )
     connection.send_result(msg["id"], result.to_dict())
 
@@ -676,6 +727,7 @@ def ws_get_live(
         last_update_timestamp=data.last_update_timestamp,
         mode=data.mode,
         sensor_lost_rooms=data.sensor_lost_rooms,
+        heat_pump=data.heat_pump.to_dict() if data.heat_pump is not None else None,
     )
     connection.send_result(msg["id"], result.to_dict())
 
@@ -880,6 +932,55 @@ def ws_set_mode(
     mode = Mode(str(msg["mode"]))
     coordinator.set_mode(mode)
     connection.send_result(msg["id"], {"mode": mode.value})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_SET_HP_DHW,
+        vol.Required("dhw"): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_set_hp_dhw(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Add/remove the heat pump's ``+DHW`` flag (the panel's DHW switch, B2).
+
+    Delegates to
+    :meth:`~coordinator.TortoiseUfhCoordinator.async_set_hp_dhw`; the external
+    DHW automation remains the flag's owner and may overwrite the result at
+    any time.
+
+    Args:
+        hass: The running Home Assistant instance.
+        connection: The active websocket connection.
+        msg: The decoded request message with a boolean ``dhw`` field.
+
+    Returns:
+        None. The selected option is echoed through ``connection.send_result``
+        / errors through ``connection.send_error`` (``hp_not_configured`` /
+        ``hp_dhw_unavailable``).
+    """
+    from .coordinator import HpDhwUnavailableError, HpNotConfiguredError
+
+    coordinator = _resolve_coordinator(hass)
+    if coordinator is None:
+        connection.send_error(msg["id"], _ERR_NOT_FOUND, "No Tortoise-UFH entry loaded")
+        return
+
+    want_dhw = bool(msg["dhw"])
+    try:
+        option = await coordinator.async_set_hp_dhw(want_dhw)
+    except HpNotConfiguredError as err:
+        connection.send_error(msg["id"], _ERR_HP_NOT_CONFIGURED, str(err))
+        return
+    except HpDhwUnavailableError as err:
+        connection.send_error(msg["id"], _ERR_HP_DHW_UNAVAILABLE, str(err))
+        return
+    connection.send_result(msg["id"], {"dhw": want_dhw, "option": option})
 
 
 @websocket_api.require_admin

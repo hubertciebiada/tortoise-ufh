@@ -133,6 +133,17 @@ class RoomInputs:
             ``frac > 0``) instead of jumping a full +1 K at the 60-min edge —
             so a threshold-reporting RH sensor can neither limit-cycle the
             cooling nor step the throttle discontinuously.
+        fast_source_allowed: Whether the room's fast source MAY run this cycle
+            (additive field 2026-07-12, B1 — per-room quiet hours). The core
+            deliberately knows no wall clock: the ADAPTER evaluates the room's
+            configured allowed-hours window against Home Assistant's local
+            time and hands the verdict in as a plain bool. ``False`` makes the
+            controller request OFF from the direction machine (an idle unit
+            does not engage; a running unit stops through the normal min-ON
+            dwell — compressor protection outranks punctuality) and flags
+            ``"fast_source_quiet_hours"``. The hard-safety S3/S4 emergency
+            force-on deliberately IGNORES this (room safety outranks acoustic
+            comfort). ``True`` (the default) changes nothing.
 
     Raises:
         ValueError: If ``humidity_pct`` is outside the 0..100 range,
@@ -154,6 +165,7 @@ class RoomInputs:
     fast_source_group: str = ""  # multisplit outdoor-unit group (K4, additive)
     fast_source_hvac_mode: str | None = None  # raw hvac-mode feedback (K4)
     humidity_stale_frac: float = 0.0  # RH staleness 0..1 (age 60->120 min; K7/D5)
+    fast_source_allowed: bool = True  # quiet-hours verdict from the adapter (B1)
 
     def __post_init__(self) -> None:
         """Validate the humidity range/staleness (percent) and the watchdog age."""

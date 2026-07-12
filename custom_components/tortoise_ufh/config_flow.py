@@ -48,6 +48,7 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     TextSelector,
+    TimeSelector,
 )
 
 from .const import (
@@ -55,6 +56,10 @@ from .const import (
     CONF_CONTROLLER,
     CONF_COOLING_ENABLED,
     CONF_ENTITY_FAST_SOURCE,
+    CONF_ENTITY_HP_ACTIVE,
+    CONF_ENTITY_HP_COOLING_SETPOINT,
+    CONF_ENTITY_HP_HEATING_SETPOINT,
+    CONF_ENTITY_HP_MODE,
     CONF_ENTITY_HUMIDITY,
     CONF_ENTITY_MODE,
     CONF_ENTITY_RETURN,
@@ -64,6 +69,9 @@ from .const import (
     CONF_ENTITY_VALVES,
     CONF_FAST_SOURCE_GROUP,
     CONF_FAST_SOURCE_KIND,
+    CONF_FAST_WINDOW_END,
+    CONF_FAST_WINDOW_START,
+    CONF_HEAT_PUMP,
     CONF_HOME_SETPOINT,
     CONF_ROOM_AREA,
     CONF_ROOM_NAME,
@@ -381,6 +389,60 @@ def _validate_valves(validator: EntityValidator, valve_ids: list[str]) -> str | 
     return None
 
 
+def _normalize_window_time(raw: Any) -> str:
+    """Normalise a ``TimeSelector`` value to ``"HH:MM"`` (``""`` when unset).
+
+    Args:
+        raw: The submitted selector value (``"HH:MM"`` / ``"HH:MM:SS"`` /
+            empty / ``None``).
+
+    Returns:
+        The zero-padded ``"HH:MM"`` string, or ``""`` for an empty value.
+
+    Raises:
+        ValueError: If the value is present but not a valid time of day.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    parts = text.split(":")
+    if len(parts) < 2:
+        msg = f"invalid time {text!r}"
+        raise ValueError(msg)
+    hour = int(parts[0])
+    minute = int(parts[1])
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        msg = f"time out of range: {text!r}"
+        raise ValueError(msg)
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _parse_quiet_window(user_input: dict[str, Any]) -> tuple[str, str]:
+    """Extract + validate a room's quiet-hours window pair (B1, 2026-07-12).
+
+    The pair is all-or-nothing: both times set (and different — ``start ==
+    end`` would be a degenerate window) or both empty (no restriction).
+
+    Args:
+        user_input: The submitted room-attributes form values.
+
+    Returns:
+        ``(start, end)`` as ``"HH:MM"`` strings, or ``("", "")`` when the
+        window is not configured.
+
+    Raises:
+        ValueError: If only one time is set, the times are equal, or a value
+            is not a valid time (surfaced as the ``quiet_window_invalid``
+            form error).
+    """
+    start = _normalize_window_time(user_input.get(CONF_FAST_WINDOW_START))
+    end = _normalize_window_time(user_input.get(CONF_FAST_WINDOW_END))
+    if bool(start) != bool(end) or (start and start == end):
+        msg = "quiet-hours window must set both times (start != end) or neither"
+        raise ValueError(msg)
+    return start, end
+
+
 def _room_attributes_schema_dict(
     *,
     include_name: bool,
@@ -455,6 +517,18 @@ def _room_attributes_schema_dict(
             default=str(values.get(CONF_FAST_SOURCE_GROUP, "") or ""),
         )
     ] = TextSelector()
+    # Quiet-hours window (B1, 2026-07-12): the hours in which the room's fast
+    # source MAY run. Always visible (a static schema cannot follow the
+    # has_fast_source toggle); the field description says it applies only to
+    # rooms with a fast source. Both-or-neither is validated on submit.
+    for window_key in (CONF_FAST_WINDOW_START, CONF_FAST_WINDOW_END):
+        existing = str(values.get(window_key, "") or "")
+        marker = (
+            vol.Optional(window_key, description={"suggested_value": existing})
+            if existing
+            else vol.Optional(window_key)
+        )
+        schema[marker] = TimeSelector()
     schema[
         vol.Required(
             CONF_COOLING_ENABLED,
@@ -701,6 +775,13 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                 else ""
             )
             add_another = bool(user_input.get(CONF_ADD_ANOTHER, False))
+            window_start = ""
+            window_end = ""
+            try:
+                window_start, window_end = _parse_quiet_window(user_input)
+            except ValueError as err:
+                _LOGGER.warning("Invalid quiet-hours window: %s", err)
+                errors["base"] = "quiet_window_invalid"
 
             if not name:
                 errors["base"] = "empty_room_name"
@@ -736,7 +817,13 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors["base"] = "invalid_room"
 
             if not errors and room is not None:
-                self._rooms.append(room.as_dict())
+                self._rooms.append(
+                    {
+                        **room.as_dict(),
+                        CONF_FAST_WINDOW_START: window_start,
+                        CONF_FAST_WINDOW_END: window_end,
+                    }
+                )
                 if add_another:
                     return await self.async_step_rooms()
                 self._entity_room_idx = 0
@@ -755,6 +842,8 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_FAST_SOURCE_KIND, default=DEFAULT_FAST_SOURCE_KIND
                 ): SelectSelector(SelectSelectorConfig(options=FAST_SOURCE_KINDS)),
                 vol.Optional(CONF_FAST_SOURCE_GROUP, default=""): TextSelector(),
+                vol.Optional(CONF_FAST_WINDOW_START): TimeSelector(),
+                vol.Optional(CONF_FAST_WINDOW_END): TimeSelector(),
                 vol.Required(
                     CONF_COOLING_ENABLED, default=DEFAULT_COOLING_ENABLED
                 ): BooleanSelector(),
@@ -943,8 +1032,81 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         """Show the top-level options menu."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["add_room", "edit_room", "remove_room", "settings"],
+            menu_options=[
+                "add_room",
+                "edit_room",
+                "remove_room",
+                "settings",
+                "heat_pump",
+            ],
         )
+
+    # -- Leaf: optional heat-pump link (B2, 2026-07-12) ----------------------
+
+    async def async_step_heat_pump(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Configure the OPTIONAL heat-pump link (everything may stay empty).
+
+        Four optional entity pickers: the pump-mode select (HeishaMon-style),
+        the heating / cooling water-setpoint numbers, and the "pump serves the
+        UFH" status entity. An entirely empty form removes the section — the
+        pre-0.8.0 behaviour (Tortoise never touches the pump). Saving writes
+        ``entry.options[CONF_HEAT_PUMP]`` and reloads the entry.
+        """
+        entry = self.config_entry
+        current: dict[str, Any] = dict(entry.options.get(CONF_HEAT_PUMP, {}) or {})
+
+        if user_input is not None:
+            hp: dict[str, Any] = {}
+            for key in (
+                CONF_ENTITY_HP_MODE,
+                CONF_ENTITY_HP_HEATING_SETPOINT,
+                CONF_ENTITY_HP_COOLING_SETPOINT,
+                CONF_ENTITY_HP_ACTIVE,
+            ):
+                value = str(user_input.get(key, "") or "").strip()
+                if value:
+                    hp[key] = value
+            new_options = {
+                key: value
+                for key, value in entry.options.items()
+                if key != CONF_HEAT_PUMP
+            }
+            if hp:
+                new_options[CONF_HEAT_PUMP] = hp
+            return self.async_create_entry(title="", data=new_options)
+
+        def marker(key: str) -> Any:
+            value = str(current.get(key, "") or "")
+            if value:
+                return vol.Optional(key, description={"suggested_value": value})
+            return vol.Optional(key)
+
+        schema = vol.Schema(
+            {
+                marker(CONF_ENTITY_HP_MODE): EntitySelector(
+                    EntitySelectorConfig(domain=["select", "input_select"])
+                ),
+                marker(CONF_ENTITY_HP_HEATING_SETPOINT): EntitySelector(
+                    EntitySelectorConfig(domain=["number", "input_number"])
+                ),
+                marker(CONF_ENTITY_HP_COOLING_SETPOINT): EntitySelector(
+                    EntitySelectorConfig(domain=["number", "input_number"])
+                ),
+                marker(CONF_ENTITY_HP_ACTIVE): EntitySelector(
+                    EntitySelectorConfig(
+                        domain=[
+                            "binary_sensor",
+                            "switch",
+                            "input_boolean",
+                            "sensor",
+                        ]
+                    )
+                ),
+            }
+        )
+        return self.async_show_form(step_id="heat_pump", data_schema=schema)
 
     # -- Leaf: control & tuning settings (the original options form) --------
 
@@ -1037,6 +1199,13 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 if has_fast
                 else ""
             )
+            window_start = ""
+            window_end = ""
+            try:
+                window_start, window_end = _parse_quiet_window(user_input)
+            except ValueError as err:
+                _LOGGER.warning("Invalid quiet-hours window: %s", err)
+                errors["base"] = "quiet_window_invalid"
 
             if not name:
                 errors["base"] = "empty_room_name"
@@ -1076,6 +1245,8 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                     CONF_ROOM_OFFSET: float(
                         user_input.get(CONF_ROOM_OFFSET, DEFAULT_ROOM_OFFSET_C)
                     ),
+                    CONF_FAST_WINDOW_START: window_start,
+                    CONF_FAST_WINDOW_END: window_end,
                 }
                 return await self.async_step_room_entities()
 
@@ -1142,6 +1313,13 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 if has_fast
                 else ""
             )
+            window_start = ""
+            window_end = ""
+            try:
+                window_start, window_end = _parse_quiet_window(user_input)
+            except ValueError as err:
+                _LOGGER.warning("Invalid quiet-hours window: %s", err)
+                errors["base"] = "quiet_window_invalid"
 
             room_def: RoomDefinition | None = None
             try:
@@ -1166,6 +1344,8 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 self._pending_room = {
                     **room,
                     **room_def.as_dict(),
+                    CONF_FAST_WINDOW_START: window_start,
+                    CONF_FAST_WINDOW_END: window_end,
                 }
                 return await self.async_step_room_entities()
 

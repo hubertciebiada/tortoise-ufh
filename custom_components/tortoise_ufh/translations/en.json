@@ -17,9 +17,15 @@
           "room_area": "Floor area (m²)",
           "fast_source_kind": "Fast source (split / heater)",
           "fast_source_group": "Shared outdoor unit group (multisplit, optional)",
+          "fast_source_window_start": "Assist allowed from (optional)",
+          "fast_source_window_end": "Assist allowed until (optional)",
           "has_fast_source": "This room has a fast auxiliary source",
           "cooling_enabled": "Participates in floor cooling",
           "add_another": "Add another room"
+        },
+        "data_description": {
+          "fast_source_window_start": "Outside this window the room's split/heater will not engage (quiet hours); a running unit stops only after its minimum run time. The window may cross midnight (e.g. 07:00–22:00 or 22:00–07:00). Leave both empty to always allow. Applies only to rooms with a fast source.",
+          "fast_source_window_end": "Outside this window the room's split/heater will not engage (quiet hours); a running unit stops only after its minimum run time. The window may cross midnight (e.g. 07:00–22:00 or 22:00–07:00). Leave both empty to always allow. Applies only to rooms with a fast source."
         }
       },
       "entities": {
@@ -49,8 +55,12 @@
           "boost_offset_c": "Fast-source boost offset (K)",
           "fast_min_on_minutes": "Fast-source minimum on time (min)",
           "fast_min_off_minutes": "Fast-source minimum off time (min)",
+          "fast_target_offset_k": "Fast-source target overdrive (K, 0 = off)",
           "dew_margin_k": "Dew-point margin (K)",
           "dew_ramp_k": "Dew-point ramp band (K)",
+          "cooling_supply_base_c": "Cooling water base temperature (°C, global)",
+          "heating_supply_base_c": "Heating water base temperature (°C, global)",
+          "heating_supply_slope": "Heating water curve slope (K/K, global)",
           "ff_neutral_c": "Feedforward neutral outdoor temperature (°C)",
           "ff_gain_pct_per_k": "Feedforward gain (%/K)",
           "ff_max_pct": "Feedforward cap (%)",
@@ -75,7 +85,8 @@
       "invalid_unit": "Entity has an incorrect unit of measurement",
       "invalid_device_class": "Entity has an incorrect device class",
       "entity_unavailable": "Entity is currently unavailable — it may come online later",
-      "valve_no_set_position": "This valve entity does not support setting a position (SET_POSITION). Pick a position-capable valve or a number entity."
+      "valve_no_set_position": "This valve entity does not support setting a position (SET_POSITION). Pick a position-capable valve or a number entity.",
+      "quiet_window_invalid": "Set both window times (start and end, different from each other) or neither."
     },
     "abort": {
       "already_configured": "Tortoise-UFH is already configured for this location"
@@ -90,7 +101,8 @@
           "add_room": "Add a room",
           "edit_room": "Edit a room",
           "remove_room": "Remove a room",
-          "settings": "Control & tuning settings"
+          "settings": "Control & tuning settings",
+          "heat_pump": "Heat pump"
         }
       },
       "settings": {
@@ -105,8 +117,12 @@
           "boost_offset_c": "Fast-source boost offset (K)",
           "fast_min_on_minutes": "Fast-source minimum on time (min)",
           "fast_min_off_minutes": "Fast-source minimum off time (min)",
+          "fast_target_offset_k": "Fast-source target overdrive (K, 0 = off)",
           "dew_margin_k": "Dew-point margin (K)",
           "dew_ramp_k": "Dew-point ramp band (K)",
+          "cooling_supply_base_c": "Cooling water base temperature (°C, global)",
+          "heating_supply_base_c": "Heating water base temperature (°C, global)",
+          "heating_supply_slope": "Heating water curve slope (K/K, global)",
           "ff_neutral_c": "Feedforward neutral outdoor temperature (°C)",
           "ff_gain_pct_per_k": "Feedforward gain (%/K)",
           "ff_max_pct": "Feedforward cap (%)",
@@ -123,7 +139,13 @@
           "has_fast_source": "This room has a fast auxiliary source",
           "fast_source_kind": "Fast source (split / heater)",
           "fast_source_group": "Shared outdoor unit group (multisplit, optional)",
+          "fast_source_window_start": "Assist allowed from (optional)",
+          "fast_source_window_end": "Assist allowed until (optional)",
           "cooling_enabled": "Participates in floor cooling"
+        },
+        "data_description": {
+          "fast_source_window_start": "Outside this window the room's split/heater will not engage (quiet hours); a running unit stops only after its minimum run time. The window may cross midnight (e.g. 07:00–22:00 or 22:00–07:00). Leave both empty to always allow. Applies only to rooms with a fast source.",
+          "fast_source_window_end": "Outside this window the room's split/heater will not engage (quiet hours); a running unit stops only after its minimum run time. The window may cross midnight (e.g. 07:00–22:00 or 22:00–07:00). Leave both empty to always allow. Applies only to rooms with a fast source."
         }
       },
       "edit_room": {
@@ -142,7 +164,13 @@
           "has_fast_source": "This room has a fast auxiliary source",
           "fast_source_kind": "Fast source (split / heater)",
           "fast_source_group": "Shared outdoor unit group (multisplit, optional)",
+          "fast_source_window_start": "Assist allowed from (optional)",
+          "fast_source_window_end": "Assist allowed until (optional)",
           "cooling_enabled": "Participates in floor cooling"
+        },
+        "data_description": {
+          "fast_source_window_start": "Outside this window the room's split/heater will not engage (quiet hours); a running unit stops only after its minimum run time. The window may cross midnight (e.g. 07:00–22:00 or 22:00–07:00). Leave both empty to always allow. Applies only to rooms with a fast source.",
+          "fast_source_window_end": "Outside this window the room's split/heater will not engage (quiet hours); a running unit stops only after its minimum run time. The window may cross midnight (e.g. 07:00–22:00 or 22:00–07:00). Leave both empty to always allow. Applies only to rooms with a fast source."
         }
       },
       "remove_room": {
@@ -163,6 +191,20 @@
           "entity_return": "Return water temperature sensors (one per loop)",
           "entity_fast_source": "Fast-source climate entity (split / heater)"
         }
+      },
+      "heat_pump": {
+        "title": "Heat pump (optional link)",
+        "description": "All fields are optional — leave everything empty to keep Tortoise away from the pump. Direction sync always preserves the pump's “+DHW” flag; the external DHW automation stays its owner. Example HeishaMon-style entities: select.heat_pump_mode, number.z1_cool_request_temp.",
+        "data": {
+          "entity_hp_mode": "Pump mode entity (select)",
+          "entity_hp_heating_setpoint": "Heating water setpoint entity (number, optional)",
+          "entity_hp_cooling_setpoint": "Cooling water setpoint entity (number, optional)",
+          "entity_hp_active": "“Pump available for UFH” entity (optional)"
+        },
+        "data_description": {
+          "entity_hp_mode": "HeishaMon-style select with options like “Heat only” / “Cool only” / “Heat+DHW”. Tortoise writes only the direction and never removes the DHW flag.",
+          "entity_hp_active": "Off while the pump does DHW/defrost — the room controllers then freeze their integrators."
+        }
       }
     },
     "error": {
@@ -177,7 +219,8 @@
       "invalid_unit": "Entity has an incorrect unit of measurement",
       "invalid_device_class": "Entity has an incorrect device class",
       "entity_unavailable": "Entity is currently unavailable — it may come online later",
-      "valve_no_set_position": "This valve entity does not support setting a position (SET_POSITION). Pick a position-capable valve or a number entity."
+      "valve_no_set_position": "This valve entity does not support setting a position (SET_POSITION). Pick a position-capable valve or a number entity.",
+      "quiet_window_invalid": "Set both window times (start and end, different from each other) or neither."
     },
     "abort": {
       "no_rooms": "There are no rooms to manage",

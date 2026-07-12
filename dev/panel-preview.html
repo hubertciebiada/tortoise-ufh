@@ -199,6 +199,12 @@
           home_setpoint_c: 21.0,
           mode,
           global_safe_dew_point_entity_id: "sensor.tortoise_global_safe_dew_point",
+          // B2 (v0.8.0): the configured heat-pump-link entity ids (null when
+          // the section is unconfigured) — generic HeishaMon-style examples.
+          heat_pump: {
+            entity_hp_mode: "select.heat_pump_mode",
+            entity_hp_cooling_setpoint: "number.z1_cool_request_temp",
+          },
           rooms: [
             {
               name: "Salon",
@@ -209,6 +215,9 @@
               fast_source_kind: "split",
               // K9 (v0.6.1): the multisplit group key flows in get_config.
               fast_source_group: "outdoor_unit_a",
+              // B1 (v0.8.0): no quiet-hours window for the Salon (always).
+              fast_source_window_start: null,
+              fast_source_window_end: null,
               entities: {
                 entity_temp_room: "sensor.salon_temp",
                 entity_humidity: "sensor.salon_rh",
@@ -237,6 +246,8 @@
               control_state: state.roomStates["Kuchnia"],
               fast_source_kind: "none",
               fast_source_group: "",
+              fast_source_window_start: null,
+              fast_source_window_end: null,
               entities: {
                 entity_temp_room: "sensor.kuchnia_temp",
                 entity_humidity: "sensor.kuchnia_rh",
@@ -257,6 +268,9 @@
               // cooling scenario exercises the group-conflict chip/column.
               fast_source_kind: "split",
               fast_source_group: "outdoor_unit_a",
+              // B1 (v0.8.0): quiet hours — assist allowed 07:00-22:00 only.
+              fast_source_window_start: "07:00",
+              fast_source_window_end: "22:00",
               entities: {
                 entity_temp_room: "sensor.lazienka_temp",
                 entity_humidity: "sensor.lazienka_rh",
@@ -387,7 +401,11 @@
                     raw_valve_pct: 40.0,
                     dew_throttle_factor: 0.3,
                     saturated: false,
-                    flags: ["s2_throttle", "fast_source_group_conflict"],
+                    flags: [
+                      "s2_throttle",
+                      "fast_source_group_conflict",
+                      "fast_source_quiet_hours",
+                    ],
                     explanation:
                       "Chłodzenie dławione (0.3) — punkt rosy 17.4°C blisko temperatury zasilania. Split przegrał arbitraż grupy.",
                   },
@@ -433,6 +451,38 @@
           mode: cooling ? "cooling" : "heating",
           // Building-level staleness counter (safety-F13): Kuchnia is lost.
           sensor_lost_rooms: 1,
+          // B2 (v0.8.0): the heat-pump link view (HeatPumpRuntime.to_dict).
+          heat_pump: sampleHeatPump(scenario),
+        };
+      }
+
+      // --- Sample heat-pump payload (matches HeatPumpRuntime.to_dict) -------
+      function sampleHeatPump(scenario) {
+        const cooling = scenario === "cooling";
+        const current = state.hpDhw ? "Heat+DHW" : "Heat only";
+        const desired = cooling
+          ? state.hpDhw
+            ? "Cool+DHW"
+            : "Cool only"
+          : current;
+        return {
+          configured: true,
+          mode_entity_id: "select.heat_pump_mode",
+          current_option: current,
+          desired_option: desired,
+          in_sync: !cooling, // the mock pump lags a cooling switch (divergence)
+          dhw_active: state.hpDhw,
+          dhw_only: false,
+          cooling: {
+            entity_id: "number.z1_cool_request_temp",
+            target_c: cooling ? 19.4 : null,
+            base_c: 18.0,
+            safe_dew_c: cooling ? 19.4 : null,
+          },
+          heating: null, // heating setpoint entity not configured (default)
+          hp_active: null,
+          hp_active_configured: false,
+          writes_enabled: Object.values(state.roomStates).includes("live"),
         };
       }
 
@@ -505,6 +555,8 @@
         roomStates: { Salon: "live", Kuchnia: "off", "Łazienka": "live" },
         // Sparse per-room controller overrides (mirrors CONF_ROOM_TUNING).
         tuningRooms: { Salon: { kt: 8.0 } },
+        // B2 (v0.8.0): the pump's +DHW flag (toggled by set_hp_dhw).
+        hpDhw: true,
       };
       const logEl = document.getElementById("log");
 
@@ -520,11 +572,16 @@
         { name: "boost_offset_c", type: "number", min: 0, max: 10, step: 0.1, unit: "K" },
         { name: "fast_min_on_minutes", type: "number", min: 3, max: 60, step: 1, unit: "min" },
         { name: "fast_min_off_minutes", type: "number", min: 3, max: 60, step: 1, unit: "min" },
+        { name: "fast_target_offset_k", type: "number", min: 0, max: 3, step: 0.5, unit: "K" },
         { name: "dew_margin_k", type: "number", min: 0.5, max: 10, step: 0.1, unit: "K" },
         { name: "dew_ramp_k", type: "number", min: 0.1, max: 10, step: 0.1, unit: "K" },
         { name: "ff_neutral_c", type: "number", min: -30, max: 40, step: 0.5, unit: "°C" },
         { name: "ff_gain_pct_per_k", type: "number", min: 0, max: 10, step: 0.1, unit: "%/K" },
         { name: "ff_max_pct", type: "number", min: 0, max: 100, step: 1, unit: "%" },
+        // v0.8.0 (B2): the global-only heat-pump water knobs.
+        { name: "cooling_supply_base_c", type: "number", min: 10, max: 25, step: 0.5, unit: "°C" },
+        { name: "heating_supply_base_c", type: "number", min: 20, max: 40, step: 0.5, unit: "°C" },
+        { name: "heating_supply_slope", type: "number", min: 0, max: 2, step: 0.1, unit: "K/K" },
         { name: "outdoor_ff_enabled", type: "bool", unit: "" },
       ];
       // Library defaults as of v0.6.x (kp=14 / ki=0.0015 / kt=12 — the C1
@@ -533,8 +590,11 @@
       const TUNE_DEFAULTS = {
         kp: 14.0, ki: 0.0015, kt: 12.0, deadband_c: 0.3, valve_floor_pct: 15.0,
         boost_offset_c: 1.0, fast_min_on_minutes: 10.0, fast_min_off_minutes: 10.0,
+        fast_target_offset_k: 1.0,
         dew_margin_k: 2.0, dew_ramp_k: 2.0, ff_neutral_c: 15.0,
         ff_gain_pct_per_k: 1.0, ff_max_pct: 20.0, outdoor_ff_enabled: false,
+        cooling_supply_base_c: 18.0, heating_supply_base_c: 26.0,
+        heating_supply_slope: 0.5,
       };
       function sampleTuning() {
         return {
@@ -584,6 +644,13 @@
             if (msg.type === "tortoise_ufh/set_mode") {
               state.scenario = msg.mode === "cooling" ? "cooling" : "heating";
               return Promise.resolve({ mode: msg.mode });
+            }
+            if (msg.type === "tortoise_ufh/set_hp_dhw") {
+              state.hpDhw = !!msg.dhw;
+              return Promise.resolve({
+                dhw: state.hpDhw,
+                option: state.hpDhw ? "Heat+DHW" : "Heat only",
+              });
             }
             if (msg.type === "tortoise_ufh/get_tuning") {
               return Promise.resolve(sampleTuning());

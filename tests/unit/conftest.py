@@ -84,6 +84,7 @@ def make_inputs(
     fast_source_group: str = "",
     fast_source_hvac_mode: str | None = None,
     humidity_stale_frac: float = 0.0,
+    fast_source_allowed: bool = True,
 ) -> RoomInputs:
     """Build a :class:`RoomInputs` with test-friendly keyword defaults.
 
@@ -104,6 +105,8 @@ def make_inputs(
         fast_source_hvac_mode: Raw HVAC-mode feedback string (K4), or ``None``.
         humidity_stale_frac: Staleness fraction of ``humidity_pct`` in
             ``[0, 1]`` (K7/D5) — 0 fresh, 1 at 120 min of age.
+        fast_source_allowed: Quiet-hours verdict (B1) — ``False`` means the
+            fast source must not run this cycle.
 
     Returns:
         A validated :class:`RoomInputs`.
@@ -122,4 +125,5 @@ def make_inputs(
         fast_source_group=fast_source_group,
         fast_source_hvac_mode=fast_source_hvac_mode,
         humidity_stale_frac=humidity_stale_frac,
+        fast_source_allowed=fast_source_allowed,
     )

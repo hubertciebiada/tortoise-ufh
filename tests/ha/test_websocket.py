@@ -501,3 +501,66 @@ async def test_get_config_skips_a_broken_room_entry(
     # The healthy room is still served; the corrupted one is skipped.
     assert "Salon" in rooms
     assert "Lazienka" not in rooms
+
+
+async def test_get_live_and_config_carry_heat_pump_and_window_fields(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """The v0.8.0 additive payload fields exist (null when unconfigured)."""
+    client = await hass_ws_client(hass)
+
+    live = await _round_trip(client, {"type": f"{DOMAIN}/get_live"})
+    assert live["success"] is True
+    assert live["result"]["heat_pump"] is None
+
+    cfg = await _round_trip(client, {"type": f"{DOMAIN}/get_config"})
+    assert cfg["success"] is True
+    assert cfg["result"]["heat_pump"] is None
+    for room in cfg["result"]["rooms"]:
+        assert "fast_source_window_start" in room
+        assert "fast_source_window_end" in room
+        assert room["fast_source_window_start"] is None
+
+
+async def test_set_hp_dhw_unconfigured_errors(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """set_hp_dhw without a configured mode entity returns hp_not_configured."""
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/set_hp_dhw", "dhw": True})
+    assert msg["success"] is False
+    assert msg["error"]["code"] == "hp_not_configured"
+
+
+async def test_set_hp_dhw_toggles_the_flag(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """set_hp_dhw adds/removes the +DHW variant through select.select_option."""
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    from custom_components.tortoise_ufh.const import CONF_ENTITY_HP_MODE
+
+    options = ["Heat only", "Heat+DHW", "Cool only", "Cool+DHW", "DHW only"]
+    hass.states.async_set("select.heat_pump_mode", "Heat only", {"options": options})
+    coordinator = _coordinator(hass)
+    coordinator._hp_options = {CONF_ENTITY_HP_MODE: "select.heat_pump_mode"}
+    select_calls = async_mock_service(hass, "select", "select_option")
+
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/set_hp_dhw", "dhw": True})
+    assert msg["success"] is True
+    assert msg["result"] == {"dhw": True, "option": "Heat+DHW"}
+    assert [c.data["option"] for c in select_calls] == ["Heat+DHW"]
+
+    # Removing the flag from "DHW only" is refused: no base direction.
+    hass.states.async_set("select.heat_pump_mode", "DHW only", {"options": options})
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/set_hp_dhw", "dhw": False})
+    assert msg["success"] is False
+    assert msg["error"]["code"] == "hp_dhw_unavailable"
+    assert len(select_calls) == 1

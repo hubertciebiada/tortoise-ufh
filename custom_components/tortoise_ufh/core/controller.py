@@ -36,7 +36,7 @@ from dataclasses import replace
 
 from .config import ControllerConfig
 from .dew_point import cooling_throttle_factor, dew_point
-from .fast_source import FAST_TARGET_OFFSET_K, FastSourceMachine
+from .fast_source import FAST_TARGET_OFFSET_K, FastSourceMachine  # noqa: F401
 from .models import (
     BuildingOutputs,
     FastSourceCommand,
@@ -167,7 +167,10 @@ report/websocket payload can never bloat.
 
 # ``FAST_TARGET_OFFSET_K`` and the fast-source dwell/direction machinery moved
 # to :mod:`tortoise_ufh.fast_source` (2026-07-10); the constant is re-exported
-# above (imported and used here) so existing importers keep working.
+# above so existing importers keep working (BUILD_SPEC §2 note). Since
+# 2026-07-13 it is only the documented DEFAULT of the
+# ``ControllerConfig.fast_target_offset_k`` knob, which the controller reads
+# instead.
 
 GLOBAL_SAFE_DEW_MARGIN_K: float = 2.0
 """Safety margin [K] added on top of ``max_i(T_dew_i)`` for the global sensor.
@@ -726,6 +729,13 @@ class RoomController:
             fast = self._fast.force_off()
             direction = "brak"
         else:
+            # Quiet hours (B1, 2026-07-12): outside the room's allowed-hours
+            # window the split must not engage — in TRANSITIONAL it is the
+            # room's ONLY source, but quiet is quiet (a deliberate, documented
+            # trade-off; S3/S4 emergencies still override downstream).
+            quiet = not inputs.fast_source_allowed
+            if quiet and "fast_source_quiet_hours" not in flags:
+                flags.append("fast_source_quiet_hours")
             # Bidirectional demands: heating below setpoint, cooling above.
             heating_demand = error_c  # setpoint - t_room
             cooling_demand = -error_c
@@ -760,6 +770,13 @@ class RoomController:
                     fs_mode = FastSourceMode.COOLING
                     want_on = True
                     direction = "chlodzenie"
+            if quiet and want_on:
+                # A running unit reaches the window edge: request OFF through
+                # the NORMAL decide() path, so the min-ON dwell is honoured
+                # (compressor protection outranks punctuality) and an idle
+                # unit simply never starts. No new state-machine paths.
+                want_on = False
+                direction = "brak"
             if heater_cannot_cool:
                 fast = self._fast.force_off()
             else:
@@ -1101,9 +1118,17 @@ class RoomController:
         Honours the three-state direction machine (C6): a global mode change
         while the split is held by min-ON keeps re-emitting the REMEMBERED
         direction and can only reverse through OFF with the full min-OFF. The
-        boost target is offset by :data:`FAST_TARGET_OFFSET_K` in the boost
-        direction (S12) so the split's ceiling-mounted sensor does not throttle
-        the unit before the boost is delivered.
+        boost target is offset by ``config.fast_target_offset_k`` in the boost
+        direction (S12; a tuning knob since 2026-07-13, ``0`` disables) so the
+        split's ceiling-mounted sensor does not throttle the unit before the
+        boost is delivered.
+
+        Quiet hours (B1, 2026-07-12): when ``inputs.fast_source_allowed`` is
+        ``False`` the request is forced OFF and ``"fast_source_quiet_hours"``
+        is flagged — an idle unit does not engage, a running unit stops
+        through the normal min-ON dwell path. The safety layer downstream
+        (:meth:`_apply_safety`) may still force the unit ON in an S3/S4
+        emergency: room safety outranks acoustic comfort.
 
         Args:
             inputs: The room's raw inputs.
@@ -1115,6 +1140,10 @@ class RoomController:
         """
         if inputs.fast_source_kind is FastSourceKind.NONE:
             return self._fast.force_off()
+
+        quiet = not inputs.fast_source_allowed
+        if quiet and "fast_source_quiet_hours" not in flags:
+            flags.append("fast_source_quiet_hours")
 
         if inputs.mode is Mode.HEATING:
             demand = error_c  # setpoint - t_room
@@ -1133,12 +1162,15 @@ class RoomController:
                 flags.append("fast_source_cannot_cool")
             return self._fast.force_off()
 
-        want_on = self._fast.want(demand, engaged=self._fast.state is fs_mode)
+        want_on = (not quiet) and self._fast.want(
+            demand, engaged=self._fast.state is fs_mode
+        )
+        offset_k = self._config.fast_target_offset_k
         return self._fast.decide(
             want_on=want_on,
             fs_mode=fs_mode,
-            target_heating=inputs.setpoint_c + FAST_TARGET_OFFSET_K,
-            target_cooling=inputs.setpoint_c - FAST_TARGET_OFFSET_K,
+            target_heating=inputs.setpoint_c + offset_k,
+            target_cooling=inputs.setpoint_c - offset_k,
             flags=flags,
         )
 

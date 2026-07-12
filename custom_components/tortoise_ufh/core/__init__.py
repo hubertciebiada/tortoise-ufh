@@ -55,7 +55,16 @@ from .dew_point import (
     dew_point,
     dew_point_simplified,
 )
-from .fast_source import FastSourceMachine
+from .fast_source import FastSourceMachine, window_allows
+from .hp_link import (
+    HEATING_SUPPLY_MAX_C,
+    HEATING_SUPPLY_MIN_C,
+    HEISHAMON_MODE_OPTIONS,
+    cooling_setpoint_c,
+    dhw_option,
+    direction_option,
+    heating_curve,
+)
 from .metrics import (
     SimMetrics,
     assert_comfort,
@@ -112,7 +121,7 @@ from .weather import (
 )
 from .weather_comp import CoolingCompCurve, WeatherCompCurve
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "BUILDING_PROFILES",
@@ -120,6 +129,9 @@ __all__ = [
     "DEFAULT_DT_HEATING",
     "DEFAULT_HOME_SETPOINT_C",
     "DEW_MARGIN_DEFAULT_K",
+    "HEATING_SUPPLY_MAX_C",
+    "HEATING_SUPPLY_MIN_C",
+    "HEISHAMON_MODE_OPTIONS",
     "K_PEX",
     "MODERN_BUNGALOW_ROOMS",
     "SCENARIO_LIBRARY",
@@ -179,9 +191,13 @@ __all__ = [
     "assert_no_prolonged_cold",
     "cold_snap",
     "condensation_margin",
+    "cooling_setpoint_c",
     "cooling_throttle_factor",
     "dew_point",
     "dew_point_simplified",
+    "dhw_option",
+    "direction_option",
+    "heating_curve",
     "heavy_construction",
     "hot_july_floor_cooling",
     "leaky_old_house",
@@ -196,4 +212,5 @@ __all__ = [
     "steady_heating",
     "thin_screed",
     "well_insulated",
+    "window_allows",
 ]

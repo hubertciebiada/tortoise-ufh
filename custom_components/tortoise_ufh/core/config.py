@@ -77,6 +77,17 @@ class ControllerConfig:
             invert — D2, 2026-07-09).
         fast_min_on_minutes: Minimum fast-source ON dwell time [min] (>= 0).
         fast_min_off_minutes: Minimum fast-source OFF dwell time [min] (>= 0).
+        fast_target_offset_k: Boost overdrive of the fast-source target beyond
+            the room setpoint [K] (in [0, 3]; a knob since 2026-07-13 — owner
+            request, previously the fixed ``FAST_TARGET_OFFSET_K``). The
+            split's own air sensor sits near the ceiling and reads warmer
+            than the room sensor, so a target equal to the setpoint throttles
+            the unit before the boost is delivered; commanding ``setpoint +
+            offset`` (heating) / ``setpoint - offset`` (cooling) keeps it
+            working through the boost, while the RELEASE decision stays with
+            OUR room sensor (S12, 2026-07-09). ``0`` disables the overdrive
+            (the split gets the plain setpoint). TRANSITIONAL always uses the
+            plain setpoint regardless of this knob.
         dew_margin_k: Supply-above-dew gap [K] at (and above) which the local
             cooling throttle is fully OPEN (>= 0). Semantics revised
             2026-07-12 (K6): the ramp ENDS here — this is the same design gap
@@ -88,6 +99,19 @@ class ControllerConfig:
             sat ABOVE the margin). With the defaults (2/2) the valve ramps
             1 -> 0 over gap 2 -> 0 K and closes fully at the room's actual
             dew point.
+        cooling_supply_base_c: Base cooling-water setpoint [degC] written to
+            the heat pump while the home cools (in [10, 25]; B2 2026-07-12).
+            The value actually written is ``max(base, global safe dew point)``
+            — see :func:`~tortoise_ufh.hp_link.cooling_setpoint_c`. GLOBAL,
+            building-level knob: a water setpoint per room makes no physical
+            sense, so per-room overrides are rejected by the adapter.
+        heating_supply_base_c: Heating supply-water setpoint at the neutral
+            outdoor temperature ``ff_neutral_c`` [degC] (in [20, 40]; B2
+            2026-07-12). Feeds the optional heat-pump heating curve — see
+            :func:`~tortoise_ufh.hp_link.heating_curve`. GLOBAL knob.
+        heating_supply_slope: Heating-water curve steepness [K_supply per K
+            outdoor shortfall below ``ff_neutral_c``] (in [0, 2]; B2
+            2026-07-12). GLOBAL knob.
         cycle_seconds: Nominal control-cycle period [s] (> 0, default 300 = 5
             minutes).
         valve_write_threshold_pct: Minimum valve change before a new value is
@@ -121,8 +145,15 @@ class ControllerConfig:
     boost_offset_c: float = 1.0
     fast_min_on_minutes: float = 10.0
     fast_min_off_minutes: float = 10.0
+    fast_target_offset_k: float = 1.0
     dew_margin_k: float = 2.0
     dew_ramp_k: float = 2.0
+    # Optional heat-pump water setpoints (B2, 2026-07-12): global knobs read
+    # only by the adapter's opt-in heat-pump link; the room control law never
+    # touches them.
+    cooling_supply_base_c: float = 18.0
+    heating_supply_base_c: float = 26.0
+    heating_supply_slope: float = 0.5
     cycle_seconds: float = 300.0
     # 2.0 -> 5.0 (2026-07-12, K2b): measured on the twin (steady_heating
     # @ 300 s, tail 24-48 h), the 2 pp threshold did NOT bound kt's noise
@@ -138,8 +169,11 @@ class ControllerConfig:
         Raises:
             ValueError: If any gain is negative, ``valve_floor_pct`` is outside
                 ``[0, 100]``, a margin/threshold is negative, ``dew_ramp_k`` or
-                ``cycle_seconds`` is non-positive, or ``boost_offset_c`` does
-                not exceed ``deadband_c``.
+                ``cycle_seconds`` is non-positive, ``boost_offset_c`` does
+                not exceed ``deadband_c``, ``fast_target_offset_k`` is outside
+                ``[0, 3]``, or a heat-pump water knob is outside its range
+                (``cooling_supply_base_c`` [10, 25], ``heating_supply_base_c``
+                [20, 40], ``heating_supply_slope`` [0, 2]).
         """
         for gain_name, gain in (
             ("kp", self.kp),
@@ -182,11 +216,35 @@ class ControllerConfig:
         if self.fast_min_off_minutes < 0:
             msg = f"fast_min_off_minutes must be >= 0, got {self.fast_min_off_minutes}"
             raise ValueError(msg)
+        if not 0.0 <= self.fast_target_offset_k <= 3.0:
+            msg = (
+                "fast_target_offset_k must be in [0, 3], got "
+                f"{self.fast_target_offset_k}"
+            )
+            raise ValueError(msg)
         if self.dew_margin_k < 0:
             msg = f"dew_margin_k must be >= 0, got {self.dew_margin_k}"
             raise ValueError(msg)
         if self.dew_ramp_k <= 0:
             msg = f"dew_ramp_k must be > 0, got {self.dew_ramp_k}"
+            raise ValueError(msg)
+        if not 10.0 <= self.cooling_supply_base_c <= 25.0:
+            msg = (
+                "cooling_supply_base_c must be in [10, 25], got "
+                f"{self.cooling_supply_base_c}"
+            )
+            raise ValueError(msg)
+        if not 20.0 <= self.heating_supply_base_c <= 40.0:
+            msg = (
+                "heating_supply_base_c must be in [20, 40], got "
+                f"{self.heating_supply_base_c}"
+            )
+            raise ValueError(msg)
+        if not 0.0 <= self.heating_supply_slope <= 2.0:
+            msg = (
+                "heating_supply_slope must be in [0, 2], got "
+                f"{self.heating_supply_slope}"
+            )
             raise ValueError(msg)
         if self.cycle_seconds <= 0:
             msg = f"cycle_seconds must be > 0, got {self.cycle_seconds}"

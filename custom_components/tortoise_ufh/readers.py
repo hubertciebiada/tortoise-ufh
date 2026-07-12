@@ -339,6 +339,48 @@ class SourceReader:
             return value, frac
         return value, 0.0
 
+    def read_select_option(self, entity_id: str | None) -> str | None:
+        """Read a ``select``-style entity's current option verbatim (B2).
+
+        Used by the optional heat-pump link for the HeishaMon-style pump-mode
+        select. The raw state string is returned trimmed but otherwise
+        untouched (the core canonicalises case-insensitively; the WRITE path
+        re-canonicalises against the entity's own option list).
+
+        Args:
+            entity_id: The select entity id, or ``None`` / empty.
+
+        Returns:
+            The current option string, or ``None`` when no entity is
+            configured or its state is unavailable.
+        """
+        if not entity_id:
+            return None
+        state = self._hass.states.get(entity_id)
+        if state is None or state.state.lower() in UNAVAILABLE_STATES:
+            return None
+        return state.state.strip()
+
+    def read_select_options(self, entity_id: str | None) -> list[str]:
+        """Read a ``select`` entity's available option list (B2).
+
+        Args:
+            entity_id: The select entity id, or ``None`` / empty.
+
+        Returns:
+            The entity's ``options`` attribute as a list of strings (empty
+            when the entity or the attribute is missing).
+        """
+        if not entity_id:
+            return []
+        state = self._hass.states.get(entity_id)
+        if state is None:
+            return []
+        raw = state.attributes.get("options")
+        if not isinstance(raw, list | tuple):
+            return []
+        return [str(option) for option in raw]
+
     def read_fast_source_hvac_mode(self, entity_id: str | None) -> str | None:
         """Read the fast source's raw HVAC-mode feedback string (K4).
 

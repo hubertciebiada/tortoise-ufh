@@ -39,7 +39,52 @@ from .models import (
 __all__ = [
     "FAST_TARGET_OFFSET_K",
     "FastSourceMachine",
+    "window_allows",
 ]
+
+MINUTES_PER_DAY: int = 24 * 60
+"""Minutes in one day — the domain of :func:`window_allows` arguments."""
+
+
+def window_allows(minute_of_day: int, start_minute: int, end_minute: int) -> bool:
+    """Whether a minute-of-day falls inside an allowed-hours window (B1).
+
+    Pure window arithmetic for the per-room fast-source quiet hours: the
+    window is the range in which the fast source MAY run. A normal window
+    (``start < end``) allows ``start <= t < end``; a window crossing midnight
+    (``start > end``, e.g. 22:00-07:00) allows ``t >= start or t < end``.
+    The core never reads a wall clock — the ADAPTER computes the local
+    minute-of-day and calls this; it lives here only so the midnight/edge
+    cases are covered by pure unit tests without Home Assistant.
+
+    ``start == end`` is rejected by the adapter's config validation and is
+    deterministically treated as an EMPTY window (nothing allowed) — a
+    degenerate all-day window would silently disable the feature instead.
+
+    Args:
+        minute_of_day: Local minute of the day, ``0..1439``.
+        start_minute: Window start (inclusive), minutes after midnight.
+        end_minute: Window end (exclusive), minutes after midnight.
+
+    Returns:
+        ``True`` when the fast source is allowed to run at that minute.
+
+    Raises:
+        ValueError: If any argument is outside ``[0, 1439]``.
+    """
+    for label, value in (
+        ("minute_of_day", minute_of_day),
+        ("start_minute", start_minute),
+        ("end_minute", end_minute),
+    ):
+        if not 0 <= value < MINUTES_PER_DAY:
+            msg = f"{label} must be in [0, {MINUTES_PER_DAY - 1}], got {value}"
+            raise ValueError(msg)
+    if start_minute == end_minute:
+        return False
+    if start_minute < end_minute:
+        return start_minute <= minute_of_day < end_minute
+    return minute_of_day >= start_minute or minute_of_day < end_minute
 
 
 _INITIAL_FAST_TIMER_S: float = 1.0e9
@@ -68,6 +113,11 @@ no direction and the reconciliation falls back to the plain on/off check.
 
 FAST_TARGET_OFFSET_K: float = 1.0
 """Split target offset from the room setpoint in HEATING/COOLING [K].
+
+Since 2026-07-13 this is only the DEFAULT of the
+:class:`~tortoise_ufh.core.config.ControllerConfig` ``fast_target_offset_k``
+tuning knob (owner request: adjustable per room, ``0`` disables the
+overdrive); the controller reads the knob, not this constant.
 
 Amendment 2026-07-09 (S12): the split's own air sensor sits near the ceiling
 and reads warmer than the room sensor, so a target equal to the setpoint makes

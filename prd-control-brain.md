@@ -454,3 +454,39 @@ z 2026-07-12: zdolność „licz, ale nie pisz" znika całkowicie.
 - Konsekwencje wtórne: `RoomRuntime` bez pola `live_control_enabled`; reguła K1 (grupy
   multisplit) zredukowana do „pokój `off` nie głosuje"; komenda pożegnalna C5 = przejście
   `live → off` oraz unload.
+
+### 8.13 Aneks (2026-07-12) — opcjonalne sprzężenie z pompą ciepła
+> **To JAWNE, datowane ROZSZERZENIE zamrożonego kontraktu** (§8.10 wyklucza sterowanie
+> pompą; Q8/§8.8 definiuje „trzy wyjścia"). Wydane w **v0.8.0**. Szczegóły implementacyjne
+> i tabela zapisu trybu: `docs/DECISIONS.md` §14.
+
+**Co się NIE zmienia:** Tortoise NADAL nie steruje sprężarką, mocą ani krzywą pogodową
+pompy (§8.10 w mocy). Sprzężenie jest w całości **opt-in** — bez skonfigurowania sekcji
+„Pompa ciepła" w opcjach integracji zachowanie jest identyczne jak przed v0.8.0.
+
+**Co dochodzi (czwarte, OPCJONALNE wyjście):**
+- **Synchronizacja KIERUNKU trybu pompy** (encja select w stylu HeishaMon: `Heat only` /
+  `Cool only` / `Auto` / `DHW only` / `Heat+DHW` / `Cool+DHW` / `Auto+DHW`): tryb Tortoise
+  `heating` → wariant `Heat`, `cooling` → wariant `Cool`, **zawsze z zachowaniem członu
+  `+DHW`** — właścicielem flagi CWU pozostaje zewnętrzna automatyka CWU. Tortoise nigdy
+  nie pisze `DHW only` jako kierunku, a gdy pompa aktualnie JEST w `DHW only`, nie pisze
+  wcale (automatyka CWU jest w środku cyklu i sama przywróci kierunek). W trybach
+  `transitional`/`off` kierunek nie jest wymuszany. Zapis rzadki: przy zmianie trybu
+  Tortoise lub rozjeździe utrzymującym się ≥2 cykle, nie częściej niż co 15 min.
+- **Nastawa wody chłodzenia** (encja number, np. `z1_cool_request_temp` — jedyna ścieżka
+  zapisu chłodzenia): w trybie `cooling` Tortoise pisze
+  `max(cooling_supply_base_c, globalny bezpieczny punkt rosy)` — woda nigdy poniżej
+  strefy kondensacji. Próg zapisu 0,5 K + okresowy re-assert (~45 min).
+- **Nastawa wody grzania** (opcjonalna encja number): prosta krzywa pogodowa
+  `heating_supply_base_c + heating_supply_slope · max(0, ff_neutral_c − T_zewn)`,
+  obcięta do 20–40 °C. Domyślnie NIEskonfigurowana — pompa jedzie na własnej krzywej
+  (default właściciela, w pełni wspierany).
+- **Ręczny przełącznik CWU** (panel, WS `set_hp_dhw`): dokłada/zdejmuje człon `+DHW`;
+  zdjęcie flagi z `DHW only` jest odmawiane (brak kierunku bazowego). Automatyka CWU może
+  przełącznik w każdej chwili nadpisać — to jej prawo (ostrzeżenie na stałe w UI).
+- Encja `hp_active_for_ufh` (uśpiona od §8.3) staje się konfigurowalna w tej samej sekcji
+  i zasila zamrożenie integratora wszystkich pokoi podczas CWU/odszraniania.
+
+Zapisy do pompy są dozwolone tylko, gdy ktokolwiek oddał Tortoise stery (≥1 pokój `live`,
+koordynator nie zaparkowany). Komenda pożegnalna (C5/unload) **nie dotyka pompy** — ma
+własną automatykę i limity firmware'u.
