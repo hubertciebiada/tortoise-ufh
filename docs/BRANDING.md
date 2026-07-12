@@ -3,16 +3,18 @@
 ## Where the assets come from
 
 The turtle icon PNGs are generated from a private source image owned by the project
-author (an AI-generated logo lockup; the file lives in the repo root and is
-**gitignored on purpose** — only the derived PNGs are tracked). The generation crops
-the turtle motif to a square, makes the background transparent, and resizes with
-Lanczos to the required sizes.
+author (an AI-generated logo lockup; the file lives in the repo root as
+`logo-source.png` and is **gitignored on purpose** — only the derived PNGs are
+tracked). The generation crops the turtle motif to a square, makes the background
+transparent, and resizes with Lanczos to the required sizes; the full lockup
+(turtle + wordmark) is additionally exported as the README logo.
 
 Tracked assets:
 
 | File | Size | Purpose |
 | --- | --- | --- |
-| `custom_components/tortoise_ufh/brand/icon.png` | 256×256 | canonical icon, README logo |
+| `custom_components/tortoise_ufh/brand/icon.png` | 256×256 | canonical icon |
+| `custom_components/tortoise_ufh/brand/logo.png` | 800×658 | full lockup (turtle + wordmark), README header |
 | `custom_components/tortoise_ufh/brand/icon@2x.png` | 512×512 | hi-DPI icon |
 | `custom_components/tortoise_ufh/brand/icon.svg` | vector | hand-written placeholder (kept as-is, not a raster trace) |
 | `custom_components/tortoise_ufh/frontend/panel-icon.png` | 256×256 | panel header mark, served at `/tortoise_ufh_panel/panel-icon.png` (`panel.py`); the panel falls back to the 🐢 glyph if it fails to load |

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="custom_components/tortoise_ufh/brand/icon.png" alt="Tortoise-UFH logo" width="160">
+  <img src="custom_components/tortoise_ufh/brand/logo.png" alt="Tortoise-UFH — under floor heating, simplified" width="360">
 </p>
 
 # Tortoise-UFH
