@@ -53,6 +53,20 @@ def _enable_custom(enable_custom_integrations: Any) -> None:
     """Auto-load ``custom_components/tortoise_ufh`` into the test HA instance."""
 
 
+@pytest.fixture(autouse=True)
+def _clear_farewell_registry() -> None:
+    """Isolate the module-level farewell registry between tests (K10/R5).
+
+    The registry deliberately survives config-entry reloads in production
+    (that is its whole point), but across TESTS it would leak: a farewell
+    written in one test would make the next test's first cycle distrust an ON
+    feedback for the same mock entity id.
+    """
+    from custom_components.tortoise_ufh import writers
+
+    writers._RECENT_FAREWELL_MONOTONIC.clear()
+
+
 @pytest.fixture
 def register_sources(hass: HomeAssistant) -> None:
     """Register the source entities referenced by :func:`entry_data`."""

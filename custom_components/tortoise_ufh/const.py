@@ -131,6 +131,15 @@ CONF_ENTITY_FAST_SOURCE: str = "entity_fast_source"
 CONF_FAST_SOURCE_KIND: str = "fast_source_kind"
 """Fast-source kind: one of :data:`FAST_SOURCE_KINDS`."""
 
+CONF_FAST_SOURCE_GROUP: str = "fast_source_group"
+"""Optional multisplit outdoor-unit group key (K4, 2026-07-12).
+
+Rooms whose fast sources share one physical outdoor unit should carry the
+same non-empty group string (any generic label, e.g. ``"outdoor_unit_a"``);
+the core then arbitrates ONE direction per group each cycle. Empty (default)
+= an independent unit, no arbitration.
+"""
+
 CONF_ROOM_OFFSET: str = "room_offset"
 """Per-room offset from the global home setpoint, K. Room target = home + offset."""
 

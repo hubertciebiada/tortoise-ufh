@@ -98,13 +98,18 @@ async def test_data_has_both_rooms_with_outputs_report_and_setpoint(
 
 
 async def test_changed_room_sensor_updates_report_and_valve(
-    hass: HomeAssistant, setup_integration: MockConfigEntry
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    freezer: Any,
 ) -> None:
     """Dropping the room temperature raises the error and opens the valve.
 
     The drop to 15.0 is a >4 K jump, so the C3 plausibility gate holds the
-    first sample; the second consistent sample confirms the new level.
+    first sample; a consistent sample one control cycle later (B5,
+    2026-07-12: the confirmation must span real time) confirms the new level.
     """
+    from datetime import timedelta
+
     coordinator = _get_coordinator(setup_integration)
     before = coordinator.data.rooms["Salon"]
     # Room started at 21.5 (above the 21.0 setpoint): not calling for heat.
@@ -112,7 +117,9 @@ async def test_changed_room_sensor_updates_report_and_valve(
 
     hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
     await _refresh(hass, coordinator)  # first sample: held for confirmation
-    await _refresh(hass, coordinator)  # second sample: accepted
+    freezer.tick(timedelta(minutes=5))
+    hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
+    await _refresh(hass, coordinator)  # a cycle later: accepted
 
     after = coordinator.data.rooms["Salon"]
     # error = setpoint - room = 21.0 - 15.0.
@@ -414,9 +421,19 @@ async def test_set_mode_schedules_prompt_recompute(
 
 
 async def test_temperature_spike_rejected_then_confirmed(
-    hass: HomeAssistant, setup_integration: MockConfigEntry
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    freezer: Any,
 ) -> None:
-    """C3: a >4 K jump is rejected once; two consistent samples accept it."""
+    """C3+B5: a >4 K jump needs a consistent sample >= 1 cycle later.
+
+    Updated 2026-07-12 (B5): the old contract confirmed the new level on ANY
+    second consistent read — a debounced recompute burst could confirm a
+    bogus spike within seconds. Now the confirmation must span at least ~one
+    nominal control cycle of real time.
+    """
+    from datetime import timedelta
+
     coordinator = _get_coordinator(setup_integration)
     # Setup accepted 21.5 degC. A 9 K jump is implausible in one 5-min cycle.
     hass.states.async_set("sensor.salon_temp", "30.5", _TEMP_ATTRS)
@@ -425,7 +442,16 @@ async def test_temperature_spike_rejected_then_confirmed(
     assert "sensor_lost" in report.flags
     assert report.room_temperature_c is None
 
-    # The second consecutive consistent sample confirms the new level.
+    # A consistent sample only 4 s later (recompute burst) must NOT confirm.
+    freezer.tick(timedelta(seconds=4))
+    hass.states.async_set("sensor.salon_temp", "30.6", _TEMP_ATTRS)
+    await _refresh(hass, coordinator)
+    report = coordinator.data.rooms["Salon"].report
+    assert "sensor_lost" in report.flags
+    assert report.room_temperature_c is None
+
+    # A consistent sample a full cycle later confirms the new level.
+    freezer.tick(timedelta(minutes=5))
     hass.states.async_set("sensor.salon_temp", "30.6", _TEMP_ATTRS)
     await _refresh(hass, coordinator)
     report = coordinator.data.rooms["Salon"].report
@@ -481,20 +507,29 @@ async def test_stale_room_temperature_treated_as_lost(
     assert report.room_temperature_c is None
 
 
-async def test_stale_humidity_blocks_cooling(
+async def test_stale_humidity_two_stage_gate(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,
     freezer: Any,
 ) -> None:
-    """C4: stale RH (>60 min) nulls the dew inputs instead of trusting them."""
+    """C4+K7: RH staleness is two-stage — held+padded 60-120 min, None past.
+
+    Updated 2026-07-12 (K7): the old binary 60-min gate made a
+    threshold-reporting RH sensor limit-cycle the cooling. Now a 60-120 min
+    old reading is still served with ``humidity_stale`` (the core pads its
+    dew points by +1 K and flags ``rh_stale_gated``); only past 120 min does
+    the reading become unusable (conservative full stop).
+    """
     from datetime import timedelta
 
     coordinator = _get_coordinator(setup_integration)
     hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
     await _refresh(hass, coordinator)
-    assert coordinator.data.global_safe_dew_point_c is not None
+    fresh_global = coordinator.data.global_safe_dew_point_c
+    assert fresh_global is not None
 
     # 61 min later the humidity was never re-reported; temperature is fresh.
+    # Stage 1: the reading is HELD, the dew points are padded +1 K.
     freezer.tick(timedelta(minutes=61))
     hass.states.async_set("sensor.salon_temp", "21.6", _TEMP_ATTRS)
     hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
@@ -502,10 +537,22 @@ async def test_stale_humidity_blocks_cooling(
 
     data = coordinator.data
     report = data.rooms["Salon"].report
-    # The room falls out of the global maximum and S2 throttles to 0.
+    assert report.dew_excluded_reason is None  # the room still contributes
+    assert data.global_safe_dew_point_c is not None
+    assert "rh_stale_gated" in report.flags
+
+    # Stage 2: past 120 min total the reading is unusable — the room falls
+    # out of the global maximum and the local throttle stops conservatively.
+    freezer.tick(timedelta(minutes=61))
+    hass.states.async_set("sensor.salon_temp", "21.7", _TEMP_ATTRS)
+    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    await _refresh(hass, coordinator)
+
+    data = coordinator.data
+    report = data.rooms["Salon"].report
     assert report.dew_excluded_reason == "no_humidity"
     assert data.global_safe_dew_point_c is None
-    assert "s2_condensation" in report.flags
+    assert "s2_throttle" in report.flags
 
 
 async def test_live_to_shadow_emits_farewell_split_off(

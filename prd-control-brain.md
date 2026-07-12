@@ -236,6 +236,23 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
   problemem. Plumbing pozostaje w kodzie jako uśpiona, opcjonalna funkcja (`CONF_ENTITY_HP_ACTIVE`,
   domyślnie wyłączona / `None`), ale nie jest wymagana ani używana w v1.
 - **Cykl regulacji: co 5 min** (regulowalny); zapis pozycji przy zmianie ≥ próg.
+  > **Zmienione 2026-07-12 (runda 2; JAWNE rozszerzenie prawa sterowania + rewers progu —
+  > patrz `docs/DECISIONS.md` §11, pomiary przed/po).** (K1) **Bumpless przy zmianie
+  > nastawy:** zmiana efektywnej nastawy o ΔK między aktywnymi cyklami PI przesuwa
+  > integrator o `kp·ΔK` w konwencji błędu trybu (znak ODWROTNY w chłodzeniu), z clampem
+  > do zakresu wyjścia; referencja ginie z każdym resetem PID. (K1) **Asymetryczne
+  > rozładowanie integratora** (`unwind_factor = 8`): całka o znaku PRZECIWNYM do błędu
+  > poza pasmem rozładowuje się 8× szybciej niż rosła (tylko w stronę zera — równowaga
+  > nietknięta). Zmierzone na skoku 23→21: aktywne grzanie przegrzanego pokoju 17,4 h
+  > (642 %·h) → 0,8 h (23 %·h), powrót do pasma szybszy (35 vs 49 h); koszt: głębszy
+  > dołek wybiegu (−0,92 vs −0,54 K). Nowy scenariusz bramkowy `night_setback`
+  > (nocna obniżka = codzienny użytek). (K2b) **Próg zapisu zaworu 2 → 5 pp** — zmierzone:
+  > 2 pp NIE ogranicza kosztu szumowego kt (σ=0,05: 11,2 pp/h; 5 pp tnie do 1,4 pp/h).
+  > (K9) Freeze integratora pod dławieniem S2 ZOSTAJE — back-calc od zaworu finalnego
+  > zmierzony i odrzucony (powrót 8,6 h w obu wariantach; szczegóły w DECISIONS §11).
+  > (kt) Po uczciwych pomiarach żaden scenariusz nie kontrastuje kt=12 z kt=0 (≤0,03 K);
+  > kt zostaje wg zamrożonej decyzji — „otwarte pytanie z danymi" w DECISIONS §11,
+  > znak członu trendu przybity kanarkiem unit.
 
 ### 8.4 Chłodzenie — floor cooling **w v1** (zmiana zakresu vs §6)
 - v1 obsługuje **chłodzenie podłogą** (PI z odwróconym znakiem; zawory **regulowane**, nie zamknięte)
@@ -248,6 +265,19 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
   - **Lokalna (secondary, per-pokój):** jeśli **zmierzona temp. wody zasilającej** pokoju (najzimniejsza
     z jego pętli) spadnie do `T_dew_pokój + 2 K`, moduł **graduowanie przymyka, a przy przekroczeniu
     twardo zamyka** zawór chłodzenia tego pokoju — niezależnie od PC (defense-in-depth, S2), z histerezą.
+    > **Zmienione 2026-07-12 (K6, decyzja właściciela „tylko pompa +2" — JAWNY rewers
+    > semantyki marginesu lokalnego; patrz `docs/DECISIONS.md` §11).** Marginesy się
+    > STACKOWAŁY: floor pompy gwarantuje `zasilanie ≥ rosa_max + 2 K`, a lokalna rampa
+    > otwierała w pełni dopiero od `rosa + 4 K` — najbardziej parny pokój (wyznaczający
+    > floor) miał factor 0 (zmierzone: chłodzenie „fasadowe", zawory otwarte 29,7 %
+    > rekordów, salon śr. 26,75 °C przy nastawie 24). Teraz rampa KOŃCZY się na
+    > `dew_margin_k` (pełne chłodzenie dokładnie na floorze pompy) i biegnie w dół do
+    > realnej rosy pokoju (0 przy `gap ≤ 0`); twarda reguła S2 schodzi PONIŻEJ rampy
+    > (trip przy `zasilanie < rosa`, clear +1 K) — backstop za backstopem, nie drugi
+    > margines. Po zmianie: zawory otwarte 94,2 %, min. margines płyta−rosa +1,51 K.
+    > (K7) Wiek RH dwustopniowy: ≤60 min świeże; 60-120 min ostatnia wartość TRZYMANA
+    > z flagą `rh_stale_gated` i **+1 K** do efektywnej rosy w OBU warstwach; >120 min
+    > jak brak odczytu (pełny konserwatywny stop).
 - **Wymóg pomiarowy:** **`RH` per pokój chłodzony** (encja `sensor` humidity) — nowe wejście vs pierwotny PRD.
 
 ### 8.5 Szybkie źródło (split)
@@ -274,6 +304,18 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
   > ręcznej zmianie).
 - **Koordynacja (anti priority-inversion):** podłoga zawsze bazą i **nie zamyka się** tylko dlatego, że
   split dogrzał/dochłodził; split dobija ponad próg i odpuszcza po wejściu w pasmo komfortu.
+  > **Zmienione 2026-07-12 (K4, runda 2 — NOWA opcjonalna konfiguracja; patrz
+  > `docs/DECISIONS.md` §11).** **Arbiter multisplitu:** opcjonalny per-pokój klucz
+  > `fast_source_group` (generyczne etykiety, np. `outdoor_unit_a`) grupuje jednostki
+  > wewnętrzne dzielące agregat; `BuildingController` wymusza JEDEN kierunek na grupę
+  > w cyklu — jednostka trzymana min-ON (lub wymuszona S3/S4) pinuje kierunek grupy,
+  > inaczej wygrywa największy |uchyb poza pasmem|; przegrani dostają OFF + flagę
+  > `fast_source_group_conflict` i wracają przez pełny min-OFF (arbiter nigdy nie łamie
+  > min-ON). Tryb przejściowy podlega arbitrażowi jak każdy inny (kierunek per pokój od
+  > znaku uchybu to rutynowe źródło konfliktu). Dodatkowo feedback splitu niesie surowy
+  > `hvac_mode` — rozjazd KIERUNKU (jednostka fizycznie w trybie przeciwnym) podnosi
+  > `fast_source_mismatch`, na co sam bool on/off był ślepy. Pokoje bez grupy — bez
+  > zmian zachowania.
 
 ### 8.6 Tryby
 - **Jeden globalny tryb domu**: `grzanie / przejściowy / chłodzenie / off` (encja wejściowa). Per-pokój
@@ -301,6 +343,19 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
   > plauzybilizowane (zakres −10..50 °C, bramka skoku 4 K/cykl z potwierdzeniem 2 próbek,
   > wiek stanu: temperatura 45 min / wilgotność 60 min ⇒ jak brak odczytu), a globalny tryb
   > jest persystowany w Store (restart w lipcu nie wraca do logiki grzewczej).
+  > **Zmienione 2026-07-12 (runda 2; patrz `docs/DECISIONS.md` §11).** (K3)
+  > **CLOSE_VALVE jest akcją WYŁĄCZNIE wodną:** S1/S2 solo parkuje zawór, ale decyzja
+  > powietrzna z normalnej koordynacji ZOSTAJE — S1 nie gasi już chcianego boostu, a S2
+  > w chłodzeniu nie gasi jedynego bezpiecznego źródła chłodu (split ma tackę skroplin);
+  > znika też piła zegara dwella i migająca flaga min-runtime. Mode.OFF / utrata
+  > czujnika / EMERGENCY_COOL bez splita nadal wymuszają OFF. (K5) Degradacja
+  > `controller_error` jest mode-aware jak utrata czujnika (grzanie trzyma, reszta 0).
+  > (K10) **Komenda pożegnalna synchronizuje maszynę:** adapter po farewell woła
+  > `notify_fast_source_farewell` — maszyna przechodzi w OFF z resetem dwella, więc
+  > powrót do live przechodzi uczciwy min-OFF; feedback ON młodszy niż 1 cykl po
+  > farewell jest czytany jako OFF (rejestr przeżywa reload). (B5) Potwierdzenie skoku
+  > temperatury wymaga próbek odległych ≥ ~1 cykl nominalny realnego czasu (nie 2
+  > odczytów w 4 s z burstu recompute).
 - **Watchdog:** brak świeżych danych > 15 min → stan awaryjny/alarm w raporcie (recovery po 5 min).
   > **Zmienione 2026-07-09 (S6, faza E; patrz `docs/DECISIONS.md` §8).** Watchdog per-pokój (S5)
   > jest ŻYWY: adapter podaje rdzeniowi realny wiek danych pokoju

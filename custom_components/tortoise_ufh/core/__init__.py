@@ -88,8 +88,10 @@ from .scenarios import (
     SCENARIO_LIBRARY,
     cold_snap,
     hot_july_floor_cooling,
+    night_setback,
     sensor_dropout,
     solar_overshoot,
+    split_boost,
     spring_transition,
     steady_heating,
 )
@@ -110,7 +112,7 @@ from .weather import (
 )
 from .weather_comp import CoolingCompCurve, WeatherCompCurve
 
-__version__ = "0.4.1"
+__version__ = "0.6.0"
 
 __all__ = [
     "BUILDING_PROFILES",
@@ -186,8 +188,10 @@ __all__ = [
     "loop_power",
     "loop_power_with_valve",
     "modern_bungalow",
+    "night_setback",
     "sensor_dropout",
     "solar_overshoot",
+    "split_boost",
     "spring_transition",
     "steady_heating",
     "thin_screed",

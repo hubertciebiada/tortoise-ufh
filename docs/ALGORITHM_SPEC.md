@@ -265,15 +265,30 @@ does not pass one):
 
 ```
 P     = kp · e
-I    += ki · e · dt          # skipped when freeze_integrator is True
+rate  = ki · unwind_factor if e·I < 0 else ki   # asymmetric unwind (K1, 2026-07-12)
+I    += rate · e · dt        # skipped when freeze_integrator is True
 D     = kd · (e − e_prev)/dt # 0 on first call; kd = 0 in v1 so D ≡ 0
 u_raw = P + I + D
 u     = clip(u_raw, output_min, output_max)     # [0, 100]
 if ki > 0:  I += (u − u_raw)                     # back-calculation anti-windup
 ```
 
-Validation (`__init__`): `kp, ki, kd ≥ 0`, `dt > 0`, `output_min < output_max`; `compute`
-raises on a non-positive `dt_seconds`.
+Validation (`__init__`): `kp, ki, kd ≥ 0`, `dt > 0`, `output_min < output_max`,
+`unwind_factor ≥ 1`; `compute` raises on a non-positive `dt_seconds`.
+
+**Asymmetric unwind (K1, 2026-07-12):** while the (deadbanded) error OPPOSES the accumulated
+integral — stale knowledge from a previous operating point, e.g. a heating integral above a
+freshly lowered setpoint — the integral discharges `unwind_factor` (8 in the room controller)
+times faster than it accumulated. The accelerated step only ever pulls `I` toward zero, and
+inside the comfort band `e = 0`, so equilibrium and steady-state behaviour are untouched.
+
+**Bumpless setpoint transfer (K1, 2026-07-12):** a change of the effective setpoint by `dK`
+between PID-active cycles in the same mode calls `pid.shift_integral(kp · d_err)`
+(`d_err = dK` heating / `−dK` cooling, clamped to the output range): the integral — the loop's
+memory of the operating point — moves WITH the setpoint instead of discharging the difference
+at `ki` speed. Measured on the twin (23 → 21 °C at a saturated integral): active heating of an
+already-too-warm room fell from 17.4 h (642 %·h) to 0.8 h (23 %·h), the return to the band got
+FASTER (35 h vs 49 h), at the cost of a deeper coast-down trough (−0.92 K vs −0.54 K).
 
 All time-dependent pieces share ONE time base: the PI integral, the trend (§5.2) and the
 fast-source dwell timers (§8.2) all use the measured `dt_seconds` passed to
@@ -297,6 +312,14 @@ a **HEATING↔COOLING transition resets the integrator** (the error convention f
 season's integral is anti-knowledge for the other), and **> 12 h of accumulated inactivity**
 (OFF / TRANSITIONAL / cooling opt-out / sensor lost) clears it, so the last winter integral is
 never the first cooling command.
+
+*(K9, 2026-07-12.)* The throttle-freeze was re-examined against a back-calculation from the
+FINAL (throttled) valve (`I += u_final − u_raw` per throttled cycle) and the freeze STAYS: any
+tracking anti-windup enforces `u_raw ≈ u_final`, pinning the integral at ~0 for the whole
+episode, so the measured post-release catch-up was not faster (±0.3 K after 8.6 h either way
+following 6 h of full throttle; 9.5 h — worse — for a partial throttle), and under a persistent
+partial throttle the tracking variant suppresses the legitimate integral entirely. The catch-up
+time is a `ki`-speed property (the integral must honestly rebuild), not a windup artifact.
 
 ### 5.6 Trend damping — the inertia tamer
 
@@ -345,11 +368,12 @@ raw_valve_pct  = pre-floor / pre-dew / pre-clamp value   # recorded in the repor
 
 ### 5.10 Worked step (heating)
 
-`setpoint = 21`, `T_room = 20.6`, `T_room_prev = 20.4`, `dt = 300 s`, defaults:
-`error = +0.4`; `trend = (20.6−20.4)/(300/3600) = +2.4 K/h`; `error_db = 0.4−0.3 = 0.1`;
-`P = 8·0.1 = 0.8`; `trend_damp = 6·2.4 = 14.4` → `trend_term = −14.4`; `valve = pid_out − 14.4`,
-then floored to `15 %`. The rapidly warming floor is throttled back toward the floor minimum well
-before it reaches setpoint — overshoot avoided.
+`setpoint = 21`, `T_room = 20.6`, sustained climb `+2.4 K/h` (filtered trend has converged),
+`dt = 300 s`, current defaults (`kp = 14`, `kt = 12`):
+`error = +0.4`; `error_db = 0.4−0.3 = 0.1`; `P = 14·0.1 = 1.4`;
+`trend_damp = 12·2.4 = 28.8` → `trend_term = −28.8`; `valve = pid_out − 28.8`, clamped ≥ 0 and
+then floored to `15 %` (still calling for heat). The rapidly warming floor is throttled back
+toward the floor minimum well before it reaches setpoint.
 
 ---
 
@@ -448,17 +472,31 @@ factor       = cooling_throttle_factor(t_supply_min, T_dew,
 valve       *= factor
 ```
 
-`cooling_throttle_factor` (in `dew_point.py`), with `gap = t_supply_min − T_dew`:
+`cooling_throttle_factor` (in `dew_point.py`), with `gap = t_supply_min − T_dew` and
+`lo = max(0, margin − ramp)` *(semantics REVISED 2026-07-12, K6 — owner decision "tylko pompa
++2"; see DECISIONS §11)*:
 
 ```
-gap ≤ margin            → 0.0   (fully throttled, hard close; condensation risk)
-gap ≥ margin + ramp     → 1.0   (fully open, safe)
-otherwise               → (gap − margin)/ramp    (graduated linear ramp — the hysteresis band)
+gap ≥ margin            → 1.0   (fully open — full cooling exactly on the pump's dew floor)
+gap ≤ lo                → 0.0   (fully throttled; with the defaults: supply at the room's dew)
+otherwise               → (gap − lo)/(margin − lo)   (graduated linear ramp BELOW the margin)
 ```
+
+The heat pump's global `dew_max + 2 K` supply floor (Layer 1) is the system's ONE working
+margin; the local ramp now ENDS at that design gap instead of stacking a second margin above
+it. Before this revision the ramp spanned `(margin, margin + ramp)`: the most humid room — the
+one defining the pump floor — sat at `gap = margin` with `factor = 0`, and `hot_july` measured
+"fasadowe" cooling (valves open 29.7 % of records, living room ~2.7 K above the setpoint);
+after the change the valves are open 94.2 % of records with the minimum slab-dew margin still
+at +1.51 K. A STALE humidity reading (held 60-120 min, `RoomInputs.humidity_stale`, K7) pads
+the effective dew point by +1 K and flags `"rh_stale_gated"`.
 
 **Conservative on missing data:** if humidity is missing/non-positive *or* no loop supply reading is
-available, `factor = 0.0` and the flag `"s2_condensation"` is raised — better a warm room than a wet
-floor. `factor == 0` also raises the flag.
+available, `factor = 0.0` and the flag `"s2_throttle"` is raised — better a warm room than a wet
+floor. `factor == 0` also raises the flag. (Renamed from `"s2_condensation"` 2026-07-12, B7 —
+that name now belongs exclusively to the independent hard-safety rule, which itself moved BELOW
+the ramp: `S2_HARD_MARGIN_K = 0`, trip at `supply < dew`, clear at `gap > +1 K` — a backstop
+behind a backstop.)
 
 ### 7.3 Why two layers
 
@@ -533,11 +571,13 @@ timer for safety conditions (lost sensor, OFF mode).
 | Room temp lost (`None`) | HEATING: **hold last valve position** of healthy regulation (cold-start init `valve_floor_pct`); COOLING/TRANSITIONAL/OFF: **valve 0** — never freeze-open in cooling (2026-07-09, both condensation layers need `T_room`); split **OFF**, no PI | `sensor_lost` |
 | `Mode.OFF` | valve 0, split OFF | — |
 | `COOLING` with `cooling_enabled=False` | valve 0 (never floor-cool an opted-out room), split OFF, no PI | `cooling_disabled` |
-| Missing humidity / supply in cooling | S2 `factor → 0` (conservative close) | `s2_condensation` |
+| Missing humidity / supply in cooling | S2 `factor → 0` (conservative close) | `s2_throttle` |
+| Humidity held 60-120 min old (K7, 2026-07-12) | effective dew point +1 K in both layers | `rh_stale_gated` |
 | Split change blocked by dwell timer | hold previous split state | `fast_source_min_runtime` |
+| Split lost the multisplit group arbitration (K4, 2026-07-12) | fast OFF (honest min-OFF before re-engaging) | `fast_source_group_conflict` |
 | HEATER-kind fast source asked to cool | fast source forced OFF (a heater never cools) | `fast_source_cannot_cool` |
 | Room has no controller (orchestrator) | valve 0, split OFF | `unknown_room` |
-| Room controller raised | hold last valve, split OFF | `controller_error` |
+| Room controller raised | HEATING: hold last valve; COOLING/TRANSITIONAL/OFF: valve 0 (K5, 2026-07-12 — a crashed controller computes neither condensation defence); split OFF | `controller_error` |
 | Per-room data age > 15 min (S5, 2026-07-09) | **neutral position**: `valve_floor_pct` in heating / 0 in cooling (defer to the HP curve), split OFF; clears below 5 min | `s5_watchdog` |
 
 `BuildingController.step` never raises on a single room: it catches `(ValueError, ArithmeticError)`
@@ -572,11 +612,12 @@ relies on the supply-water temperature proxy (safety rules S1/S2) plus conservat
 
 ### 10.2 Three test layers
 
-1. **Unit (TDD, `-m unit`, seed 42):** `PIDController` convergence and anti-windup; deadband
-   sign-preservation; trend-damping arithmetic; `dew_point` vs psychrometric tables;
-   `cooling_throttle_factor` boundaries (`gap ≤ margin` → 0, `≥ margin+ramp` → 1); every
-   `__post_init__` `ValueError` (`pytest.raises(ValueError, match=...)`); safe-degrade holds the
-   last valve.
+1. **Unit (TDD, `-m unit`, seed 42):** `PIDController` convergence and anti-windup (plus the K1
+   `shift_integral` / `unwind_factor` contracts); deadband sign-preservation; trend-damping
+   arithmetic (incl. the kt sign canary — see §10.3 note); `dew_point` vs psychrometric tables;
+   `cooling_throttle_factor` boundaries (K6: `gap ≥ margin` → 1, `≤ max(0, margin−ramp)` → 0);
+   the multisplit group arbiter and the farewell sync; every `__post_init__` `ValueError`
+   (`pytest.raises(ValueError, match=...)`); safe-degrade holds the last valve.
 2. **Simulation (`-m simulation`, seed 12345):** a session-scoped `run_scenario` harness returning
    `(SimulationLog, SimMetrics)`; parametrized scenarios calling `assert_*` per room.
 3. **Shadow mode on the live system:** the coordinator computes and logs the full report but emits
@@ -598,7 +639,18 @@ lat 50.5 / lon 19.5) + parametric single-room variants (`well_insulated`, `leaky
 case (e.g. a badly under-powered leaky house in a cold snap) is wrapped in `pytest.raises`.
 
 Acceptance targets: `steady_heating` → comfort > 95 %, split never engages; `cold_snap` →
-`T_room ≥ setpoint − 1.5 K`; `hot_july_floor_cooling` → zero condensation events, comfort > 90 %.
+`T_room ≥ setpoint − 1.5 K` + recovery overshoot ≤ 0.5 K from 12 h after the step (K8);
+`hot_july_floor_cooling` → zero condensation events, valves genuinely open (> 60 % of records
+after K6); `night_setback` (K1) → bounded heating-above-band integral, prompt post-setback
+close, bounded sag.
+
+**kt measurement note (K2, 2026-07-12; DECISIONS §11):** after honest attempts no scenario on
+the calibrated twin measurably contrasts `kt = 12` vs `kt = 0` (every peak-overshoot delta
+≤ 0.03 K — solar gains dominate with valves closed; the anti-overshoot of the defaults is
+carried by the small `ki` and, since K1, the bumpless transfer + unwind). `kt` stays per the
+frozen trend-member decision; the trend term's SIGN and magnitude are pinned by a unit canary
+(`trend_term == −kt · filtered_trend`, damping only on approach), because a sign regression
+would pass the whole simulation gate unnoticed.
 
 ---
 
@@ -620,3 +672,4 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 | 2026-07-09 | Phase A safety hardening (DECISIONS §6): sensor-lost safe-degrade is mode-dependent (COOLING parks the valve at 0, never freeze-open; HEATING keeps the freeze); the safety override decides the water side and the air side independently (S1/S2 close the valve without silencing an active S3/S4 fast source), syncs the fast-source dwell machine on force-ON, and never poisons the sensor-lost hold (`_last_valve_pct` keeps the last healthy position). Adapter: room-temperature plausibility gate (−10..50 °C, > 4 K/cycle held for a 2-sample confirmation), state-age gate (temp 45 min / RH 60 min ⇒ unavailable), per-loop valve-feedback validation + `valve_mismatch` flag, farewell command on live→shadow/off + unload, persisted global mode. |
 | 2026-07-09 | Phase B fast-source direction machine (DECISIONS §7): three-state `OFF/HEATING/COOLING` machine — direction change only through OFF with the full min-OFF, min-ON hold re-emits the REMEMBERED direction (`_fallback_mode` deleted); physical `fast_source_on` consumed (first feedback wins, conservative 0-seeded dwell after restart, `fast_source_mismatch` flag); split targets `setpoint ± 1 K` in active modes (S12) and exactly `setpoint` in TRANSITIONAL with far-edge release (bias removed); adapter split-command cache + ~45 min re-assert (S3); `boost_offset_c > deadband_c` validation (D2); dwell accumulates on sensor-lost/OFF paths (fast-F6). |
 | 2026-07-09 | Phases C+D+E (DECISIONS §8): retuned defaults kp=14/ki=0.0015/kt=12 (empirical sweep on the CALIBRATED twin; old ki=0.02 measured +1.2 K overshoot); FILTERED trend (>= 60 s sample floor + 15 min EMA); integrator frozen under an active S2 throttle, reset on HEATING<->COOLING, decayed after > 12 h inactivity; saturated no longer set by an S2 zero; FF constants -> ControllerConfig knobs; S5 watchdog LIVE (adapter-fed per-room data age, neutral-position action); BuildingOutputs.sensor_lost_rooms; simulator: solar wired (f_slab row), seasonal ground, EN 1264^1.1 plant with screed resistance, indoor-humidity model, cooling supply floored by the global safe dew point, split_boost scenario, ALL scenarios gate the merge with the S13 overshoot assertion. |
+| 2026-07-12 | Round-2 review (DECISIONS §11): K1 bumpless setpoint transfer (`shift_integral(kp·dK)`, mode-correct sign) + asymmetric integrator unwind (`unwind_factor = 8`) with the `night_setback` gate scenario (`SimScenario.setpoint_schedule`); K6 margin de-stacking — the local throttle ramp ENDS at `dew_margin_k` (full cooling on the pump's dew floor; hard S2 at the dew point itself); K3 CLOSE_VALVE is water-side only (the air-side decision stands); K4 multisplit group arbiter (`fast_source_group`, one direction per aggregate, direction-aware S4 mismatch via `fast_source_hvac_mode`); K5 mode-aware `controller_error` degrade; K7 two-stage RH staleness (+1 K dew pad, `rh_stale_gated`); K8 cold-snap recovery assertion; K9 throttle-freeze retained (back-calc from the final valve measured and rejected); K10 farewell syncs the fast machine; flag split `s2_throttle` vs `s2_condensation`; write threshold 2 → 5 pp; kt documented as an open question with data (unit sign canary). |

@@ -281,9 +281,24 @@ def run_scenario() -> _ScenarioRunner:
             n_steps = min(n_steps, max_steps)
 
         log = SimulationLog()
+        # Home-setpoint schedule (K1, 2026-07-12): entries are applied to the
+        # twin the first tick at/after their minute, exactly like the owner's
+        # HA automation would nudge the home-temperature number entity.
+        schedule = list(scenario.setpoint_schedule)
+        schedule_idx = 0
         for i in range(n_steps):
             t_min = i * dt_minutes
             t = int(round(t_min))
+            while schedule_idx < len(schedule) and t_min >= schedule[schedule_idx][0]:
+                home_c = schedule[schedule_idx][1]
+                simulator.set_setpoints(
+                    {
+                        room_cfg.name: home_c
+                        + scenario.room_offsets.get(room_cfg.name, 0.0)
+                        for room_cfg in scenario.building.rooms
+                    }
+                )
+                schedule_idx += 1
             all_inputs = _mask_sensor_dropout(
                 scenario, t, simulator.get_all_measurements()
             )

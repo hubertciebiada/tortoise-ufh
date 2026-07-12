@@ -53,6 +53,19 @@ elapse before any state change), so an HA restart/reload loop can never
 short-cycle a compressor (amendment 2026-07-09, S4).
 """
 
+_HVAC_MODE_TO_DIRECTION: dict[str, FastSourceMode] = {
+    "heat": FastSourceMode.HEATING,
+    "heating": FastSourceMode.HEATING,
+    "cool": FastSourceMode.COOLING,
+    "cooling": FastSourceMode.COOLING,
+}
+"""Map of raw HVAC-mode feedback strings to a fast-source DIRECTION (K4).
+
+Only unambiguous single-direction modes are mapped; anything else (``"off"``,
+``"auto"``, ``"heat_cool"``, ``"dry"``, ``"fan_only"``, vendor strings) yields
+no direction and the reconciliation falls back to the plain on/off check.
+"""
+
 FAST_TARGET_OFFSET_K: float = 1.0
 """Split target offset from the room setpoint in HEATING/COOLING [K].
 
@@ -105,6 +118,11 @@ class FastSourceMachine:
         self._synced: bool = False
         self._mismatch: bool = False
         self._prev_cmd_on: bool | None = None
+        # Direction of the previously emitted command (K4, 2026-07-12): lets
+        # the reconciliation flag a unit physically running in the OPPOSITE
+        # direction (multisplit standby / manual override), which the plain
+        # on/off comparison is blind to.
+        self._prev_cmd_mode: FastSourceMode | None = None
         # Seconds remaining on the min ON/OFF dwell lock (None = unlocked / no
         # fast source). Recomputed each cycle by the decision methods and
         # surfaced in the report for the panel's assist timer.
@@ -156,7 +174,11 @@ class FastSourceMachine:
         On later cycles a feedback that disagrees with the PREVIOUS cycle's
         emitted command (one full cycle of settling allowance) only sets the
         mismatch flag; the machine stays the owner and the adapter's periodic
-        re-assert converges the hardware back.
+        re-assert converges the hardware back. Since 2026-07-12 (K4) the
+        comparison also sees the DIRECTION: a unit physically running in a
+        single-direction HVAC mode opposite to the commanded one (multisplit
+        standby, manual reversal) raises the same mismatch flag even though
+        the plain on/off feedback agrees.
 
         Args:
             inputs: The room's raw inputs for this cycle.
@@ -167,19 +189,33 @@ class FastSourceMachine:
         physical = inputs.fast_source_on
         if physical is None:
             return
+        reported = (
+            _HVAC_MODE_TO_DIRECTION.get(inputs.fast_source_hvac_mode.lower())
+            if inputs.fast_source_hvac_mode
+            else None
+        )
         if not self._synced:
             self._synced = True
             if self._prev_cmd_on is None:
-                # No command emitted yet — adopt the physical state.
+                # No command emitted yet — adopt the physical state. The
+                # reported HVAC direction wins when unambiguous (K4);
+                # otherwise the direction follows the global mode. A HEATER
+                # can never cool, whatever the feedback claims.
                 if physical and self._state is FastSourceMode.OFF:
-                    self._state = (
-                        FastSourceMode.COOLING
-                        if (
-                            inputs.mode is Mode.COOLING
-                            and inputs.fast_source_kind is FastSourceKind.SPLIT
+                    if reported is not None and (
+                        reported is FastSourceMode.HEATING
+                        or inputs.fast_source_kind is FastSourceKind.SPLIT
+                    ):
+                        self._state = reported
+                    else:
+                        self._state = (
+                            FastSourceMode.COOLING
+                            if (
+                                inputs.mode is Mode.COOLING
+                                and inputs.fast_source_kind is FastSourceKind.SPLIT
+                            )
+                            else FastSourceMode.HEATING
                         )
-                        else FastSourceMode.HEATING
-                    )
                 elif not physical:
                     self._state = FastSourceMode.OFF
                 # Conservative seed: a full dwell from now, whatever the state.
@@ -188,6 +224,15 @@ class FastSourceMachine:
             # The machine already owns the unit; a late first feedback falls
             # through to the regular mismatch check below.
         if self._prev_cmd_on is not None and physical is not self._prev_cmd_on:
+            self._mismatch = True
+        elif (
+            physical
+            and self._prev_cmd_on
+            and self._prev_cmd_mode is not None
+            and reported is not None
+            and reported is not self._prev_cmd_mode
+        ):
+            # On/off agrees but the unit runs the OPPOSITE direction (K4).
             self._mismatch = True
 
     def tick(self, dt_seconds: float) -> None:
@@ -205,13 +250,17 @@ class FastSourceMachine:
         """
         self._timer_s += dt_seconds
 
-    def note_command(self, on: bool) -> None:
-        """Record this cycle's emitted on-state for the next S4 comparison.
+    def note_command(self, on: bool, mode: FastSourceMode | None = None) -> None:
+        """Record this cycle's emitted command for the next S4 comparison.
 
         Args:
             on: The ``on`` field of the command actually emitted this cycle.
+            mode: The command's direction (K4, 2026-07-12) so the next
+                reconciliation can also flag a DIRECTION divergence. ``None``
+                (legacy callers) records the on-state only.
         """
         self._prev_cmd_on = on
+        self._prev_cmd_mode = mode
 
     def want(self, demand: float, *, engaged: bool) -> bool:
         """Hysteretic engage/release decision for the fast source.
@@ -368,4 +417,5 @@ class FastSourceMachine:
         self._synced = False
         self._mismatch = False
         self._prev_cmd_on = None
+        self._prev_cmd_mode = None
         self._dwell_remaining_s = None

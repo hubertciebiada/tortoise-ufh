@@ -404,3 +404,48 @@ class TestSafetyEvaluator:
             last_update_age_minutes=1.0,
         )
         assert "s2_condensation" not in evaluator.active_flags(snapshot)
+
+
+class TestS2HardThresholdsK6:
+    """Pin the K6 (2026-07-12) hard-S2 thresholds: trip at the RAW dew point.
+
+    After the margin de-stacking the hard rule is a backstop BELOW the local
+    graduated ramp: it must NOT trip anywhere inside the ramp band
+    (``0 < supply - dew < 2 K``) and must trip only at physical condensation
+    onset (``supply - dew < 0``), clearing with hysteresis above ``+1 K``.
+    A regression back to the old ``+2 K`` trip margin fails these tests.
+    """
+
+    @staticmethod
+    def _snapshot(supply_offset_k: float) -> SensorSnapshot:
+        """Build a 24 degC / 70 %RH snapshot with supply = dew + offset."""
+        t_dew = dew_point(24.0, 70.0)
+        return SensorSnapshot(
+            supply_temperature_c=t_dew + supply_offset_k,
+            room_temperature_c=24.0,
+            humidity_pct=70.0,
+            last_update_age_minutes=1.0,
+        )
+
+    @pytest.mark.unit
+    def test_inside_local_ramp_band_does_not_trip(self) -> None:
+        """A supply 0.8 K above the dew point (inside the ramp) is NOT S2."""
+        evaluator = SafetyEvaluator()
+        flags = evaluator.active_flags(self._snapshot(+0.8))
+        assert "s2_condensation" not in flags
+
+    @pytest.mark.unit
+    def test_trips_only_below_raw_dew_point(self) -> None:
+        """Supply below the raw dew point trips the hard rule."""
+        evaluator = SafetyEvaluator()
+        assert "s2_condensation" in evaluator.active_flags(self._snapshot(-0.2))
+
+    @pytest.mark.unit
+    def test_clear_hysteresis_above_one_kelvin(self) -> None:
+        """A tripped rule holds at +0.5 K and clears only above +1 K."""
+        evaluator = SafetyEvaluator()
+        assert "s2_condensation" in evaluator.active_flags(self._snapshot(-0.2))
+        # Inside the hysteresis band: stays tripped.
+        assert "s2_condensation" in evaluator.active_flags(self._snapshot(+0.5))
+        # Above the +1 K clear threshold: releases.
+        assert "s2_condensation" not in evaluator.active_flags(self._snapshot(+1.3))

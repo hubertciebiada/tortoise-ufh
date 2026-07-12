@@ -16,6 +16,7 @@
           "room_name": "Room name",
           "room_area": "Floor area (m²)",
           "fast_source_kind": "Fast source (split / heater)",
+          "fast_source_group": "Shared outdoor unit group (multisplit, optional)",
           "has_fast_source": "This room has a fast auxiliary source",
           "cooling_enabled": "Participates in floor cooling",
           "add_another": "Add another room"
@@ -120,6 +121,7 @@
           "room_offset": "Room offset from home setpoint (K)",
           "has_fast_source": "This room has a fast auxiliary source",
           "fast_source_kind": "Fast source (split / heater)",
+          "fast_source_group": "Shared outdoor unit group (multisplit, optional)",
           "cooling_enabled": "Participates in floor cooling"
         }
       },
@@ -138,6 +140,7 @@
           "room_offset": "Room offset from home setpoint (K)",
           "has_fast_source": "This room has a fast auxiliary source",
           "fast_source_kind": "Fast source (split / heater)",
+          "fast_source_group": "Shared outdoor unit group (multisplit, optional)",
           "cooling_enabled": "Participates in floor cooling"
         }
       },

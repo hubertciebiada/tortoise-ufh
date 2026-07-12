@@ -92,18 +92,38 @@ def cooling_throttle_factor(
     """Compute a graduated cooling-valve throttle factor in [0, 1].
 
     Multiply the cooling valve output by this factor to prevent condensation.
-    With ``gap = t_surface - t_dew``:
 
-    - ``gap <= margin``: returns 0.0 (fully throttled, condensation risk).
-    - ``gap >= margin + ramp``: returns 1.0 (fully open, safe).
-    - in between: linear ramp from 0.0 to 1.0.
+    Semantics revised 2026-07-12 (K6, owner decision "tylko pompa +2"): the
+    heat pump's global safe dew-point floor (``max_over_cooled(T_dew) + 2 K``)
+    is the ONE working margin of the system, so the local throttle no longer
+    stacks a second full margin on top of it. The ramp now ENDS at *margin*
+    (full cooling exactly at the design gap the pump floor already guarantees)
+    instead of STARTING there, and this layer degrades into an emergency
+    backstop that only bites when the supply water dips below the pump floor.
+    With ``gap = t_surface - t_dew`` and ``lo = max(0, margin - ramp)``:
+
+    - ``gap <= lo``: returns 0.0 (fully throttled; with the defaults
+      ``margin = ramp = 2`` this means supply at/below the room's actual dew
+      point).
+    - ``gap >= margin``: returns 1.0 (fully open — full cooling on the pump
+      floor).
+    - in between: linear ramp from 0.0 to 1.0 over ``(lo, margin)``.
+
+    Before 2026-07-12 the ramp spanned ``(margin, margin + ramp)``, which
+    stacked the local margin on the pump floor: the most humid room — the one
+    defining the global floor — sat at ``gap == margin`` and got
+    ``factor == 0`` (measured in ``hot_july_floor_cooling``: factor < 1 for
+    80.9 % of records, full cooling only 19.1 %, "fasadowe" cooling).
 
     Args:
         t_surface: Cooled surface temperature (coldest loop supply or slab)
             [degC].
         t_dew: Dew-point temperature [degC].
-        margin: Minimum required gap above dew point [degC]. Must be >= 0.
-        ramp: Width of the linear ramp zone [degC]. Must be > 0.
+        margin: Gap above the dew point at (and above) which the valve is
+            fully open [degC]. Must be >= 0.
+        ramp: Width of the linear ramp zone below *margin* [degC]. Must be
+            > 0. Values larger than *margin* are effectively clipped (the
+            ramp cannot extend below ``gap = 0``).
 
     Returns:
         Throttle factor in [0.0, 1.0].
@@ -119,11 +139,14 @@ def cooling_throttle_factor(
         raise ValueError(msg)
 
     gap = t_surface - t_dew
-    if gap <= margin:
+    lo = max(0.0, margin - ramp)
+    # Conservative ordering: at margin == 0 (degenerate config) a zero gap
+    # reads as fully throttled, never as fully open.
+    if gap <= lo:
         return 0.0
-    if gap >= margin + ramp:
+    if gap >= margin:
         return 1.0
-    return (gap - margin) / ramp
+    return (gap - lo) / (margin - lo)
 
 
 def condensation_margin(

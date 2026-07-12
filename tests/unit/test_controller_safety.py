@@ -230,9 +230,18 @@ class TestSafetyValveVsAirSource:
         assert out.fast_source.mode is FastSourceMode.HEATING
 
     @pytest.mark.unit
-    def test_s1_alone_still_forces_split_off(self) -> None:
-        """S1 without an emergency keeps the fast source released."""
+    def test_s1_alone_leaves_air_side_to_coordination(self) -> None:
+        """S1 without an emergency no longer touches the fast source (K3).
+
+        Rewritten 2026-07-12: the old contract force-stopped the split on any
+        CLOSE_VALVE rule, killing a wanted boost (and, in cooling, the one
+        source that can still cool safely) and sawtoothing the dwell clock.
+        Now the water-side S1 parks the valve while the air-side decision from
+        the normal coordination stands: no demanded boost -> the split is OFF
+        because the coordination says so; a demanded boost keeps running.
+        """
         controller = RoomController(ControllerConfig(), name="salon")
+        # In-band room: the coordination itself wants the split OFF.
         out = controller.step(
             make_inputs(
                 room_temperature_c=20.0,
@@ -244,6 +253,21 @@ class TestSafetyValveVsAirSource:
         assert "s1_floor_overheat" in out.report.flags
         assert out.valve_position_pct == 0.0
         assert out.fast_source.on is False
+
+        # Cold room past the boost offset: S1 still parks the valve, but the
+        # demanded air-side boost keeps running (K3).
+        cold = controller.step(
+            make_inputs(
+                room_temperature_c=19.0,
+                loops=(LoopInput(None, 45.0, None),),
+                fast_source_kind=FastSourceKind.SPLIT,
+            ),
+            dt_seconds=300.0,
+        )
+        assert "s1_floor_overheat" in cold.report.flags
+        assert cold.valve_position_pct == 0.0
+        assert cold.fast_source.on is True
+        assert cold.fast_source.mode is FastSourceMode.HEATING
 
     @pytest.mark.unit
     def test_s3_alone_opens_valve_fully(self) -> None:

@@ -339,10 +339,19 @@ the dew-point layers (§2), and the control law (Q4).
   original analysis run on the pre-calibration plant — all three windows agree on the
   conclusion (the old defaults fail the 0.5 K gate; the new ones pass with margin). The report's provisional `ki ≈ 0.0011` was measured on the UNCALIBRATED
   plant; the calibrated twin (weaker plant, EN 1264^1.1) needs the slightly faster
-  integral. Note: kt's noise cost (sigma = 0.1 K → ~38 pp/h commanded travel vs 5.4 at
+  integral. ~~Note: kt's noise cost (sigma = 0.1 K → ~38 pp/h commanded travel vs 5.4 at
   kt=0) is bounded in practice by the 2 % valve-write threshold and by real sensor noise
   being ~2x lower; kt stays per the frozen trend-member decision (its value is anticipatory
-  damping on approach, e.g. after setpoint changes and under morning sun).
+  damping on approach, e.g. after setpoint changes and under morning sun).~~
+  > **CORRECTION (2026-07-12, K2b — see §11):** the bounded-by-the-threshold claim was
+  > FALSE — measured, the 2 pp threshold passed 31.3 pp/h of written travel at
+  > σ = 0.1 K (11.2 pp/h at σ = 0.05). The default threshold is now 5 pp (cuts σ = 0.05
+  > to 1.4 pp/h at zero regulation cost). Also stale: the cold-snap tail column of the
+  > sweep table above was generated on an intermediate phase-C code snapshot and its
+  > ABSOLUTE values do not reproduce on any released version (v0.4.0/v0.5.0 measure
+  > 75.3 % for salon / 73.2 % worst room, at both plant discretisations); the relative
+  > ranking stands. kt itself remains an open question with data (§11): no scenario on
+  > the calibrated twin shows a measurable kt benefit (every contrast ≤ 0.03 K).
 - **control-F6 — FF constants are knobs.** `ff_neutral_c` / `ff_gain_pct_per_k` /
   `ff_max_pct` moved from module constants into `ControllerConfig` (validated), exposed in
   `CONTROLLER_NUMBER_KNOBS` → config flow, `get_tuning`/`set_tuning` and the panel.
@@ -449,3 +458,140 @@ operations was preserved by extracting code verbatim).
   `tortoise_ufh/get_live` websocket payload and the diagnostics dump; consumers read the
   canonical `control_state`. The coordinator-internal `RoomRuntime.live_control_enabled`
   write-gate flag stays (never part of the external contract).
+
+---
+
+## 11. Revision — round-2 algorithmic review: operating-point changes, margin de-stacking, multisplit arbiter (2026-07-12, v0.6.0)
+
+> **Status: REVERSES three frozen details** (the local dew-margin semantics §2/§8.4; the
+> S1/S2-forces-split-off coupling §6/S7; the 2 pp valve-write threshold §8) **and extends
+> the control law** (bumpless setpoint transfer + asymmetric integrator unwind — a dated
+> §8.3 amendment, not a drift). Recorded 2026-07-12 after the second five-agent algorithmic
+> review (`scratchpad/algo-analysis/round2-*`); every number below was measured on the
+> calibrated twin before/after the change. Mirrored in `prd-control-brain.md` §8.3/§8.4/
+> §8.5/§8.7, `docs/BUILD_SPEC.md` and `docs/ALGORITHM_SPEC.md` in the same pass.
+
+- **K1 — bumpless setpoint transfer + asymmetric unwind (the round-2 headline).** The
+  steady-state gate never exercised OPERATING-POINT changes, and a daily night setback is
+  daily use: measured, a 23 → 21 °C drop at a saturated integral kept the valve actively
+  heating an already-too-warm room for **17.4 h (642 %·h of valve integral)** — the
+  integral discharged at bare `ki` speed. Two mechanisms fix it:
+  (a) *bumpless transfer*: an effective-setpoint change of `dK` between PID-active cycles
+  re-seeds the integral by `kp·dK` in the mode's error convention (sign inverts in
+  COOLING), clamped to the output range; the reference dies with every PID reset;
+  (b) *asymmetric unwind* (`PIDController.unwind_factor = 8`): while the deadbanded error
+  OPPOSES the integral, the integral discharges 8× faster than it accumulated — it only
+  ever moves toward zero, so equilibrium and in-band behaviour are untouched.
+  Measured after: valve ≈ 0 in **0.8 h** (23 %·h), back in the band FASTER (35 h vs
+  48.8 h) with a 100 % settled tail; the honest cost is a deeper coast-down trough
+  (−0.92 K vs −0.54 K — the price of not heating an overheated slab; noise σ = 0.1 K
+  leaves no steady-state bias, tail 100 % in-band). New gate scenario **`night_setback`**
+  (4 days of 21↔19 every 12 h on the bungalow, `SimScenario.setpoint_schedule` — additive
+  field): heating-above-band integral ≤ 400 %·h (measured 264 vs **2577** without K1),
+  no active heating clearly above the band past a 240-min grace, no room below 17.8 °C.
+- **K2a — kt: an open question WITH data (the trend member stays).** After honest attempts
+  no scenario measurably contrasts `kt=12` vs `kt=0` on the calibrated twin: solar
+  overshoot +5.71/+5.71 K (identical — gains dominate with valves closed), steady warm-up
+  +0.177/+0.130 K (kt slightly WORSE), cold-snap recovery +0.784/+0.799 K, split_boost
+  +2.949/+2.979 K, strong-plant +2 K step +0.660/+0.672 K — every contrast ≤ 0.03 K.
+  The anti-overshoot of the defaults is carried by the small `ki` and (since this
+  revision) by K1. Per the frozen PRD trend-member decision **kt stays 12**; the gate hole
+  ("a sign-flipped trend term passes everything") is closed by a UNIT canary pinning
+  `trend_term == −kt·filtered_trend` and the approach-only asymmetry. The false
+  `solar_overshoot` docstring and the `config.py` calibration comment were corrected.
+- **K2b — valve-write threshold 2 → 5 pp + CORRECTION of a false §8 note.** §8 claimed
+  kt's noise cost "is bounded in practice by the 2 % valve-write threshold" — measured,
+  it is NOT: at σ = 0.1 K the written travel after the 2 pp threshold was **31.3 pp/h**
+  (11.2 pp/h at σ = 0.05). The 5 pp default cuts σ = 0.05 to **1.4 pp/h** (σ = 0.1 to
+  ~18 pp/h) with no regulation cost (the loop repositions ~1 pp/h without noise).
+- **K3 — CLOSE_VALVE is water-side only.** The S7 split (water/air decided independently)
+  was incomplete: an S1/S2 *without* a parallel S3/S4 still force-stopped the fast source
+  every cycle — killing a wanted boost under S1, killing the ONE safe cooling source
+  (the split has a condensate tray) exactly when humid under S2, and sawtoothing the
+  dwell clock (flapping `fast_source_min_runtime`). Now the CLOSE_VALVE branch parks the
+  valve and leaves the air-side decision from the normal coordination standing;
+  Mode.OFF / sensor-lost / EMERGENCY_COOL-without-split still force OFF as before.
+- **K4 — multisplit direction arbiter (new opt-in configuration).** Indoor units sharing
+  an outdoor unit can be asked for opposite directions (routinely in TRANSITIONAL — the
+  direction is per-room error sign; and during seasonal mode changes under min-ON holds).
+  New per-room key `fast_source_group` (config flow; generic labels like
+  `outdoor_unit_a`; carried to the core via `RoomInputs.fast_source_group`):
+  `BuildingController` enforces ONE direction per group each cycle — a min-ON-locked or
+  S3/S4-forced unit pins the group; otherwise the largest comfort-band excess wins;
+  losers are rewritten OFF with the `fast_source_group_conflict` flag and re-engage
+  through a full min-OFF; a pathological double-pin (inconsistent physical adoption)
+  overrides nobody and flags. Additionally the S4 reconciliation now sees the DIRECTION:
+  the adapter passes the raw `hvac_mode` feedback (`RoomInputs.fast_source_hvac_mode`)
+  and a unit physically running opposite to its command raises `fast_source_mismatch`
+  even though the on/off bool agrees (previously invisible). Ungrouped rooms are
+  untouched.
+- **K5 — `controller_error` degrade is mode-aware.** `_degraded_room_output` held the
+  last valve regardless of mode — the last bypass of the dew-F1 invariant (a crashed
+  controller computes neither condensation defence). Now symmetric with sensor-loss:
+  HEATING holds, COOLING/TRANSITIONAL/OFF close.
+- **K6 — margin de-stacking (owner decision: "tylko pompa +2").** The two condensation
+  margins STACKED: the pump floor guarantees `supply ≥ dew_max + 2 K`, but the local
+  throttle only fully opened at `gap ≥ margin + ramp = 4 K` — the most humid room (the
+  one defining the floor) sat at `gap = margin` → factor 0. Measured in `hot_july`
+  @ 300 s: factor < 1 for 80.9 % of records, full cooling 19.1 %, valves open 29.7 %,
+  living-room mean 26.75 °C at a 24 °C setpoint — "fasadowe" cooling. New semantics: the
+  ramp ENDS at `dew_margin_k` (factor 1 exactly on the pump floor) and spans
+  `(max(0, margin−ramp), margin)` — with the defaults full cooling from gap 2 K, hard 0
+  at the room's actual dew point. The hard S2 rule moved BELOW the ramp
+  (`S2_HARD_MARGIN_K = 0`: trip at `supply − dew < 0`, clear above +1 K) — a backstop
+  behind a backstop, not a second margin. Measured after: valves open **94.2 %**, factor
+  1 for 68.8 %, factor < 1 still genuinely exercised (31.2 % — humid transients where
+  the supply dips under the floor), min slab-dew margin **+1.51 K** (gate grades ≥ 1.0),
+  living-room mean 25.36 °C. Gate updated: `open_share > 0.60`, hot_july also at the
+  production 300 s takt (B8).
+- **K7 — two-stage RH age gate (+1 K stale pad).** The binary 60-min age gate versus a
+  threshold-reporting RH sensor (SCD41 over Matter) risked a cooling limit cycle
+  (fresh → cool → aged out → full stop → repeat). Now: ≤ 60 min fresh; 60-120 min the
+  LAST value is served flagged stale (`RoomInputs.humidity_stale`) and the core pads
+  BOTH protective dew points (+1 K, flag `rh_stale_gated`); > 120 min unusable (`None`,
+  conservative full stop) as before. Owner action item: measure the sensor's real
+  reporting cadence before the cooling season.
+- **K8 — cold-snap recovery assertion + tail-figure discrepancy explained.** The supply
+  step (29.5 → 37 °C at the −15 °C snap) is a 2-3× plant-gain change; round 2 measured
+  an unasserted +1.15 K recovery peak ~10 h after the step. With K1's unwind the peak
+  itself dropped to **+0.78 K** and from step+12 h the worst room stays at **+0.34 K**;
+  the gate now asserts ≤ 0.5 K from step+12 h. The §8 table's "92.9 %" cold-snap tail vs
+  round 2's "75.3 %" was re-measured for this revision: 75.3 % (salon; 73.2 % worst
+  room) REPRODUCES on both released code versions (v0.4.0 and v0.5.0) and at both plant
+  discretisations (physics 60 s with the 300 s takt, and physics 300 s), while the
+  92.9 % does not reproduce anywhere — the sweep table was generated on an INTERMEDIATE
+  phase-C code snapshot (squashed away by the release history), so its absolute
+  cold-snap tail figures are stale. The table's RELATIVE ranking (which drove the gain
+  choice) is unaffected, and recovery quality is now asserted explicitly instead of via
+  that tail figure. Gain normalisation by `(T_supply − T_room)` filed as backlog (a
+  control-law change, not this round).
+- **K9 — throttle-freeze STAYS; back-calc from the final valve REJECTED with data.** The
+  proposed `I += (u_final − u_raw)` under `factor < 1` was implemented and measured:
+  any tracking anti-windup enforces `u_raw ≈ u_final`, pinning the integral at ~0 for
+  the whole episode, so the post-release catch-up was NOT faster (6 h full throttle →
+  ±0.3 K after **8.6 h either way**; partial throttle 9.5 h, worse) — the catch-up is a
+  `ki`-speed property (the integral must legitimately rebuild 0 → ~50 pp), not a windup
+  artifact; under a persistent partial throttle the tracking loop additionally suppresses
+  the legitimate integral entirely. Note: after K6 the throttle episodes themselves
+  became rare and shallow.
+- **K10 — farewell synchronises the machine.** The C5 farewell wrote a physical OFF
+  outside the model: the machine kept "emitting" ON in shadow, so live→shadow→live was a
+  physical OFF/ON with no dwell, and a reload could adopt a stale ON feedback and write
+  ON seconds after the farewell OFF. Now the adapter calls the new core hook
+  (`BuildingController.notify_fast_source_farewell`) — the machine transitions to OFF
+  with the dwell reset, so the way back to live passes an honest min-OFF; additionally
+  a module-level farewell registry (surviving reloads) makes the read path distrust an
+  ON feedback younger than one cycle after the farewell (R5).
+- **Minor, same pass:** local-throttle flag split from the hard rule (`s2_throttle` vs
+  `s2_condensation`; panel labels PL/EN); temperature-jump confirmation must span ≥ 270 s
+  of real time (B5 — a debounced recompute burst could confirm a bogus spike in 4 s);
+  the adapter invalidates the trend filter when the measured step interval exceeds the
+  900 s clamp (R2-F6); trend-filter warm-up (~30-45 min after a gap) documented (R2-F8);
+  the constant-outdoor-RH artifact of `hot_july` documented as a protection-friendly
+  bias (B9); README notes on the 45-min re-assert, shadow as the manual-override mode,
+  supply-probe placement (manifold beam, BEFORE the valves) and RH reporting cadence.
+- **Backlog (deliberately NOT this round):** gain normalisation by `(T_supply − T_room)`
+  (control-law change; draft issue in the owner's scratchpad), inter-loop hydraulics in
+  the twin, the kt question (revisit with real-house data), and per-mode integrator
+  memory (R2-F7 — today every HEATING↔COOLING flip resets the integral, costing ~2-3 h
+  of re-convergence per seasonal mode wobble; correct for safety, optional comfort win).

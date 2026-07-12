@@ -180,6 +180,13 @@ failure mode. Before enabling floor cooling:
   make the dew throttle oscillate open/closed against its own measurement.
 - Give every cooled room a real humidity sensor. A room without RH is cooled **blind** and
   the controller will conservatively refuse to open its valve (throttle 0).
+- **Check your RH sensors' reporting cadence** before the cooling season. Threshold-reporting
+  sensors (e.g. a CO₂/RH combo over Matter) may legitimately stay silent for tens of minutes
+  in a stable room. The controller tolerates this with a two-stage age gate: a reading is
+  fresh up to 60 min; between 60 and 120 min the last value is still used with an extra
+  **+1 K dew-point margin** (report flag `rh_stale_gated`); past 120 min the room's cooling
+  stops conservatively. If you see `rh_stale_gated` regularly, shorten the sensor's
+  max-report interval.
 
 ### Alerting on degraded rooms
 
@@ -201,6 +208,14 @@ sensor, one or more valve actuators (`number` or `valve` entities), optional
 supply/return water sensors, optional humidity (required for cooled rooms), and an
 optional split `climate` entity; globally an outdoor-temperature sensor and a mode
 selector.
+
+**Multisplit owners:** if several rooms' indoor units share one physical outdoor unit,
+give them the same **shared outdoor unit group** label in the room step (any name, e.g.
+`outdoor_unit_a`). The controller then never asks one aggregate to heat and cool at the
+same time: when demands conflict (routine in the transitional season), the room furthest
+outside its comfort band wins the direction, a unit inside its minimum-ON time keeps it,
+and the losing room waits its minimum-OFF time with the `fast_source_group_conflict` flag
+visible in its report. Leave the field empty for independent units.
 
 Day-to-day control lives in the **Tortoise-UFH sidebar panel** (added automatically, admin
 only). From the panel you can:
@@ -252,6 +267,16 @@ starts in the safe **shadow** default.
 - **`live`.** The coordinator writes the room's valve entities (only when the new value
   differs from the last by at least the write threshold, to avoid actuator chatter) and the
   split's mode and target temperature.
+
+> **Manual overrides & the 45-minute re-assert.** In `live`, Tortoise-UFH is the OWNER of
+> the room's split: an unchanged command is not re-sent every cycle (no beeps, your fan and
+> louvre tweaks survive), but the mode + target pair is **re-asserted roughly every
+> 45 minutes**, so a manual change of the split's mode or target from its remote will be
+> overwritten within that window (the report raises `fast_source_mismatch` in the
+> meantime). If you want to drive a room's hardware by hand for a while, **switch the room
+> to `shadow`** — that is the supported "manual mode": the controller keeps computing and
+> showing what it *would* do, but writes nothing, and the way back to `live` re-parks the
+> actuators safely (the split passes an honest minimum-OFF before any restart).
 
 A whole-house "hands off the hardware" is simply **every room in off or shadow** — the
 three-state control replaced the earlier global kill-switch. Changing a room's control

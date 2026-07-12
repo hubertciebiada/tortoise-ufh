@@ -9,7 +9,9 @@ Discretisation (backward Euler at the per-call ``dt``; defaults to the
 configured ``dt`` when :meth:`PIDController.compute` is not given one)::
 
     P = kp * e
-    I += ki * e * dt          # skipped when freeze_integrator is True
+    I += ki * e * dt          # skipped when freeze_integrator is True;
+                              # ki is scaled by unwind_factor while e and I
+                              # have opposite signs (K1, 2026-07-12)
     D = kd * (e - e_prev) / dt # zero on the first call
     u_raw = P + I + D
     u = clip(u_raw, output_min, output_max)
@@ -60,6 +62,7 @@ class PIDController:
         dt: float = 300.0,
         output_min: float = 0.0,
         output_max: float = 100.0,
+        unwind_factor: float = 1.0,
     ) -> None:
         """Initialise the PID controller.
 
@@ -72,10 +75,19 @@ class PIDController:
             output_min: Minimum output [%]. Defaults to 0.0.
             output_max: Maximum output [%]. Must be strictly greater than
                 *output_min*. Defaults to 100.0.
+            unwind_factor: Multiplier (>= 1) applied to ``ki`` while the error
+                and the integral accumulator have OPPOSITE signs (K1,
+                2026-07-12): a sign-opposed integral is stale knowledge (e.g. a
+                heating integral while the room sits above the new, lowered
+                setpoint) and is unwound ``unwind_factor`` times faster than it
+                accumulated. The accelerated rate only ever pulls the integral
+                TOWARD zero, so the loop's equilibrium is untouched; inside the
+                deadband the (deadbanded) error is 0 and no unwinding happens.
+                ``1.0`` (default) disables the asymmetry.
 
         Raises:
-            ValueError: If any gain is negative, ``dt <= 0``, or
-                ``output_min >= output_max``.
+            ValueError: If any gain is negative, ``dt <= 0``,
+                ``output_min >= output_max``, or ``unwind_factor < 1``.
         """
         if kp < 0:
             msg = f"kp must be >= 0, got {kp}"
@@ -92,6 +104,9 @@ class PIDController:
         if output_min >= output_max:
             msg = f"output_min ({output_min}) must be < output_max ({output_max})"
             raise ValueError(msg)
+        if unwind_factor < 1.0:
+            msg = f"unwind_factor must be >= 1, got {unwind_factor}"
+            raise ValueError(msg)
 
         self._kp = kp
         self._ki = ki
@@ -99,6 +114,7 @@ class PIDController:
         self._dt = dt
         self._output_min = output_min
         self._output_max = output_max
+        self._unwind_factor = unwind_factor
 
         self._integral: float = 0.0
         self._prev_error: float | None = None
@@ -113,6 +129,29 @@ class PIDController:
     def last_output(self) -> float:
         """Output [%] from the most recent :meth:`compute` call (read-only)."""
         return self._last_output
+
+    def shift_integral(self, delta: float) -> None:
+        """Shift the integral accumulator by *delta* [%], clamped to the range.
+
+        External re-seed hook used by the room controller for the bumpless
+        setpoint-change transfer (K1, 2026-07-12): a setpoint change of
+        ``delta_e`` kelvin (in the controller's error convention) shifts the
+        operating point by roughly ``kp * delta_e`` percent of valve, and the
+        integral — which encodes the plant's steady-state offset — is moved
+        along instead of discharging the difference at ``ki`` speed over many
+        hours. The result is clamped to ``[output_min, output_max]`` so a
+        shift can never park the accumulator outside the usable output range.
+        A no-op when ``ki == 0`` (the accumulator is unused then).
+
+        Args:
+            delta: Shift to apply to the integral accumulator [%]. May be
+                negative.
+        """
+        if self._ki <= 0:
+            return
+        self._integral = max(
+            self._output_min, min(self._output_max, self._integral + delta)
+        )
 
     def compute(
         self,
@@ -160,7 +199,26 @@ class PIDController:
         p_term = self._kp * error
 
         if not freeze_integrator:
-            self._integral += self._ki * error * dt
+            # Asymmetric unwinding (K1, 2026-07-12): a sign-opposed integral
+            # (error pushes one way, accumulated integral the other) is stale
+            # knowledge from a previous operating point and discharges
+            # ``unwind_factor`` times faster than it accumulated. The
+            # accelerated rate applies ONLY up to zero: if one step would
+            # overshoot, the remainder of the interval accumulates at the
+            # normal 1x rate (review 2026-07-12) — so the accelerated portion
+            # truly never pushes the integral PAST zero.
+            delta = self._ki * error * dt
+            if error * self._integral < 0.0:
+                accelerated = delta * self._unwind_factor
+                if abs(accelerated) < abs(self._integral):
+                    self._integral += accelerated
+                else:
+                    # Fraction of the interval spent reaching zero at Nx; the
+                    # rest accumulates in the error's direction at 1x.
+                    spent = abs(self._integral) / abs(accelerated)
+                    self._integral = delta * (1.0 - spent)
+            else:
+                self._integral += delta
 
         if self._prev_error is not None:
             d_term = self._kd * (error - self._prev_error) / dt

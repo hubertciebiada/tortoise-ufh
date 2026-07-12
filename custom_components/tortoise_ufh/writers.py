@@ -50,6 +50,14 @@ _HVAC_MODE_BY_FAST_SOURCE: dict[FastSourceMode, str] = {
     FastSourceMode.OFF: "off",
 }
 
+# Monotonic timestamp of the last farewell OFF written per fast-source entity
+# (K10/R5, 2026-07-12). Deliberately MODULE-level: a config-entry reload (every
+# tuning change!) rebuilds the CommandWriter, but the module object survives,
+# so the freshly built coordinator can still distrust an ON feedback read
+# seconds after the pre-reload farewell (a stale state that would otherwise be
+# adopted by the cold machine and written straight back as ON).
+_RECENT_FAREWELL_MONOTONIC: dict[str, float] = {}
+
 
 class CommandWriter:
     """Writes valve and fast-source commands to the Home Assistant actuators.
@@ -87,6 +95,27 @@ class CommandWriter:
             The last written position [%], or ``None`` when never written.
         """
         return self._last_written_valve.get(entity_id)
+
+    @staticmethod
+    def recent_farewell(entity_id: str | None, *, max_age_s: float) -> bool:
+        """Whether *entity_id* received a farewell OFF within ``max_age_s``.
+
+        K10/R5 (2026-07-12): consulted by the coordinator's read path so an
+        ON feedback younger than one control cycle after a farewell OFF is
+        read as OFF instead of being adopted by a freshly rebuilt machine.
+        The registry is module-level and survives config-entry reloads.
+
+        Args:
+            entity_id: The fast-source climate entity id, or ``None``.
+            max_age_s: Distrust window since the farewell write [s].
+
+        Returns:
+            ``True`` when a farewell OFF was written recently enough.
+        """
+        if not entity_id:
+            return False
+        stamp = _RECENT_FAREWELL_MONOTONIC.get(entity_id)
+        return stamp is not None and time.monotonic() - stamp <= max_age_s
 
     async def write_valves(
         self,
@@ -241,11 +270,15 @@ class CommandWriter:
                     name,
                 )
             else:
+                now_monotonic = time.monotonic()
                 self._last_written_fast[fast_source_entity] = (
                     "off",
                     None,
-                    time.monotonic(),
+                    now_monotonic,
                 )
+                # K10/R5: remember the farewell so a stale ON feedback read
+                # within the next cycle (also across a reload) is distrusted.
+                _RECENT_FAREWELL_MONOTONIC[fast_source_entity] = now_monotonic
         if mode is not Mode.COOLING:
             return
         for valve_entity in valves:

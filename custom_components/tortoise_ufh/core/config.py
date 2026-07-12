@@ -77,9 +77,17 @@ class ControllerConfig:
             invert — D2, 2026-07-09).
         fast_min_on_minutes: Minimum fast-source ON dwell time [min] (>= 0).
         fast_min_off_minutes: Minimum fast-source OFF dwell time [min] (>= 0).
-        dew_margin_k: Local per-room condensation-protection margin [K] (>= 0).
-        dew_ramp_k: Width over which the local dew-point throttle ramps from
-            full-open to fully-throttled [K] (> 0).
+        dew_margin_k: Supply-above-dew gap [K] at (and above) which the local
+            cooling throttle is fully OPEN (>= 0). Semantics revised
+            2026-07-12 (K6): the ramp ENDS here — this is the same design gap
+            the heat pump's global safe dew-point floor already guarantees,
+            so full cooling is available exactly on that floor instead of a
+            second stacked margin above it.
+        dew_ramp_k: Width of the local throttle's linear ramp BELOW
+            ``dew_margin_k`` [K] (> 0; K6 2026-07-12 — previously the ramp
+            sat ABOVE the margin). With the defaults (2/2) the valve ramps
+            1 -> 0 over gap 2 -> 0 K and closes fully at the room's actual
+            dew point.
         cycle_seconds: Nominal control-cycle period [s] (> 0, default 300 = 5
             minutes).
         valve_write_threshold_pct: Minimum valve change before a new value is
@@ -90,8 +98,16 @@ class ControllerConfig:
     # twin: the old ki=0.02 (Ti ~ 7 min) was an order of magnitude too
     # aggressive for a tau = 3-6 h slab and produced a measured +1.2 K
     # overshoot with a persistent +-0.6 K limit cycle. kp=14 / ki=0.0015
-    # (Ti ~ 2.6 h) / kt=12 on the FILTERED trend: steady_heating overshoot
-    # +0.18 K, 24-48 h tail 100 % inside +-0.3 K, ~1 pp/h valve travel.
+    # (Ti ~ 2.6 h): steady_heating overshoot +0.18 K, 24-48 h tail 100 %
+    # inside +-0.3 K, ~1 pp/h valve travel. NOTE (2026-07-12, K2/B1): the
+    # anti-overshoot of these defaults is carried by the small ki (and since
+    # 2026-07-12 by the bumpless setpoint transfer + asymmetric unwind), NOT
+    # by kt — measured across solar_overshoot, cold_snap recovery,
+    # split_boost and strong-plant setpoint steps, kt=12 vs kt=0 differs by
+    # <= 0.03 K of peak overshoot on the calibrated twin. kt=12 stays per
+    # the frozen PRD trend-member decision; see docs/DECISIONS.md §11
+    # ("kt — otwarte pytanie z danymi") for the measurements and the noise
+    # cost that motivated the 5 pp write threshold below.
     kp: float = 14.0
     ki: float = 0.0015
     kd: float = 0.0
@@ -108,7 +124,13 @@ class ControllerConfig:
     dew_margin_k: float = 2.0
     dew_ramp_k: float = 2.0
     cycle_seconds: float = 300.0
-    valve_write_threshold_pct: float = 2.0
+    # 2.0 -> 5.0 (2026-07-12, K2b): measured on the twin (steady_heating
+    # @ 300 s, tail 24-48 h), the 2 pp threshold did NOT bound kt's noise
+    # cost — at sigma = 0.05 K the written valve still travelled 11.2 pp/h
+    # (31.3 pp/h at sigma = 0.1). The 5 pp threshold cuts sigma = 0.05 to
+    # 1.4 pp/h with no measurable regulation cost (the loop repositions
+    # ~1 pp/h without noise).
+    valve_write_threshold_pct: float = 5.0
 
     def __post_init__(self) -> None:
         """Validate the controller tuning parameters.
@@ -409,6 +431,14 @@ class SimScenario:
             thermal nodes [degC] (2026-07-09). ``None`` keeps the RC model's
             20 degC reset default — summer scenarios pass a summer-like value
             so the run does not start with a cold-house artifact.
+        setpoint_schedule: Optional home-setpoint schedule (additive,
+            2026-07-12, K1) as ``(minute, home_setpoint_c)`` pairs sorted by
+            strictly increasing minute. From each listed minute on, the
+            harness drives every room at the scheduled home setpoint plus its
+            offset; before the first entry ``building.home_setpoint_c``
+            applies. Empty (default) = a constant setpoint, exactly the old
+            behaviour. Enables day/night-setback scenarios — the operating-
+            point changes the steady-state gate never exercised.
     """
 
     name: str
@@ -423,6 +453,7 @@ class SimScenario:
     weather_comp: WeatherCompCurve | None = None
     cooling_comp: CoolingCompCurve | None = None
     initial_temperature_c: float | None = None
+    setpoint_schedule: tuple[tuple[float, float], ...] = ()
 
     def __post_init__(self) -> None:
         """Validate the scenario parameters.
@@ -458,3 +489,21 @@ class SimScenario:
             if unknown:
                 msg = f"room_offsets references unknown room names: {unknown}"
                 raise ValueError(msg)
+        prev_minute: float | None = None
+        for minute, setpoint_c in self.setpoint_schedule:
+            if minute < 0.0:
+                msg = f"setpoint_schedule minutes must be >= 0, got {minute}"
+                raise ValueError(msg)
+            if prev_minute is not None and minute <= prev_minute:
+                msg = (
+                    "setpoint_schedule minutes must be strictly increasing, "
+                    f"got {minute} after {prev_minute}"
+                )
+                raise ValueError(msg)
+            if not (0.0 <= setpoint_c <= 35.0):
+                msg = (
+                    "setpoint_schedule setpoints must be in [0, 35] degC, "
+                    f"got {setpoint_c}"
+                )
+                raise ValueError(msg)
+            prev_minute = minute

@@ -170,7 +170,37 @@ report/websocket payload can never bloat.
 # above (imported and used here) so existing importers keep working.
 
 GLOBAL_SAFE_DEW_MARGIN_K: float = 2.0
-"""Safety margin [K] added on top of ``max_i(T_dew_i)`` for the global sensor."""
+"""Safety margin [K] added on top of ``max_i(T_dew_i)`` for the global sensor.
+
+The system's ONE working condensation margin (2026-07-12, K6): the local
+per-room throttle ramps BELOW this gap instead of stacking a second margin on
+top of it (see :func:`~tortoise_ufh.dew_point.cooling_throttle_factor`).
+"""
+
+_INTEGRATOR_UNWIND_FACTOR: float = 8.0
+"""Asymmetric integral-unwind multiplier (K1, 2026-07-12).
+
+While the deadbanded error opposes the accumulated integral (e.g. a heating
+integral left over after a night-setback lowered the setpoint), the PID
+discharges the integral this many times faster than it accumulated. Measured
+on the twin (23 -> 21 setpoint drop, well_insulated @ 300 s): with the plain
+ki the saturated integral kept the valve actively heating an already-too-warm
+room for 17.4 h (642 %*h valve integral, trough -0.54 K, back in the band
+48.8 h after the drop); the bumpless -kp*dK re-seed alone cut that to 13 h,
+and the combination with this 8x unwind brings the valve to ~0 within 0.8 h
+(23 %*h), returns to the band FASTER (35 h) with a 100 % settled tail, at the
+cost of a deeper coast-down trough (-0.92 K — the price of not heating an
+overheated slab). The accelerated step only ever pulls the integral TOWARD
+zero (never destabilises the loop), and inside the comfort band the
+deadbanded error is 0, so steady-state behaviour is untouched.
+"""
+
+_STALE_RH_DEW_PAD_K: float = 1.0
+"""Extra dew-point pad [K] applied while the room's RH reading is STALE (K7,
+2026-07-12): the adapter holds an RH whose sensor last reported 60-120 min ago
+(``RoomInputs.humidity_stale``) instead of dropping it to ``None``, and the
+cooling layers price the staleness in by computing every protective dew point
+1 K higher. Report flag: ``"rh_stale_gated"``."""
 
 
 class RoomController:
@@ -211,6 +241,7 @@ class RoomController:
             ki=config.ki,
             kd=config.kd,
             dt=config.cycle_seconds,
+            unwind_factor=_INTEGRATOR_UNWIND_FACTOR,
         )
         # Safe-degrade default: until at least one live step has established a
         # real valve position (``_seeded``), the cold-start hold value is
@@ -224,6 +255,12 @@ class RoomController:
         # actually ran in, and the accumulated inactive time.
         self._last_pid_mode: Mode | None = None
         self._inactive_s: float = 0.0
+        # Bumpless setpoint transfer (K1, 2026-07-12): the effective setpoint
+        # the PI last ran with; a change between PID-active cycles re-seeds
+        # the integral by kp * delta_error so the operating point moves WITH
+        # the setpoint instead of discharging the difference at ki speed.
+        # Cleared whenever the PID itself is reset.
+        self._last_pid_setpoint_c: float | None = None
         self._last_valve_pct: float = config.valve_floor_pct
         self._seeded: bool = False
         # Fast-source state machine (amendment 2026-07-09, C6): the DIRECTION
@@ -232,6 +269,11 @@ class RoomController:
         # :class:`~tortoise_ufh.fast_source.FastSourceMachine` (2026-07-10);
         # this controller delegates and keeps only the mode->demand mapping.
         self._fast = FastSourceMachine(config)
+        # Machine direction at the entry of the current step (K4, 2026-07-12):
+        # the group arbiter treats only a unit that was ALREADY running before
+        # this cycle as min-ON-pinned — a machine that engaged this very cycle
+        # has not physically started and may be freely arbitrated away.
+        self._fast_entry_state: FastSourceMode = FastSourceMode.OFF
         # Stateful hard-safety layer (S1..S5) with per-rule hysteresis, held
         # across cycles and applied as a post-processing override of the
         # computed outputs (PRD 8.7).
@@ -293,6 +335,9 @@ class RoomController:
         # wins and the dwell timer is seeded conservatively; afterwards a
         # divergence only raises a report flag.
         self._fast.sync(inputs)
+        # Snapshot the direction the unit was ACTUALLY running in before any
+        # of this cycle's decisions (K4): feeds fast_source_locked_on.
+        self._fast_entry_state = self._fast.state
 
         # Fast-source dwell clock: dt accumulates here EXACTLY ONCE per step
         # (fix 2026-07-10); the decision helpers below only RESET the timer on
@@ -386,7 +431,7 @@ class RoomController:
             fast_dwell_remaining_s=self._fast.dwell_remaining_s,
             flags=flags,
         )
-        self._fast.note_command(result.fast_source.on)
+        self._fast.note_command(result.fast_source.on, result.fast_source.mode)
         return replace(result, report=report)
 
     def reset(self) -> None:
@@ -394,11 +439,90 @@ class RoomController:
         self._pid.reset()
         self._trend.reset()
         self._last_pid_mode = None
+        self._last_pid_setpoint_c = None
         self._inactive_s = 0.0
         self._last_valve_pct = self._config.valve_floor_pct
         self._seeded = False
         self._fast.reset()
+        self._fast_entry_state = FastSourceMode.OFF
         self._safety.reset()
+
+    def invalidate_trend(self) -> None:
+        """Invalidate the filtered trend after a control-cycle gap.
+
+        Public hook for the adapter (R2-F6, 2026-07-12): when the measured
+        elapsed time since the previous step exceeded the adapter's dt clamp
+        (900 s), the temperature kept moving for LONGER than the ``dt`` the
+        core is about to be fed, so the next raw dT/dt sample would be
+        inflated and the ~15-min EMA would carry that artefact for 2-3
+        cycles. Dropping the reference restarts the trend from 0 exactly like
+        a sensor-loss gap does.
+        """
+        self._trend.invalidate()
+
+    def notify_fast_source_farewell(self) -> None:
+        """Synchronise the machine with an out-of-band farewell OFF (K10).
+
+        The adapter's farewell command (C5: room leaving ``live``, entry
+        unload) writes a physical OFF OUTSIDE the control loop; without this
+        hook the direction machine kept "emitting" ON in shadow, so a return
+        to live could write ON seconds after the farewell OFF with no dwell
+        in between. Transitioning the machine to OFF here resets the dwell
+        clock on the ON->OFF edge — the way back to live passes through an
+        honest min-OFF — and records the OFF command so the next physical
+        feedback is reconciled against what was actually written.
+        """
+        self._fast.force_off()
+        self._fast.note_command(False, FastSourceMode.OFF)
+
+    def resolve_group_conflict(self, outputs: RoomOutputs) -> RoomOutputs:
+        """Rewrite this cycle's result after LOSING the group arbitration (K4).
+
+        Called by :meth:`BuildingController._arbitrate_fast_groups` for a room
+        whose fast-source command requested the direction that lost its
+        multisplit group's arbitration. The machine is transitioned to OFF
+        (never bypassing another room's min-ON — the arbiter only overrides
+        rooms whose own min-ON lock has elapsed), the emitted command becomes
+        OFF, and the flag ``"fast_source_group_conflict"`` is merged into the
+        report. Because the ON->OFF edge resets the dwell clock, the loser
+        re-engages only through a full min-OFF — deliberately biased toward
+        the stability of the winning direction.
+
+        Args:
+            outputs: The room's already-finalised outputs for this cycle.
+
+        Returns:
+            The outputs with the fast source forced OFF and the report
+            re-stamped (flags + dwell countdown).
+        """
+        fast = self._fast.force_off()
+        self._fast.note_command(False, FastSourceMode.OFF)
+        flags = tuple(
+            dict.fromkeys((*outputs.report.flags, "fast_source_group_conflict"))
+        )
+        report = replace(
+            outputs.report,
+            flags=flags,
+            fast_dwell_remaining_s=self._fast.dwell_remaining_s,
+        )
+        return replace(outputs, fast_source=fast, report=report)
+
+    @property
+    def fast_source_locked_on(self) -> bool:
+        """Whether the fast source runs and is still inside its min-ON lock.
+
+        Read by the group arbiter (K4): a unit locked ON in direction A pins
+        the whole group to A until its dwell elapses — the arbiter never
+        breaks a min-ON. Only a unit that was ALREADY running when this step
+        began counts: a machine that engaged this very cycle has not
+        physically started (its command has not even been written yet) and may
+        be freely arbitrated away.
+        """
+        return (
+            self._fast.state is not FastSourceMode.OFF
+            and self._fast_entry_state is self._fast.state
+            and self._fast.dwell_remaining_s is not None
+        )
 
     # -- internal: result builders -----------------------------------------
 
@@ -528,6 +652,10 @@ class RoomController:
             self._pid.integral != 0.0
         ):
             self._pid.reset()
+            # The bumpless setpoint reference dies with the integral (K1): a
+            # cleared accumulator must not receive a stale-delta re-seed on
+            # the first active cycle back.
+            self._last_pid_setpoint_c = None
 
     def _transitional_result(
         self,
@@ -705,8 +833,24 @@ class RoomController:
         # other. The PI loop is active this cycle: clear the inactivity clock.
         if self._last_pid_mode is not None and mode is not self._last_pid_mode:
             self._pid.reset()
+            self._last_pid_setpoint_c = None
         self._last_pid_mode = mode
         self._inactive_s = 0.0
+
+        # Bumpless setpoint transfer (K1, 2026-07-12): a setpoint change of
+        # dK between PID-active cycles shifts the required steady-state valve
+        # by roughly kp * dK, so the integral — the loop's memory of that
+        # operating point — is re-seeded along instead of discharging the
+        # difference at ki speed (measured: a 23 -> 21 drop left the valve
+        # actively heating an overheated room for 17.4 h / 642 %*h). The
+        # shift follows the mode's error convention (sign INVERTS in COOLING)
+        # and is clamped to the PID output range inside ``shift_integral``.
+        if self._last_pid_setpoint_c is not None:
+            delta_sp = inputs.setpoint_c - self._last_pid_setpoint_c
+            if delta_sp != 0.0:
+                delta_error = delta_sp if mode is Mode.HEATING else -delta_sp
+                self._pid.shift_integral(cfg.kp * delta_error)
+        self._last_pid_setpoint_c = inputs.setpoint_c
 
         # -- Step 6: deadband -> reduce magnitude, keep sign ----------------
         error_db = math.copysign(max(0.0, abs(error) - cfg.deadband_c), error)
@@ -718,6 +862,15 @@ class RoomController:
         # the throttle is active (< 1.0) closes that windup hole (S1/dew-F2,
         # 2026-07-09): hours of throttled cooling no longer bank an integral
         # that would slam the valve open the moment the humidity clears.
+        # K9 (2026-07-12): a back-calculation from the FINAL (throttled)
+        # valve (I += u_final - u_raw per throttled cycle) was empirically
+        # evaluated as a replacement for this freeze and REJECTED: any
+        # tracking anti-windup enforces u_raw ~ u_final, which pins the
+        # integral at ~0 for the whole throttle episode, so the post-release
+        # catch-up was NOT faster (6 h full throttle -> +-0.3 K after 8.6 h
+        # with either variant; partial throttle 9.5 h, worse) — the catch-up
+        # time is a ki-speed property (I must legitimately rebuild 0 -> ~50
+        # pp), not a windup artifact. See docs/DECISIONS.md §11.
         dew_factor = 1.0
         if mode is Mode.COOLING:
             dew_factor = self._cooling_throttle(inputs, room_dew, flags)
@@ -855,7 +1008,18 @@ class RoomController:
 
         Uses the coldest loop supply temperature against the room dew point. If
         humidity or supply data is missing, the throttle is conservative
-        (factor 0.0) and ``"s2_condensation"`` is flagged.
+        (factor 0.0) and ``"s2_throttle"`` is flagged. The flag was renamed
+        from ``"s2_condensation"`` (2026-07-12, B7): that name now belongs
+        exclusively to the independent hard-safety rule in
+        :mod:`~tortoise_ufh.core.safety`, so the panel can tell the graduated
+        local throttle from the hard backstop.
+
+        A STALE humidity reading (held 60-120 min, ``inputs.humidity_stale``,
+        K7 2026-07-12) pads the effective dew point by
+        :data:`_STALE_RH_DEW_PAD_K` and flags ``"rh_stale_gated"`` — the
+        throttle keeps working on the last known moisture level priced up
+        1 K instead of slamming to the conservative full stop, so a
+        slow-reporting RH sensor cannot limit-cycle the cooling.
 
         Args:
             inputs: The room's raw inputs.
@@ -872,18 +1036,23 @@ class RoomController:
             if loop.supply_temperature_c is not None
         ]
         if room_dew is None or not supplies:
-            if "s2_condensation" not in flags:
-                flags.append("s2_condensation")
+            if "s2_throttle" not in flags:
+                flags.append("s2_throttle")
             return 0.0
+        effective_dew = room_dew
+        if inputs.humidity_stale:
+            effective_dew += _STALE_RH_DEW_PAD_K
+            if "rh_stale_gated" not in flags:
+                flags.append("rh_stale_gated")
         t_supply_min = min(supplies)
         factor = cooling_throttle_factor(
             t_supply_min,
-            room_dew,
+            effective_dew,
             margin=cfg.dew_margin_k,
             ramp=cfg.dew_ramp_k,
         )
-        if factor == 0.0 and "s2_condensation" not in flags:
-            flags.append("s2_condensation")
+        if factor == 0.0 and "s2_throttle" not in flags:
+            flags.append("s2_throttle")
         return factor
 
     def _coordinate_fast_source(
@@ -1032,9 +1201,19 @@ class RoomController:
                 if inputs.fast_source_kind is FastSourceKind.HEATER:
                     flags = tuple(dict.fromkeys((*flags, "fast_source_cannot_cool")))
         elif close_valve:
-            # CLOSE_VALVE (S1/S2): park the valve, release the fast source.
+            # CLOSE_VALVE (S1/S2) is a WATER-side action only (K3,
+            # 2026-07-12): the valve is parked, but the AIR-side decision
+            # from the normal coordination (step 14 / transitional) stands.
+            # An S1 floor-overheat must not kill a wanted heat boost, and an
+            # S2 condensation stop must not kill the split — the one source
+            # that can still cool safely (it has its own condensate tray)
+            # exactly when it is humid. This also removes the dwell-clock
+            # sawtooth and the flapping min-runtime flag the per-cycle
+            # force-off used to cause. Mode.OFF / sensor-lost paths still
+            # force the fast source off upstream (their result already
+            # carries an OFF command), so nothing changes there.
             valve = 0.0
-            fast = self._fast.force_off()
+            fast = result.fast_source
         else:
             # FALLBACK_HP_CURVE (S5 watchdog) alone: NEUTRAL position, not a
             # hard close (amendment 2026-07-09, S6) — "defer to the heat-pump
@@ -1098,6 +1277,9 @@ class BuildingController:
         self._controllers: dict[str, RoomController] = {
             name: RoomController(cfg, name=name) for name, cfg in configs.items()
         }
+        # Kept for the group arbiter (K4): the per-room deadband scales the
+        # "error beyond the comfort band" demand strength.
+        self._configs: dict[str, ControllerConfig] = dict(configs)
 
     def step(
         self, inputs: dict[str, RoomInputs], *, dt_seconds: float = 300.0
@@ -1138,12 +1320,16 @@ class BuildingController:
                 rooms[name] = controller.step(room_inputs, dt_seconds=dt_seconds)
             except (ValueError, ArithmeticError) as exc:
                 rooms[name] = self._degraded_room_output(
-                    controller, exc, room_inputs.room_temperature_c
+                    controller, exc, room_inputs.mode, room_inputs.room_temperature_c
                 )
 
             dew = self._eligible_dew_point(room_inputs)
             if dew is not None:
                 dew_points.append(dew)
+
+        # K4 (2026-07-12): one direction per shared outdoor unit — arbitrate
+        # conflicting fast-source commands within each multisplit group.
+        self._arbitrate_fast_groups(inputs, rooms)
 
         global_dew = max(dew_points) + GLOBAL_SAFE_DEW_MARGIN_K if dew_points else None
         sensor_lost = sum(
@@ -1160,7 +1346,155 @@ class BuildingController:
         for controller in self._controllers.values():
             controller.reset()
 
+    def invalidate_trends(self) -> None:
+        """Invalidate every room's filtered trend after a control-cycle gap.
+
+        Adapter hook (R2-F6, 2026-07-12): called when the measured elapsed
+        time hit the adapter's dt clamp (900 s), so the next raw dT/dt sample
+        would divide a longer-than-``dt`` temperature delta by the clamped
+        interval and inflate the trend for 2-3 EMA cycles.
+        """
+        for controller in self._controllers.values():
+            controller.invalidate_trend()
+
+    def notify_fast_source_farewell(self, room_name: str) -> None:
+        """Synchronise one room's machine with a farewell OFF (K10).
+
+        Adapter hook: see :meth:`RoomController.notify_fast_source_farewell`.
+        Unknown room names are ignored (the farewell may race a room removal).
+
+        Args:
+            room_name: The room whose fast source was parked out-of-band.
+        """
+        controller = self._controllers.get(room_name)
+        if controller is not None:
+            controller.notify_fast_source_farewell()
+
     # -- internal helpers ---------------------------------------------------
+
+    def _arbitrate_fast_groups(
+        self,
+        inputs: dict[str, RoomInputs],
+        rooms: dict[str, RoomOutputs],
+    ) -> None:
+        """Enforce ONE fast-source direction per multisplit group (K4).
+
+        Indoor units sharing an outdoor unit (``RoomInputs.fast_source_group``)
+        must never be commanded to heat and cool in the same cycle — a mode
+        conflict locks the aggregate. For every group whose emitted ON
+        commands disagree on direction this cycle:
+
+        1. A room whose machine is ON and still inside its min-ON dwell (or
+           held ON by an S3/S4 emergency) PINS the group to its direction —
+           the arbiter never breaks a min-ON or overrides an emergency.
+        2. With no pinned direction, the direction of the room with the
+           largest comfort-band excess ``max(0, |error| - deadband)`` wins.
+        3. Every losing ON room is rewritten via
+           :meth:`RoomController.resolve_group_conflict` (fast OFF + the
+           ``"fast_source_group_conflict"`` flag); its machine passes through
+           an honest min-OFF before it may re-engage.
+        4. Pathological double-pin (two rooms min-ON-locked in opposite
+           directions, only reachable by adopting an inconsistent physical
+           state at startup) overrides nobody — every conflicting room is
+           flagged and the situation resolves itself when a dwell elapses.
+
+        Rooms without a group, without a fast source, or with an unknown
+        controller are untouched; TRANSITIONAL rooms take part like any
+        other (their per-room error sign is exactly the routine conflict
+        source). Mutates ``rooms`` in place.
+
+        Args:
+            inputs: Per-room inputs of this cycle (group membership, errors).
+            rooms: Per-room outputs of this cycle (mutated in place).
+        """
+        groups: dict[str, list[str]] = {}
+        for name, room_inputs in inputs.items():
+            if (
+                room_inputs.fast_source_group
+                and room_inputs.fast_source_kind is not FastSourceKind.NONE
+                and name in self._controllers
+                and name in rooms
+            ):
+                groups.setdefault(room_inputs.fast_source_group, []).append(name)
+
+        for members in groups.values():
+            on_rooms = [n for n in members if rooms[n].fast_source.on]
+            directions = {rooms[n].fast_source.mode for n in on_rooms}
+            if len(directions) <= 1:
+                continue
+            pinned = {
+                n
+                for n in on_rooms
+                if self._controllers[n].fast_source_locked_on
+                or self._is_safety_forced(rooms[n])
+            }
+            pinned_dirs = {rooms[n].fast_source.mode for n in pinned}
+            if len(pinned_dirs) == 1:
+                winner = next(iter(pinned_dirs))
+            elif pinned_dirs:
+                # Double-pin: flag every conflicting room, override none.
+                for n in on_rooms:
+                    rooms[n] = self._flag_group_conflict(rooms[n])
+                continue
+            else:
+                winning_room = max(
+                    on_rooms,
+                    key=lambda n: self._band_excess_k(inputs[n], n),
+                )
+                winner = rooms[winning_room].fast_source.mode
+            for n in on_rooms:
+                if rooms[n].fast_source.mode is not winner:
+                    rooms[n] = self._controllers[n].resolve_group_conflict(rooms[n])
+
+    def _band_excess_k(self, room_inputs: RoomInputs, name: str) -> float:
+        """Return a room's comfort-band excess ``max(0, |error| - deadband)``.
+
+        The group arbiter's demand strength [K]: how far the room sits
+        OUTSIDE its comfort band. Rooms without a temperature read as 0.
+
+        Args:
+            room_inputs: The room's inputs this cycle.
+            name: The room name (for its deadband).
+
+        Returns:
+            The band excess [K] (>= 0).
+        """
+        t_room = room_inputs.room_temperature_c
+        if t_room is None:
+            return 0.0
+        deadband = self._configs[name].deadband_c
+        return max(0.0, abs(room_inputs.setpoint_c - t_room) - deadband)
+
+    @staticmethod
+    def _is_safety_forced(outputs: RoomOutputs) -> bool:
+        """Whether a room's ON command comes from an S3/S4 emergency force-on.
+
+        Args:
+            outputs: The room's outputs this cycle.
+
+        Returns:
+            ``True`` when an emergency rule pinned the fast source ON.
+        """
+        flags = outputs.report.flags
+        return "s3_emergency_heat" in flags or "s4_emergency_cool" in flags
+
+    @staticmethod
+    def _flag_group_conflict(outputs: RoomOutputs) -> RoomOutputs:
+        """Merge the group-conflict flag into a room's report (no override).
+
+        Used only on the pathological double-pin path where the arbiter
+        cannot force anyone off without breaking a min-ON.
+
+        Args:
+            outputs: The room's outputs this cycle.
+
+        Returns:
+            The outputs with ``"fast_source_group_conflict"`` merged in.
+        """
+        flags = tuple(
+            dict.fromkeys((*outputs.report.flags, "fast_source_group_conflict"))
+        )
+        return replace(outputs, report=replace(outputs.report, flags=flags))
 
     @staticmethod
     def _eligible_dew_point(room_inputs: RoomInputs) -> float | None:
@@ -1170,6 +1504,11 @@ class BuildingController:
         classifier that fills ``RoomReport.dew_excluded_reason``): a ``None``
         reason means COOLING mode, ``cooling_enabled`` and usable temperature +
         humidity — one logic, two consumers.
+
+        A STALE humidity reading (K7, 2026-07-12) pads the room's
+        contribution by :data:`_STALE_RH_DEW_PAD_K`, so the heat pump's
+        supply floor prices the staleness in exactly like the local throttle
+        does.
 
         Args:
             room_inputs: The room's raw inputs.
@@ -1184,7 +1523,10 @@ class BuildingController:
         rh = room_inputs.humidity_pct
         if t_room is None or rh is None:  # narrowed by the classifier above
             return None
-        return dew_point(t_room, rh)
+        dew = dew_point(t_room, rh)
+        if room_inputs.humidity_stale:
+            dew += _STALE_RH_DEW_PAD_K
+        return dew
 
     @staticmethod
     def _unknown_room_output(
@@ -1221,23 +1563,36 @@ class BuildingController:
     def _degraded_room_output(
         controller: RoomController,
         exc: Exception,
+        mode: Mode,
         room_temperature_c: float | None = None,
     ) -> RoomOutputs:
         """Build a safe-degraded output after a room controller raised.
 
-        Holds the controller's last valve position, forces the fast source OFF
-        and flags ``"controller_error"``.
+        Forces the fast source OFF and flags ``"controller_error"``. The valve
+        is MODE-AWARE (K5, 2026-07-12), symmetric with the sensor-lost safe
+        degrade: HEATING holds the controller's last valve position (warm
+        water is bounded by the heat-pump curve), while COOLING /
+        TRANSITIONAL / OFF drive it to 0 — a crashed controller computes
+        neither condensation defence, so a held-open valve would pass
+        unprotected chilled water indefinitely (the last bypass of the dew-F1
+        invariant).
 
         Args:
             controller: The room controller that raised.
             exc: The exception raised.
+            mode: The room's operating mode this cycle (drives the valve rule).
             room_temperature_c: Measured room temperature [degC] echoed into the
                 report, or ``None`` when unavailable.
 
         Returns:
-            A held-valve, fast-OFF :class:`~tortoise_ufh.models.RoomOutputs`.
+            A safe-degraded, fast-OFF :class:`~tortoise_ufh.models.RoomOutputs`.
         """
-        valve = controller.last_valve_pct
+        if mode is Mode.HEATING:
+            valve = controller.last_valve_pct
+            valve_txt = f"Zawor trzyma {valve:.0f}%"
+        else:
+            valve = 0.0
+            valve_txt = "Zawor 0% (tryb bez grzania)"
         report = _passive_report(
             error_c=None,
             trend=None,
@@ -1248,7 +1603,7 @@ class BuildingController:
             flags=("controller_error",),
             explanation=(
                 f"Blad regulatora pokoju '{controller.name}': {exc}. "
-                f"Zawor trzyma {valve:.0f}%, split OFF."
+                f"{valve_txt}, split OFF."
             ),
             room_temperature_c=room_temperature_c,
         )

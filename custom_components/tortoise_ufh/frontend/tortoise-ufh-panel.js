@@ -464,19 +464,37 @@ const STR = {
  * Localised, severity-tagged labels for controller flag codes.
  *
  * Codes mirror the exact strings the report carries: the room-controller
- * flags (`sensor_lost`, `s2_condensation`, `fast_source_cannot_cool`,
- * `fast_source_min_runtime`, `cooling_disabled`, `unknown_room`,
+ * flags (`sensor_lost`, `s2_throttle` — the graduated local dew throttle,
+ * split from the hard rule 2026-07-12 — `rh_stale_gated`,
+ * `fast_source_cannot_cool`, `fast_source_min_runtime`,
+ * `fast_source_group_conflict`, `cooling_disabled`, `unknown_room`,
  * `controller_error`, `fast_source_mismatch`), the adapter-stamped
  * `valve_mismatch` (persistent command-vs-feedback divergence), plus the
  * safety-rule names merged into the report
- * (`s1_floor_overheat`, `s3_emergency_heat`, `s4_emergency_cool`,
- * `s5_watchdog`). `saturated` / `valve_floor` are synthetic labels for the
- * report booleans surfaced as chips in the decision view. Unknown codes fall
- * back to the raw string at `warn` severity. `sev` drives the room status dot.
+ * (`s1_floor_overheat`, `s2_condensation`, `s3_emergency_heat`,
+ * `s4_emergency_cool`, `s5_watchdog`). `saturated` / `valve_floor` are
+ * synthetic labels for the report booleans surfaced as chips in the decision
+ * view. Unknown codes fall back to the raw string at `warn` severity. `sev`
+ * drives the room status dot.
  */
 const FLAG_LABELS = {
   sensor_lost: { pl: "Utrata czujnika", en: "Sensor lost", sev: "problem" },
   s2_condensation: { pl: "Ryzyko kondensacji", en: "Condensation risk", sev: "problem" },
+  s2_throttle: {
+    pl: "Dławienie przy punkcie rosy",
+    en: "Dew-point throttling",
+    sev: "warn",
+  },
+  rh_stale_gated: {
+    pl: "Nieświeża wilgotność (+1 K marginesu)",
+    en: "Stale humidity (+1 K margin)",
+    sev: "warn",
+  },
+  fast_source_group_conflict: {
+    pl: "Konflikt kierunków na wspólnym agregacie",
+    en: "Direction conflict on shared outdoor unit",
+    sev: "warn",
+  },
   s1_floor_overheat: { pl: "Przegrzanie podłogi", en: "Floor overheat", sev: "problem" },
   s3_emergency_heat: { pl: "Awaryjne grzanie", en: "Emergency heat", sev: "problem" },
   s4_emergency_cool: { pl: "Awaryjne chłodzenie", en: "Emergency cooling", sev: "problem" },

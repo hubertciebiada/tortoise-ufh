@@ -53,6 +53,7 @@ from .const import (
     CONF_ENTITY_TEMP_OUTDOOR,
     CONF_ENTITY_TEMP_ROOM,
     CONF_ENTITY_VALVES,
+    CONF_FAST_SOURCE_GROUP,
     CONF_FAST_SOURCE_KIND,
     CONF_HOME_SETPOINT,
     CONF_ROOM_NAME,
@@ -78,7 +79,7 @@ from .core.models import (
     RoomOutputs,
     RoomReport,
 )
-from .readers import HUMIDITY_MAX_AGE_S, UNAVAILABLE_STATES, SourceReader
+from .readers import UNAVAILABLE_STATES, SourceReader
 from .writers import CommandWriter
 
 if TYPE_CHECKING:
@@ -795,10 +796,14 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             if self._last_step_monotonic is None:
                 dt_seconds = self._cycle_seconds
             else:
-                dt_seconds = min(
-                    _MAX_DT_SECONDS,
-                    max(_MIN_DT_SECONDS, now_monotonic - self._last_step_monotonic),
-                )
+                raw_dt = now_monotonic - self._last_step_monotonic
+                dt_seconds = min(_MAX_DT_SECONDS, max(_MIN_DT_SECONDS, raw_dt))
+                if raw_dt > _MAX_DT_SECONDS:
+                    # R2-F6 (2026-07-12): the temperature kept moving for
+                    # LONGER than the clamped dt the core is about to see —
+                    # the next raw dT/dt sample would be inflated and the
+                    # ~15-min EMA would carry the artefact for 2-3 cycles.
+                    self._building.invalidate_trends()
             self._last_step_monotonic = now_monotonic
             try:
                 building_outputs = self._building.step(inputs, dt_seconds=dt_seconds)
@@ -891,14 +896,16 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # Validate humidity independently: an out-of-range reading only nulls
         # the dew-point input rather than degrading the whole room. A stale
         # (frozen-but-present) humidity is the single most dangerous input in
-        # cooling — both condensation defences trust it — so it also carries a
-        # max state age (C4).
-        humidity = self._reader.read_float_state(
-            room_cfg.get(CONF_ENTITY_HUMIDITY),
-            max_age_seconds=HUMIDITY_MAX_AGE_S,
+        # cooling — both condensation defences trust it — so it carries a
+        # TWO-stage age gate (C4 + K7 2026-07-12): fresh <= 60 min, held +
+        # flagged stale to 120 min (the core pads its dew points by +1 K),
+        # unusable beyond.
+        humidity, humidity_stale = self._reader.read_humidity(
+            room_cfg.get(CONF_ENTITY_HUMIDITY)
         )
         if humidity is not None and not 0.0 <= humidity <= 100.0:
             humidity = None
+            humidity_stale = False
         # S6: per-room data age for the core S5 watchdog. A fresh temperature
         # resets the clock; otherwise the age grows from the last fresh sample
         # (or from the first time the room was ever seen).
@@ -910,6 +917,21 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self._room_last_fresh[name] = now
         last_fresh = self._room_last_fresh.setdefault(name, now)
         age_minutes = max(0.0, (now - last_fresh).total_seconds() / 60.0)
+        # Fast-source feedback: on/off + the raw HVAC mode (K4 — the core's
+        # S4 reconciliation sees DIRECTION divergences on shared aggregates).
+        fast_entity = room_cfg.get(CONF_ENTITY_FAST_SOURCE)
+        fast_on = self._reader.read_fast_source_on(fast_entity)
+        fast_hvac = self._reader.read_fast_source_hvac_mode(fast_entity)
+        # K10/R5 (2026-07-12): an ON feedback younger than one cycle after
+        # this entity's farewell OFF is almost certainly the STALE pre-parking
+        # state — after a reload the rebuilt machine would adopt it and write
+        # ON seconds after the farewell OFF. Read it as OFF; a genuinely
+        # running unit re-surfaces on the next cycle (mismatch + re-assert).
+        if fast_on and self._writer.recent_farewell(
+            fast_entity, max_age_s=self._cycle_seconds
+        ):
+            fast_on = False
+            fast_hvac = None
         try:
             loops = self._build_loops(room_cfg)
             return RoomInputs(
@@ -924,14 +946,15 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 fast_source_kind=self._reader.read_fast_source_kind(
                     room_cfg.get(CONF_FAST_SOURCE_KIND)
                 ),
-                fast_source_on=self._reader.read_fast_source_on(
-                    room_cfg.get(CONF_ENTITY_FAST_SOURCE)
-                ),
+                fast_source_on=fast_on,
                 hp_active_for_ufh=self._reader.read_hp_active_for_ufh(
                     room_cfg.get(CONF_ENTITY_HP_ACTIVE)
                 ),
                 cooling_enabled=cooling_enabled,
                 last_update_age_minutes=age_minutes,
+                fast_source_group=str(room_cfg.get(CONF_FAST_SOURCE_GROUP, "") or ""),
+                fast_source_hvac_mode=fast_hvac,
+                humidity_stale=humidity_stale,
             )
         except ValueError:
             _LOGGER.warning(
@@ -1151,7 +1174,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
         Thin delegate to :meth:`CommandWriter.farewell_room` (split always OFF;
         valve driven to 0 in COOLING, left holding in HEATING), passing the
-        coordinator's current global mode.
+        coordinator's current global mode. Afterwards the CORE machine is
+        synchronised with the out-of-band OFF (K10, 2026-07-12): without it
+        the direction machine kept "emitting" ON in shadow, so a return to
+        live could write ON seconds after the farewell OFF — now the way back
+        passes through an honest min-OFF dwell.
 
         Args:
             room_cfg: The room's configuration dict.
@@ -1163,6 +1190,8 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             name,
             mode=self._mode,
         )
+        if self._building is not None:
+            self._building.notify_fast_source_farewell(name)
 
     async def async_farewell_all(self) -> None:
         """Park every live room's actuators (called on config-entry unload)."""

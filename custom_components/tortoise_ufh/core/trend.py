@@ -114,6 +114,13 @@ class TrendEstimator:
         Drops the stale reference so the first recovered cycle takes the
         trend==0 branch instead of dividing a multi-cycle delta by one dt;
         the filtered trend restarts from 0 too (a gap invalidates it).
+
+        Warm-up note (R2-F8, 2026-07-12): after an invalidation the EMA
+        restarts from 0 and needs roughly 2-3 time constants (~30-45 min at
+        the 300 s takt) to track a sustained real trend again. During that
+        window the ``kt`` damping is weaker than nominal — a conservative
+        direction (less damping only right after a data gap, when the trend
+        estimate would be untrustworthy anyway).
         """
         self._prev_t_room = None
         self._filtered = 0.0

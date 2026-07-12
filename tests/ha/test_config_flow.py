@@ -33,6 +33,7 @@ from custom_components.tortoise_ufh.const import (
     CONF_ENTITY_TEMP_OUTDOOR,
     CONF_ENTITY_TEMP_ROOM,
     CONF_ENTITY_VALVES,
+    CONF_FAST_SOURCE_GROUP,
     CONF_FAST_SOURCE_KIND,
     CONF_ROOM_AREA,
     CONF_ROOM_NAME,
@@ -62,6 +63,7 @@ _SALON_ROOM: dict[str, Any] = {
     CONF_ROOM_AREA: 30.0,
     CONF_HAS_FAST_SOURCE: True,
     CONF_FAST_SOURCE_KIND: FAST_SOURCE_KIND_SPLIT,
+    CONF_FAST_SOURCE_GROUP: "outdoor_unit_a",
     CONF_COOLING_ENABLED: True,
     CONF_ADD_ANOTHER: True,
 }
@@ -164,11 +166,14 @@ async def test_full_wizard_creates_entry(
     assert salon[CONF_ENTITY_FAST_SOURCE] == "climate.salon_split"
     assert salon[CONF_COOLING_ENABLED] is True
     assert salon[CONF_ENTITY_VALVES] == ["number.salon_valve"]
+    # The multisplit group key persists with the room (K4, 2026-07-12).
+    assert salon[CONF_FAST_SOURCE_GROUP] == "outdoor_unit_a"
     # The outdoor sensor is global but fanned out to every room.
     assert salon[CONF_ENTITY_TEMP_OUTDOOR] == "sensor.outdoor_temp"
     assert lazienka[CONF_ENTITY_TEMP_OUTDOOR] == "sensor.outdoor_temp"
-    # A floor-only room carries no fast-source entity.
+    # A floor-only room carries no fast-source entity and no group.
     assert CONF_ENTITY_FAST_SOURCE not in lazienka
+    assert lazienka[CONF_FAST_SOURCE_GROUP] == ""
 
 
 async def test_duplicate_location_aborts(

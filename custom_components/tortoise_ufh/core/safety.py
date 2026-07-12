@@ -12,8 +12,13 @@ Rules (each a frozen :class:`SafetyRule` constant):
       hot. No floor sensor exists (PRD Sec. 6), so the *measured supply-water
       temperature* is used as a conservative floor-surface proxy.
     * **S2 condensation** -- close the cooling valve when the supply water drops
-      to within ``DEW_MARGIN_DEFAULT_K`` of the room dew point (defense-in-depth
-      local layer, PRD Sec. 8.4).
+      to the room dew point itself (defense-in-depth backstop, PRD Sec. 8.4).
+      Revised 2026-07-12 (K6): the rule sits BELOW the controller's local
+      throttle ramp (which reaches factor 0 at ``gap <= 0`` with the default
+      knobs), so it only ever fires when the graduated layer has already fully
+      closed the valve or could not compute — a backstop behind a backstop,
+      never a second stacked margin on top of the heat pump's global
+      ``dew + 2 K`` supply floor.
     * **S3 emergency heat** -- force heating when the room falls below a hard
       frost-protection floor.
     * **S4 emergency cool** -- force cooling when the room exceeds a hard ceiling.
@@ -35,7 +40,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from .const import DEW_MARGIN_DEFAULT_K
 from .dew_point import dew_point
 
 # ---------------------------------------------------------------------------
@@ -47,6 +51,20 @@ S1_SUPPLY_ON_C: float = 40.0
 
 S1_SUPPLY_OFF_C: float = 38.0
 """S1 clears when supply-water falls below this, in degC (hysteresis)."""
+
+S2_HARD_MARGIN_K: float = 0.0
+"""Margin [K] the S2 hard rule adds to the room dew point (2026-07-12, K6).
+
+Deliberately ZERO: after the K6 margin de-stacking the graduated local
+throttle already reaches factor 0 at ``supply - dew <= 0`` (with the default
+``dew_margin_k = dew_ramp_k = 2``), and the heat pump's global floor holds the
+supply at ``max(T_dew) + 2 K``. The hard rule is the last backstop below both
+layers — it fires only at physical condensation onset (supply at/below the
+room's dew point), e.g. when the graduated layer could not compute or the
+pump ignored its floor. Before 2026-07-12 this margin was 2 K, which parked
+the hard close INSIDE the working band of the new ramp and would have
+re-strangled the cooling that K6 just freed.
+"""
 
 S3_ROOM_ON_C: float = 5.0
 """S3 trips when room air falls below this, in degC (frost protection)."""
@@ -155,7 +173,12 @@ def _watchdog_value(snapshot: SensorSnapshot) -> float | None:
 
 
 def _condensation_margin(snapshot: SensorSnapshot) -> float | None:
-    """Return ``supply - (dew_point + margin)`` for S2, degC, or ``None``.
+    """Return ``supply - (dew_point + S2_HARD_MARGIN_K)`` for S2, degC.
+
+    With the 2026-07-12 (K6) revision ``S2_HARD_MARGIN_K == 0``, so this is
+    the raw gap between the supply water and the room dew point: the hard rule
+    trips only at physical condensation onset, strictly below the controller's
+    graduated throttle ramp.
 
     ``None`` when any of supply water, room temperature, or a usable humidity
     (> 0 %) is missing, so an under-instrumented room never raises a false
@@ -169,7 +192,7 @@ def _condensation_margin(snapshot: SensorSnapshot) -> float | None:
     ):
         return None
     t_dew = dew_point(snapshot.room_temperature_c, snapshot.humidity_pct)
-    return snapshot.supply_temperature_c - (t_dew + DEW_MARGIN_DEFAULT_K)
+    return snapshot.supply_temperature_c - (t_dew + S2_HARD_MARGIN_K)
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +317,7 @@ S1_FLOOR_OVERHEAT: SafetyRule = SafetyRule(
 
 S2_CONDENSATION: SafetyRule = SafetyRule(
     name="s2_condensation",
-    description="Condensation protection: supply water within margin of dew point",
+    description="Condensation backstop: supply water at/below the room dew point",
     priority=1,
     threshold_on=0.0,
     threshold_off=1.0,
@@ -302,7 +325,14 @@ S2_CONDENSATION: SafetyRule = SafetyRule(
     condition=_condensation_margin,
     trigger_above=False,
 )
-"""S2: close the cooling valve when the dew-point margin < 0, clear above 1 K."""
+"""S2: close the cooling valve when ``supply - dew`` < 0 K, clear above +1 K.
+
+2026-07-12 (K6): the trip point moved from ``dew + 2`` down to the dew point
+itself — the graduated local throttle (factor 0 at ``gap <= 0``) and the heat
+pump's global ``dew + 2 K`` floor act first; this hard rule is the final
+backstop at physical condensation onset. The +1 K clear keeps the hysteresis
+inside the lower half of the local ramp, so recovery stays conservative.
+"""
 
 S3_EMERGENCY_HEAT: SafetyRule = SafetyRule(
     name="s3_emergency_heat",

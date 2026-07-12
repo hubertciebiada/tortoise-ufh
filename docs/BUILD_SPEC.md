@@ -228,6 +228,9 @@ class RoomInputs:
     hp_active_for_ufh: bool | None = None     # False during DHW/defrost -> freeze integrator
     cooling_enabled: bool = True             # per-room "udział w chłodzeniu"
     last_update_age_minutes: float = 0.0     # ADDITIVE (2026-07-09, S6): per-room data age -> S5 watchdog
+    fast_source_group: str = ""              # ADDITIVE (2026-07-12, K4): multisplit outdoor-unit group key
+    fast_source_hvac_mode: str | None = None # ADDITIVE (2026-07-12, K4): raw hvac-mode feedback -> S4 sees direction
+    humidity_stale: bool = False             # ADDITIVE (2026-07-12, K7): held 60-120 min RH -> +1 K dew pad
 
 @dataclass(frozen=True)
 class FastSourceCommand:
@@ -306,9 +309,11 @@ source; the panel renders it as "unlocks in ~N min".
 ```python
 class PIDController:
     def __init__(self, kp: float, ki: float, kd: float = 0.0, *, dt: float = 300.0,
-                 output_min: float = 0.0, output_max: float = 100.0) -> None: ...
+                 output_min: float = 0.0, output_max: float = 100.0,
+                 unwind_factor: float = 1.0) -> None: ...   # ADDITIVE (2026-07-12, K1)
     def compute(self, error: float, *, dt_seconds: float | None = None,
                 freeze_integrator: bool = False) -> float: ...
+    def shift_integral(self, delta: float) -> None: ...     # ADDITIVE (2026-07-12, K1)
     def reset(self) -> None: ...
     @property
     def integral(self) -> float: ...
@@ -322,6 +327,12 @@ when `hp_active_for_ufh is False`). `dt` is per-call: `compute(..., dt_seconds=.
 elapsed interval for the integral and derivative (raises on `dt_seconds <= 0`); when `None` it falls
 back to the configured `dt` (default 300 = 5 min cycle). Validate kp,ki,kd>=0, dt>0,
 output_min<output_max.
+
+**Amendment 2026-07-12 (K1, DECISIONS §11):** (a) `shift_integral(delta)` — external re-seed hook
+(clamped to `[output_min, output_max]`, no-op at `ki == 0`) used by the room controller's bumpless
+setpoint transfer; (b) `unwind_factor >= 1` — while `error * I < 0` (a sign-opposed, i.e. stale,
+integral) the accumulation step runs at `unwind_factor * ki`; it only ever pulls `I` toward zero, so
+equilibrium is untouched. The room controller passes `_INTEGRATOR_UNWIND_FACTOR = 8.0`.
 
 ### 5.2 `controller.py` — `RoomController` (the black box, one per room)
 ```python
@@ -374,6 +385,18 @@ Algorithm (all knobs from `ControllerConfig`, §6.3):
    Additionally: a HEATING<->COOLING transition RESETS the integrator (the error convention flips),
    and >12 h of accumulated inactivity (OFF / TRANSITIONAL / cooling opt-out / sensor lost) clears
    it (one season's integral must not become the first command of the next).
+   *(2026-07-12, K9 — see DECISIONS §11.)* The throttle-freeze STAYS: a back-calculation from the
+   FINAL (throttled) valve was measured and rejected (it pins the integral at ~0 and the
+   post-release catch-up is not faster — a `ki`-speed property, not windup).
+7b. **Bumpless setpoint transfer** *(ADDITIVE 2026-07-12, K1 — see DECISIONS §11)*: when the
+   effective setpoint changed by `dK` since the previous PID-active cycle in the SAME mode,
+   `pid.shift_integral(kp * d_err)` where `d_err = dK` in HEATING and `-dK` in COOLING — the
+   integral (the loop's memory of the operating point) moves WITH the setpoint instead of
+   discharging the difference at `ki` speed. The reference (`_last_pid_setpoint_c`) dies with
+   every PID reset (mode flip, inactivity decay, `reset()`), so no stale delta is ever applied.
+   Together with the PID's `unwind_factor = 8` (a sign-opposed integral discharges 8× faster,
+   §5.1) this is what makes a daily night setback behave: measured 17.4 h → 0.8 h of active
+   heating above a freshly lowered setpoint.
 8. **PID**: `pid_out = pid.compute(error_db, dt_seconds=dt_seconds, freeze_integrator=freeze)`
    -> 0..100 (the integral accumulates the step's REAL `dt_seconds`).
 9. **Trend damping** (anti-overshoot, the "człon trendu"): subtract `kt * trend_toward_setpoint`.
@@ -390,8 +413,18 @@ Algorithm (all knobs from `ControllerConfig`, §6.3):
 12. **Cooling dew-point local throttle (S2, per room)**: only in COOLING and `cooling_enabled`.
     Compute `T_dew = dew_point(T_room, humidity)`. Take coldest loop supply `t_supply_min` (from
     `inputs.loops`). `factor = cooling_throttle_factor(t_supply_min, T_dew, margin=config.dew_margin_k,
-    ramp=config.dew_ramp_k)` in [0,1]; `valve *= factor`; if `factor==0` flag `"s2_condensation"`.
+    ramp=config.dew_ramp_k)` in [0,1]; `valve *= factor`; if `factor==0` flag `"s2_throttle"`.
     (When humidity or supply missing -> be conservative: factor toward 0, flag.)
+    *(REVISED 2026-07-12, K6 — owner decision "tylko pompa +2"; see DECISIONS §11.)* The ramp
+    ENDS at `dew_margin_k` instead of starting there: `factor = 1` at `gap >= margin` (full
+    cooling exactly on the heat pump's global `dew + 2 K` floor), linear down to `0` at
+    `gap <= max(0, margin - ramp)` (the room's actual dew point with the defaults). The local
+    layer no longer stacks a second margin on the pump floor — it is the emergency backstop
+    below it (and the hard S2 rule in `safety.py` sits at the dew point itself,
+    `S2_HARD_MARGIN_K = 0`, trip `gap < 0` / clear `> +1 K`). A STALE humidity
+    (`inputs.humidity_stale`, K7) pads the effective dew by +1 K and flags `"rh_stale_gated"`.
+    The flag rename (`"s2_throttle"`; previously `"s2_condensation"`) leaves the old name
+    exclusively to the hard-safety rule.
     A COOLING room with `cooling_enabled=False` never reaches this step: it short-circuits
     (before step 5) to valve 0, fast source OFF, flag `"cooling_disabled"` — an opted-out room
     must never receive chilled water, which would bypass both condensation defences.
@@ -414,12 +447,16 @@ Algorithm (all knobs from `ControllerConfig`, §6.3):
       long outage counts toward the min-OFF wait); flag `"fast_source_min_runtime"` when a
       change is blocked by the timer.
     - **Physical-state sync (S4):** the first observed `fast_source_on` feedback wins over a cold
-      machine — a running unit is adopted as ON (direction from the global mode), a stopped one
-      as OFF — and the dwell timer is re-seeded to 0 (a FULL dwell before any change), so an HA
-      restart/reload (= every tuning change) can never short-cycle a compressor. Later feedback
-      that disagrees with the previous cycle's command raises the additive
-      `"fast_source_mismatch"` flag; the machine stays the owner (the adapter re-asserts).
-      Without feedback (`fast_source_on is None`) the legacy free first transition is kept.
+      machine — a running unit is adopted as ON (direction from the reported
+      `fast_source_hvac_mode` when unambiguous, else from the global mode; K4 2026-07-12), a
+      stopped one as OFF — and the dwell timer is re-seeded to 0 (a FULL dwell before any
+      change), so an HA restart/reload (= every tuning change) can never short-cycle a
+      compressor. Later feedback that disagrees with the previous cycle's command raises the
+      additive `"fast_source_mismatch"` flag — since 2026-07-12 (K4) this comparison also sees
+      the DIRECTION: a unit physically running a single-direction HVAC mode opposite to the
+      command flags too (the bool-only comparison was blind to multisplit standby / manual
+      reversal). The machine stays the owner (the adapter re-asserts). Without feedback
+      (`fast_source_on is None`) the legacy free first transition is kept.
     - **Anti priority-inversion:** the split decision NEVER reduces/holds the valve; floor stays base.
       Split only *adds* boost above the threshold and releases once inside the comfort band.
     - Command (S12): `on=True, mode=HEATING|COOLING (per machine state),
@@ -434,11 +471,17 @@ After step 15 two post-processing passes run on EVERY path (including safe degra
   across cycles) is fed the governing loop supply (hottest in heating / coldest in cooling), the
   room temperature and humidity; if any rule triggers, the override replaces the computed valve /
   fast-source command and the rule names are merged into the report flags.
-  *(Amendment 2026-07-09, S5+S7 — see DECISIONS §6.)* The override decides the **water side and
-  the air side independently** across all active rules: any `CLOSE_VALVE` rule (S1/S2) parks the
-  valve at 0, but an active S3 (`EMERGENCY_HEAT`) / S4 (`EMERGENCY_COOL`) still
-  runs the fast source — S1 closing an overheated floor must not silence the only remaining
-  heat source of a freezing room. A safety force-ON goes through `_force_fast_on`, which keeps
+  *(Amendment 2026-07-09, S5+S7 — see DECISIONS §6; COMPLETED 2026-07-12, K3 — see DECISIONS
+  §11.)* The override decides the **water side and the air side independently** across all
+  active rules: any `CLOSE_VALVE` rule (S1/S2) parks the valve at 0, but an active S3
+  (`EMERGENCY_HEAT`) / S4 (`EMERGENCY_COOL`) still runs the fast source — S1 closing an
+  overheated floor must not silence the only remaining heat source of a freezing room.
+  Since 2026-07-12 (K3) a CLOSE_VALVE **without** a parallel emergency no longer touches the
+  fast source at all: the air-side decision from the normal coordination (step 14 /
+  transitional) stands — an S1 keeps a wanted boost running, an S2 in cooling keeps the split
+  (the one source that can still cool safely) running, and the per-cycle force-off's dwell-clock
+  sawtooth plus the flapping `"fast_source_min_runtime"` flag are gone. Mode.OFF / sensor-lost
+  paths still force OFF upstream. A safety force-ON goes through `_force_fast_on`, which keeps
   the fast-source direction machine in sync (state set to the commanded direction, timer
   restarted on any state change) so releasing the override hands a *running* machine to the
   min-ON dwell instead of instantly stopping a fresh compressor. The override **never writes
@@ -470,15 +513,34 @@ class BuildingController:
     def __init__(self, configs: dict[str, ControllerConfig]) -> None: ...
     def step(self, inputs: dict[str, RoomInputs], *, dt_seconds: float = 300.0) -> BuildingOutputs: ...
     def reset(self) -> None: ...
+    def invalidate_trends(self) -> None: ...                       # ADDITIVE (2026-07-12, R2-F6)
+    def notify_fast_source_farewell(self, room_name: str) -> None: ...  # ADDITIVE (2026-07-12, K10)
 ```
 - One `RoomController` per room. Runs each `step`.
 - **Global safe dew point:** over rooms where `mode==COOLING and cooling_enabled` with a usable
   room temperature and humidity (eligibility decided by the shared `classify_dew_eligibility`
   helper, §4 — one classifier, two consumers),
   compute `T_dew_i = dew_point(T_room_i, rh_i)`, take `max_i`, add `config dew margin (2K)` ->
-  `global_safe_dew_point_c`. `None` if no eligible room.
+  `global_safe_dew_point_c`. `None` if no eligible room. A STALE humidity
+  (`humidity_stale`, K7 2026-07-12) pads that room's contribution by +1 K.
+- **Multisplit group arbiter** *(ADDITIVE 2026-07-12, K4 — see DECISIONS §11)*: after stepping
+  all rooms, rooms sharing a non-empty `RoomInputs.fast_source_group` are direction-arbitrated —
+  ONE direction per group per cycle. A unit that was already running under its min-ON lock (or
+  is S3/S4-forced) pins the group's direction; otherwise the room with the largest comfort-band
+  excess `max(0, |error| - deadband)` wins. Losing ON commands are rewritten through
+  `RoomController.resolve_group_conflict` (fast OFF + flag `"fast_source_group_conflict"`,
+  dwell reset -> an honest min-OFF before re-engaging). A pathological double-pin (two opposite
+  min-ON locks, only reachable by adopting an inconsistent physical state) overrides nobody and
+  flags every conflicting room. Ungrouped rooms are untouched.
 - Never raises on a single room's failure; a room that errors becomes a safe-degraded `RoomOutputs`
-  with a flag.
+  with a flag — MODE-AWARE since 2026-07-12 (K5): HEATING holds the last healthy valve,
+  COOLING/TRANSITIONAL/OFF close to 0 (a crashed controller computes neither condensation
+  defence), symmetric with the sensor-loss degrade of step 1.
+- `invalidate_trends()`: adapter hook for a control-cycle gap that hit the adapter's dt clamp
+  (900 s) — restarts every room's trend filter so the clamped dt cannot inflate the next raw
+  dT/dt sample. `notify_fast_source_farewell(room)`: adapter hook after the C5 farewell write —
+  transitions the room's fast machine to OFF (dwell reset), so live -> shadow -> live passes an
+  honest min-OFF instead of an instant ON (K10).
 
 ---
 
@@ -504,10 +566,14 @@ class ControllerConfig:
     boost_offset_c: float = 1.0          # split engages beyond this |error|; must be > deadband_c (D2)
     fast_min_on_minutes: float = 10.0
     fast_min_off_minutes: float = 10.0
-    dew_margin_k: float = 2.0            # local S2 margin
-    dew_ramp_k: float = 2.0             # graduated throttle ramp width
+    dew_margin_k: float = 2.0            # gap at which the local throttle is FULLY OPEN
+                                         # (K6 2026-07-12: the ramp ENDS here — the same design
+                                         # gap the pump's global dew floor already guarantees)
+    dew_ramp_k: float = 2.0             # ramp width BELOW dew_margin_k (K6: previously above)
     cycle_seconds: float = 300.0        # 5 min
-    valve_write_threshold_pct: float = 2.0
+    valve_write_threshold_pct: float = 5.0   # 2.0 -> 5.0 (K2b 2026-07-12: measured, 2 pp did
+                                         # NOT bound kt's noise cost — 11.2 pp/h @ sigma 0.05;
+                                         # 5 pp cuts it to 1.4 pp/h at zero regulation cost)
     # __post_init__: all gains >=0, 0<=valve_floor<=100, deadband>=0, margins>=0, cycle>0,
     # boost_offset_c > deadband_c, ff_neutral_c in [-30,40], ff_max_pct in [0,100]
 
@@ -549,6 +615,10 @@ class SimScenario:
     weather_comp: WeatherCompCurve | None = None    # twin heating supply curve (2026-07-09)
     cooling_comp: CoolingCompCurve | None = None    # twin cooling supply curve
     initial_temperature_c: float | None = None      # initial node temp (summer scenarios)
+    setpoint_schedule: tuple[tuple[float, float], ...] = ()  # ADDITIVE (2026-07-12, K1):
+                                         # (minute, home_setpoint_c) pairs, strictly increasing;
+                                         # the harness re-applies setpoints from each minute on —
+                                         # enables the night_setback operating-point gate
 ```
 `RCParams`, `ModelOrder`, `RCModel` are **identical in spirit to pump-ahead** (blueprint §3 model.py):
 3R3C `x=[T_air,T_slab,T_wall]`, SISO `u=[Q_floor]`, `d=[T_out,Q_sol,Q_int]`, ZOH via augmented matrix
@@ -626,9 +696,14 @@ Mirror blueprint §4 closely, adapted to our contract:
   Include: `steady_heating`, `cold_snap` (with a realistic `WeatherCompCurve`), `solar_overshoot`,
   `spring_transition` (mode transitional), `hot_july_floor_cooling` (mode cooling, summer ground +
   moderate shaded GHI + realistic humidity -> the S2 throttle and the global dew limit genuinely
-  modulate the loop), `sensor_dropout`, `split_boost` (2.5 kW split boost on a single room).
-  **ALL scenarios gate the merge** in `tests/simulation/test_scenarios.py`; `steady_heating`
-  additionally runs at BOTH dt = 60 s and the production 300 s takt (2026-07-09, C7c/S11/S13).
+  modulate the loop), `night_setback` (ADDITIVE 2026-07-12, K1: 4 days of a 21<->19 degC schedule
+  via `setpoint_schedule` on the bungalow — the operating-point gate: bounded heating-above-band
+  integral, prompt post-setback close, bounded sag), `sensor_dropout`, `split_boost` (2.5 kW split
+  boost on a single room).
+  **ALL scenarios gate the merge** in `tests/simulation/test_scenarios.py`; `steady_heating` and
+  `hot_july_floor_cooling` (B8, 2026-07-12) additionally run at BOTH dt = 60 s and the production
+  300 s takt (2026-07-09, C7c/S11/S13). `cold_snap` also asserts the recovery overshoot
+  (<= 0.5 K from 12 h after the weather step; K8 2026-07-12).
 - `building_profiles.py`: factory functions returning `BuildingConfig`, `BUILDING_PROFILES` registry.
   Include a `modern_bungalow(t_ground=14.0)` multi-room reference (parterowy, ~13 UFH loops, HP
   ~4.9 kW, wylewka ~7 cm, lat 50.5/lon 19.5 — from the PRD reference house) and single-room
@@ -701,14 +776,24 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   **Input hardening (amendment 2026-07-09, C3+C4+S8 — fixed constants, deliberately NOT config
   knobs):** the room temperature passes a plausibility gate — range −10..50 °C plus a
   rate-of-change gate (a sample jumping > 4 K from the last accepted value is rejected like a
-  missing reading; two consecutive mutually consistent samples accept the new level). A
-  present-but-frozen state is aged out via `last_reported`/`last_updated`: room temperature
-  older than 45 min and humidity older than 60 min are treated as unavailable (WITHOUT the
-  short cache fallback — the cache would hold the same stale value; stale RH would otherwise
-  fool BOTH condensation layers). Valve feedback is validated per loop (an out-of-range reading
-  nulls only that loop, never degrading the room to `sensor_lost`), and a LIVE room whose
-  feedback diverges from the last written command by > 10 pp for 3 consecutive cycles gets a
-  `valve_mismatch` report flag.
+  missing reading; a consistent sample taken **at least ~one nominal cycle later** — 270 s, B5
+  2026-07-12 — accepts the new level; a debounced recompute burst can no longer confirm a bogus
+  spike within seconds). A present-but-frozen state is aged out via
+  `last_reported`/`last_updated`: room temperature older than 45 min is treated as unavailable
+  (WITHOUT the short cache fallback — the cache would hold the same stale value). **Humidity is
+  TWO-stage (K7, 2026-07-12):** ≤ 60 min fresh; 60-120 min the LAST value is served with
+  `RoomInputs.humidity_stale=True` (the core pads both protective dew points by +1 K and flags
+  `rh_stale_gated`) so a threshold-reporting RH sensor cannot limit-cycle the cooling; > 120 min
+  unavailable (conservative full stop). Valve feedback is validated per loop (an out-of-range
+  reading nulls only that loop, never degrading the room to `sensor_lost`), and a LIVE room
+  whose feedback diverges from the last written command by > 10 pp for 3 consecutive cycles gets
+  a `valve_mismatch` report flag. When the measured step interval exceeds the 900 s dt clamp,
+  the coordinator calls `BuildingController.invalidate_trends()` (R2-F6) so the clamped dt
+  cannot inflate the next trend sample.
+  **Multisplit groups (K4, 2026-07-12):** per-room optional `CONF_FAST_SOURCE_GROUP` (config
+  flow room step; generic labels like `outdoor_unit_a`) is passed to the core as
+  `RoomInputs.fast_source_group`; the fast-source read path also passes the raw climate state
+  as `RoomInputs.fast_source_hvac_mode`, so the core reconciliation sees DIRECTION divergences.
   **Mode persistence (S9):** the global mode is persisted in the setpoint Store and restored on
   startup (a configured, available mode entity still wins), so a restart in July never falls
   back to heating logic.
@@ -716,7 +801,11 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   one-shot safe parking of the released actuators: split **OFF** always; valve → **0** when the
   global mode is COOLING (an orphaned open valve would keep passing chilled water outside both
   dew defences), position left untouched in HEATING (warm water is bounded by the HP curve;
-  holding keeps the house warm).
+  holding keeps the house warm). *(K10, 2026-07-12.)* After the write the coordinator calls
+  `BuildingController.notify_fast_source_farewell(room)` so the core machine mirrors the OFF
+  (honest min-OFF on the way back to live), and a module-level farewell registry (surviving
+  entry reloads) makes the read path treat an ON feedback younger than one cycle after the
+  farewell as OFF (R5 — a stale pre-parking state must not be adopted and re-written as ON).
 - **`number.py`**: `NumberEntity` for global **home temperature** (writable; range 5..30, step 0.5) and
   one per-room **offset** (writable; range -5..+5, step 0.5). `async_set_native_value` -> coordinator
   setter -> `async_set_updated_data`. These are the setpoint source of truth (config exposure decision).

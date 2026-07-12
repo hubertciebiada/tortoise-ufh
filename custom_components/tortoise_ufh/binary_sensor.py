@@ -51,6 +51,10 @@ if TYPE_CHECKING:
 # core RoomController emits in ``RoomReport.flags``).
 _FLAG_SENSOR_LOST = "sensor_lost"
 _FLAG_S2_CONDENSATION = "s2_condensation"
+# The graduated local throttle's full-stop flag, split from the hard rule
+# 2026-07-12 (B7): the "condensation protection active" entity keeps firing
+# on EITHER layer, exactly like it did when both shared one flag string.
+_FLAG_S2_THROTTLE = "s2_throttle"
 
 
 # ---------------------------------------------------------------------------
@@ -97,13 +101,19 @@ def _output_saturated(runtime: RoomRuntime) -> bool:
 def _s2_condensation_active(runtime: RoomRuntime) -> bool:
     """Return whether per-room S2 dew-point protection fully throttled cooling.
 
+    Covers BOTH protection layers (flag split 2026-07-12, B7): the graduated
+    local throttle's full stop (``"s2_throttle"``) and the independent hard
+    safety rule (``"s2_condensation"``) — either means the room's cooling is
+    condensation-stopped, which is what this PROBLEM entity always reported.
+
     Args:
         runtime: The room's runtime payload.
 
     Returns:
-        ``True`` when ``"s2_condensation"`` is present in the report flags.
+        ``True`` when either S2 flag is present in the report flags.
     """
-    return _FLAG_S2_CONDENSATION in runtime.report.flags
+    flags = runtime.report.flags
+    return _FLAG_S2_CONDENSATION in flags or _FLAG_S2_THROTTLE in flags
 
 
 # Per-room binary-sensor descriptions.

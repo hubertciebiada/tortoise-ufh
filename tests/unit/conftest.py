@@ -78,8 +78,12 @@ def make_inputs(
     outdoor_temperature_c: float | None = None,
     loops: tuple[LoopInput, ...] = (),
     fast_source_kind: FastSourceKind = FastSourceKind.NONE,
+    fast_source_on: bool | None = None,
     hp_active_for_ufh: bool | None = None,
     cooling_enabled: bool = True,
+    fast_source_group: str = "",
+    fast_source_hvac_mode: str | None = None,
+    humidity_stale: bool = False,
 ) -> RoomInputs:
     """Build a :class:`RoomInputs` with test-friendly keyword defaults.
 
@@ -91,9 +95,15 @@ def make_inputs(
         outdoor_temperature_c: Outdoor temperature [degC], or ``None``.
         loops: UFH loop probes/valve feedback.
         fast_source_kind: Kind of fast source available.
+        fast_source_on: Physical on/off feedback of the fast source, or
+            ``None``.
         hp_active_for_ufh: Heat-pump availability for UFH (freeze flag), or
             ``None``.
         cooling_enabled: Whether the room participates in cooling.
+        fast_source_group: Multisplit outdoor-unit group key (K4), or ``""``.
+        fast_source_hvac_mode: Raw HVAC-mode feedback string (K4), or ``None``.
+        humidity_stale: Whether ``humidity_pct`` is a held 60-120 min old
+            reading (K7).
 
     Returns:
         A validated :class:`RoomInputs`.
@@ -106,6 +116,10 @@ def make_inputs(
         outdoor_temperature_c=outdoor_temperature_c,
         loops=loops,
         fast_source_kind=fast_source_kind,
+        fast_source_on=fast_source_on,
         hp_active_for_ufh=hp_active_for_ufh,
         cooling_enabled=cooling_enabled,
+        fast_source_group=fast_source_group,
+        fast_source_hvac_mode=fast_source_hvac_mode,
+        humidity_stale=humidity_stale,
     )

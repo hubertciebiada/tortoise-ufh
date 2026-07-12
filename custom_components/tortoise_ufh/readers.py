@@ -34,6 +34,7 @@ _LOGGER = logging.getLogger(__name__)
 
 __all__ = [
     "HUMIDITY_MAX_AGE_S",
+    "HUMIDITY_STALE_MAX_AGE_S",
     "ROOM_TEMP_MAX_AGE_S",
     "UNAVAILABLE_STATES",
     "VALVE_DOMAIN",
@@ -58,7 +59,19 @@ _TEMP_MAX_JUMP_K: float = 4.0
 
 A sample jumping further than this from the last accepted value is rejected
 (treated as a missing reading); two consecutive mutually consistent samples
-accept the new level, so a real fast change is adopted within two cycles.
+taken at least :data:`_TEMP_CONFIRM_MIN_AGE_S` apart accept the new level, so
+a real fast change is adopted within about two control cycles.
+"""
+
+_TEMP_CONFIRM_MIN_AGE_S: float = 270.0
+"""Minimum age of a pending jump candidate before a consistent sample may
+confirm it [s] (B5, 2026-07-12).
+
+The confirmation must span REAL time, not merely two reads: a debounced
+recompute burst used to deliver the "second consistent sample" 2-4 seconds
+after the first, defeating the 4 K/cycle plausibility gate. 270 s is ~0.9 of
+the nominal 300 s cycle, tolerating scheduler jitter without stretching the
+two-cycle adoption promise.
 """
 
 ROOM_TEMP_MAX_AGE_S: float = 45.0 * 60.0
@@ -70,11 +83,25 @@ let alone chilled water.
 """
 
 HUMIDITY_MAX_AGE_S: float = 60.0 * 60.0
-"""Max age of a humidity state before it is treated as unavailable [s].
+"""Age up to which a humidity state counts as FRESH [s].
 
 The most dangerous stale input: a frozen winter RH makes BOTH condensation
 defences (global safe dew point and local S2 throttle) agree to pass water
-below the real dew point. Stale RH -> None -> the core cools nothing blindly.
+below the real dew point. Since 2026-07-12 (K7) staleness is TWO-stage — see
+:data:`HUMIDITY_STALE_MAX_AGE_S`.
+"""
+
+HUMIDITY_STALE_MAX_AGE_S: float = 120.0 * 60.0
+"""Hard age limit for a humidity state [s] (K7, 2026-07-12).
+
+Between :data:`HUMIDITY_MAX_AGE_S` and this limit the LAST value is still
+served, flagged stale (``RoomInputs.humidity_stale``) — the core then pads
+the effective dew point by +1 K instead of dropping the reading entirely.
+Rationale: threshold-reporting RH sensors (e.g. SCD41 over Matter) can
+legitimately pause near 60 min; a binary gate at 60 min made the cooling
+limit-cycle (RH fresh -> cool -> aged out -> full stop -> repeat). Beyond
+this limit the reading is unusable and reads as ``None`` (full conservative
+stop).
 """
 
 _HP_INACTIVE_STATES: frozenset[str] = frozenset(
@@ -136,9 +163,10 @@ class SourceReader:
         # white-box contract read AND written by the HA test suite.
         self.entity_cache: dict[str, tuple[float, datetime]] = {}
         # Room-temperature plausibility state (C3): per-entity last accepted
-        # value and the pending candidate awaiting a second consistent sample.
+        # value and the pending candidate awaiting a consistent confirmation
+        # sample at least _TEMP_CONFIRM_MIN_AGE_S later (B5, 2026-07-12).
         self._temp_last_accepted: dict[str, float] = {}
-        self._temp_pending: dict[str, float] = {}
+        self._temp_pending: dict[str, tuple[float, datetime]] = {}
 
     def read_valve_position(self, entity_id: str | None) -> float | None:
         """Read a valve actuator's position [0..100 %], dispatching by domain.
@@ -195,8 +223,11 @@ class SourceReader:
         when it is outside :data:`_TEMP_PLAUSIBLE_MIN_C` ..
         :data:`_TEMP_PLAUSIBLE_MAX_C` (e.g. the DS18B20 85 degC power-on-reset)
         or when it jumps more than :data:`_TEMP_MAX_JUMP_K` from the last
-        accepted value. Two consecutive mutually consistent samples accept a
-        genuinely new level, so a real fast change is adopted within two
+        accepted value. A consistent sample taken at least
+        :data:`_TEMP_CONFIRM_MIN_AGE_S` after the first accepts the genuinely
+        new level (B5, 2026-07-12: the confirmation must span real time — a
+        debounced recompute burst used to confirm a bogus jump within
+        seconds), so a real fast change is adopted within about two control
         cycles instead of being locked out forever.
 
         Args:
@@ -223,24 +254,94 @@ class SourceReader:
             return None
         last = self._temp_last_accepted.get(entity_id)
         pending = self._temp_pending.get(entity_id)
+        now = datetime.now(UTC)
         jumped = last is not None and abs(value - last) > _TEMP_MAX_JUMP_K
-        confirmed = pending is not None and abs(value - pending) <= _TEMP_MAX_JUMP_K
+        confirmed = (
+            pending is not None
+            and abs(value - pending[0]) <= _TEMP_MAX_JUMP_K
+            and (now - pending[1]).total_seconds() >= _TEMP_CONFIRM_MIN_AGE_S
+        )
         if jumped and not confirmed:
-            _LOGGER.warning(
-                "Entity %s jumped %.1f -> %.1f degC in one cycle; holding "
-                "sample for confirmation",
-                entity_id,
-                last,
-                value,
-            )
-            self._temp_pending[entity_id] = value
+            if pending is None or abs(value - pending[0]) > _TEMP_MAX_JUMP_K:
+                # First sighting of this level (or the candidate moved again):
+                # (re)start the confirmation clock.
+                _LOGGER.warning(
+                    "Entity %s jumped %.1f -> %.1f degC in one cycle; holding "
+                    "sample for confirmation",
+                    entity_id,
+                    last,
+                    value,
+                )
+                self._temp_pending[entity_id] = (value, now)
             return None
-        # Either plausible against the last accepted value, or the second
-        # consecutive sample consistent with the pending candidate — the new
-        # level is real (e.g. a window opened), accept it.
+        # Either plausible against the last accepted value, or a consistent
+        # confirmation at least one nominal cycle after the candidate — the
+        # new level is real (e.g. a window opened), accept it.
         self._temp_last_accepted[entity_id] = value
         self._temp_pending.pop(entity_id, None)
         return value
+
+    def read_humidity(self, entity_id: str | None) -> tuple[float | None, bool]:
+        """Read a humidity entity with the two-stage age gate (K7, 2026-07-12).
+
+        Age <= :data:`HUMIDITY_MAX_AGE_S`: the reading is FRESH. Between that
+        and :data:`HUMIDITY_STALE_MAX_AGE_S`: the LAST value is still served,
+        marked stale — the core pads its dew points by +1 K instead of
+        dropping straight to the conservative full stop, so a
+        threshold-reporting RH sensor cannot limit-cycle the cooling. Older:
+        ``(None, False)`` (unusable).
+
+        Args:
+            entity_id: The humidity entity id, or ``None`` / empty.
+
+        Returns:
+            ``(value_pct, stale)`` — the humidity [%] (or ``None``) and
+            whether it is a held 60-120 min old reading.
+        """
+        if not entity_id:
+            return None, False
+        value = self.read_float_state(
+            entity_id, max_age_seconds=HUMIDITY_STALE_MAX_AGE_S
+        )
+        if value is None:
+            return None, False
+        state = self._hass.states.get(entity_id)
+        if state is None or state.state.lower() in UNAVAILABLE_STATES:
+            # Value served from the short stale cache (<= 5 min old): fresh.
+            return value, False
+        reported = getattr(state, "last_reported", None) or state.last_updated
+        age_s = (datetime.now(UTC) - reported).total_seconds()
+        if age_s > HUMIDITY_MAX_AGE_S:
+            _LOGGER.debug(
+                "Entity %s humidity is %.0f min old; serving as STALE (+1 K "
+                "dew pad in the core)",
+                entity_id,
+                age_s / 60.0,
+            )
+            return value, True
+        return value, False
+
+    def read_fast_source_hvac_mode(self, entity_id: str | None) -> str | None:
+        """Read the fast source's raw HVAC-mode feedback string (K4).
+
+        A ``climate`` entity's state IS its HVAC mode (``"heat"`` /
+        ``"cool"`` / ``"off"`` / ``"dry"`` ...). The core uses unambiguous
+        single-direction values to reconcile the commanded DIRECTION with the
+        physical unit (multisplit standby, manual reversal).
+
+        Args:
+            entity_id: The fast-source climate entity id, or ``None`` / empty.
+
+        Returns:
+            The lower-cased state string, or ``None`` when no entity is
+            configured or its state is unavailable.
+        """
+        if not entity_id:
+            return None
+        state = self._hass.states.get(entity_id)
+        if state is None or state.state.lower() in UNAVAILABLE_STATES:
+            return None
+        return state.state.lower()
 
     @staticmethod
     def read_fast_source_kind(raw_kind: str | None) -> FastSourceKind:

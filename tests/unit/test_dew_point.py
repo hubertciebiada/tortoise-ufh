@@ -2,8 +2,9 @@
 
 Covers the Magnus ``dew_point`` formula against textbook psychrometric
 reference points (tolerance < 0.1 degC) and the graduated
-``cooling_throttle_factor`` (0 below margin, 1 above margin + ramp, linear
-between), plus input validation.
+``cooling_throttle_factor`` (K6 semantics 2026-07-12: 1 at/above margin —
+full cooling on the pump's dew floor — ramping linearly to 0 at
+``max(0, margin - ramp)``), plus input validation.
 
 Units:
     Temperatures: degC
@@ -110,43 +111,60 @@ class TestDewPointValidation:
 
 
 class TestCoolingThrottleFactor:
-    """Graduated cooling throttle: 0 below margin, 1 above margin + ramp."""
+    """Graduated cooling throttle, K6 semantics (2026-07-12).
 
-    def test_returns_zero_below_margin(self) -> None:
-        """gap <= margin fully throttles the valve (0.0)."""
-        # gap = t_surface - t_dew = 1.0 <= margin 2.0.
-        assert cooling_throttle_factor(16.0, 15.0, margin=2.0, ramp=2.0) == 0.0
+    The ramp ENDS at ``margin`` (full cooling on the heat pump's global dew
+    floor) and spans ``(max(0, margin - ramp), margin)``; with the defaults
+    the valve closes fully only at the room's actual dew point. The old
+    semantics (ramp ABOVE the margin) stacked a second margin on the pump
+    floor and strangled the cooling — these tests pin the NEW contract.
+    """
 
-    def test_returns_zero_at_margin_boundary(self) -> None:
-        """gap exactly equal to margin is fully throttled (0.0)."""
-        # gap = 2.0 == margin 2.0.
-        assert cooling_throttle_factor(17.0, 15.0, margin=2.0, ramp=2.0) == 0.0
+    def test_returns_zero_at_dew_point(self) -> None:
+        """gap <= max(0, margin - ramp) fully throttles the valve (0.0)."""
+        # gap = 0.0 <= lo = max(0, 2 - 2) = 0: supply AT the dew point.
+        assert cooling_throttle_factor(15.0, 15.0, margin=2.0, ramp=2.0) == 0.0
 
-    def test_returns_one_above_margin_plus_ramp(self) -> None:
-        """gap >= margin + ramp opens the valve fully (1.0)."""
-        # gap = 5.0 >= margin 2.0 + ramp 2.0.
+    def test_returns_zero_below_dew_point(self) -> None:
+        """A supply below the dew point is fully throttled (0.0)."""
+        # gap = -1.0 < 0.
+        assert cooling_throttle_factor(14.0, 15.0, margin=2.0, ramp=2.0) == 0.0
+
+    def test_returns_one_at_margin(self) -> None:
+        """gap exactly equal to margin opens fully (1.0) — the pump floor."""
+        # gap = 2.0 == margin 2.0 (K6: full cooling right on the dew floor).
+        assert cooling_throttle_factor(17.0, 15.0, margin=2.0, ramp=2.0) == 1.0
+
+    def test_returns_one_above_margin(self) -> None:
+        """gap >= margin opens the valve fully (1.0)."""
+        # gap = 5.0 >= margin 2.0.
         assert cooling_throttle_factor(20.0, 15.0, margin=2.0, ramp=2.0) == 1.0
-
-    def test_returns_one_at_ramp_top_boundary(self) -> None:
-        """gap exactly equal to margin + ramp opens fully (1.0)."""
-        # gap = 4.0 == margin 2.0 + ramp 2.0.
-        assert cooling_throttle_factor(19.0, 15.0, margin=2.0, ramp=2.0) == 1.0
 
     def test_graduated_midpoint(self) -> None:
         """Halfway up the ramp returns 0.5."""
-        # gap = 3.0, margin 2.0, ramp 2.0 -> (3-2)/2 = 0.5.
-        result = cooling_throttle_factor(18.0, 15.0, margin=2.0, ramp=2.0)
+        # gap = 1.0, lo = 0, margin 2.0 -> (1-0)/2 = 0.5.
+        result = cooling_throttle_factor(16.0, 15.0, margin=2.0, ramp=2.0)
         assert result == pytest.approx(0.5)
 
     @pytest.mark.parametrize(
         ("gap", "expected"),
-        [(2.5, 0.25), (3.0, 0.5), (3.5, 0.75)],
+        [(0.5, 0.25), (1.0, 0.5), (1.5, 0.75)],
     )
     def test_graduated_linear(self, gap: float, expected: float) -> None:
-        """The ramp zone is linear from 0.0 to 1.0."""
+        """The ramp zone is linear from 0.0 at ``lo`` to 1.0 at ``margin``."""
         t_dew = 15.0
         result = cooling_throttle_factor(t_dew + gap, t_dew, margin=2.0, ramp=2.0)
         assert result == pytest.approx(expected)
+
+    def test_ramp_wider_than_margin_is_clipped(self) -> None:
+        """A ramp wider than the margin cannot extend below gap = 0."""
+        # lo = max(0, 1 - 4) = 0; gap = 0.5, margin 1.0 -> 0.5/1.0.
+        result = cooling_throttle_factor(15.5, 15.0, margin=1.0, ramp=4.0)
+        assert result == pytest.approx(0.5)
+
+    def test_zero_margin_is_conservative_at_zero_gap(self) -> None:
+        """The degenerate margin = 0 config reads gap 0 as fully throttled."""
+        assert cooling_throttle_factor(15.0, 15.0, margin=0.0, ramp=2.0) == 0.0
 
     def test_factor_bounded_unit_interval(self) -> None:
         """The factor never leaves [0, 1] across a wide surface sweep."""

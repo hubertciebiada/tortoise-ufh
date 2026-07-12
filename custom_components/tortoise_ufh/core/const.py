@@ -56,10 +56,16 @@ independent safety layer both treat this as a not-to-exceed limit.
 """
 
 DEW_MARGIN_DEFAULT_K: Final[float] = 2.0
-"""Default condensation safety margin above the dew point, in K.
+"""The system's DESIGN condensation margin above the dew point, in K.
 
-Floor-cooling supply is kept at least this far above the room dew point, and the
-global safe dew-point sensor reports ``max_over_cooled_rooms(T_dew) + this``.
+The one working margin of the two-layer protection (2026-07-12, K6 — owner
+decision "tylko pompa +2"): the global safe dew-point sensor reports
+``max_over_cooled_rooms(T_dew) + this`` and the heat pump keeps the chilled
+supply at/above that floor. The per-room graduated throttle
+(``ControllerConfig.dew_margin_k``, same default value) reaches full opening
+exactly at this gap and only throttles BELOW it; the hard S2 rule
+(``safety.S2_HARD_MARGIN_K = 0``) backstops at the dew point itself. The
+margins are deliberately NOT stacked on top of each other.
 """
 
 DEFAULT_HOME_SETPOINT_C: Final[float] = 21.0

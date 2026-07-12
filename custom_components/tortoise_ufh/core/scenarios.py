@@ -57,6 +57,7 @@ __all__ = [
     "SCENARIO_LIBRARY",
     "cold_snap",
     "hot_july_floor_cooling",
+    "night_setback",
     "sensor_dropout",
     "solar_overshoot",
     "split_boost",
@@ -154,9 +155,14 @@ def solar_overshoot() -> SimScenario:
 
     Sinusoidal ``T_out`` (mean 5 degC, amplitude 8 degC) and GHI (mean 250,
     amplitude 250 W/m^2) on a 24 h period drive large daytime free heat.
-    Exercises the trend-damping ("czlon trendu") anti-overshoot path: the
-    valve must back off as the room rises toward the setpoint under solar
-    load.
+
+    What this scenario really tests (corrected 2026-07-12, K2/B1): that the
+    controller NEVER ADDS heat to a sunlit surplus — valves fully closed
+    whenever free gains carry a room clearly above its setpoint. It does NOT
+    exercise the ``kt`` trend damping: the solar gains (~1.65 kW peak in the
+    living room) dominate with the valves already closed, and the measured
+    peak overshoot is IDENTICAL for kt=12 and kt=0 (+5.71 K both). The
+    earlier docstring claiming this as the trend-member gate was wrong.
 
     Returns:
         ``SimScenario`` on the ``modern_bungalow`` building, 3-day heating.
@@ -260,6 +266,13 @@ def hot_july_floor_cooling() -> SimScenario:
     # sun (~800 W/m^2 through 8 m^2 of glass) overwhelms gentle floor cooling
     # by 3-4x regardless of the controller — physically true, but useless as a
     # regulation gate.
+    # Known artifact (B9, 2026-07-12): the OUTDOOR relative humidity is a
+    # CONSTANT 45 % while T_out swings sinusoidally, so the outdoor vapour
+    # pressure — and with it the indoor dew point — peaks together with the
+    # afternoon heat instead of staying roughly constant over the day. This
+    # exaggerates the diurnal dew-point swing and aligns the dew peak with
+    # peak cooling demand: a conservative, protection-friendly bias. Treat
+    # this scenario as the CONDENSATION-PROTECTION gate, not a comfort gate.
     weather = SyntheticWeather(
         t_out=ChannelProfile(
             kind=ProfileKind.SINUSOIDAL,
@@ -295,6 +308,54 @@ def hot_july_floor_cooling() -> SimScenario:
         # cold start under summer vapour pressure would spend hours at
         # RH ~100 % (an artifact, not a controllable condition).
         initial_temperature_c=24.0,
+    )
+
+
+def night_setback() -> SimScenario:
+    """Daily 21 <-> 19 degC setpoint schedule on the multi-room bungalow.
+
+    The operating-point scenario the steady-state gate never exercised
+    (K1, 2026-07-12): a night setback is DAILY use, and round 2 measured that
+    a lowered setpoint left the saturated integral actively heating an
+    already-too-warm room for 17.4 h (642 %*h of valve integral). Constant
+    ``T_out = 0`` degC, no sun, so every response is the controller's own.
+    The home setpoint alternates 21 -> 19 -> 21 ... every 12 h for 4 days via
+    ``setpoint_schedule``; the gate asserts a bounded heating integral while
+    a room sits above the band, a bounded undershoot, and a prompt
+    valve-close after each setback (bumpless transfer + asymmetric unwind).
+
+    Returns:
+        ``SimScenario`` on the ``modern_bungalow`` building, 4-day heating
+        with a 12 h setpoint schedule.
+    """
+    weather = SyntheticWeather.constant(
+        T_out=0.0,
+        GHI=0.0,
+        wind_speed=1.0,
+        humidity=60.0,
+    )
+    return SimScenario(
+        name="night_setback",
+        building=modern_bungalow(),
+        weather=weather,
+        duration_minutes=5760,
+        mode=Mode.HEATING,
+        dt_seconds=60.0,
+        description=(
+            "Daily 21 <-> 19 degC setpoint schedule (12 h period) at "
+            "T_out=0 degC, no sun. Tests the bumpless setpoint transfer and "
+            "the asymmetric integrator unwind on operating-point changes."
+        ),
+        weather_comp=_HEATING_CURVE,
+        setpoint_schedule=(
+            (720.0, 19.0),
+            (1440.0, 21.0),
+            (2160.0, 19.0),
+            (2880.0, 21.0),
+            (3600.0, 19.0),
+            (4320.0, 21.0),
+            (5040.0, 19.0),
+        ),
     )
 
 
@@ -378,6 +439,7 @@ SCENARIO_LIBRARY: dict[str, Callable[[], SimScenario]] = {
     "solar_overshoot": solar_overshoot,
     "spring_transition": spring_transition,
     "hot_july_floor_cooling": hot_july_floor_cooling,
+    "night_setback": night_setback,
     "sensor_dropout": sensor_dropout,
     "split_boost": split_boost,
 }

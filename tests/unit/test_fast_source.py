@@ -23,6 +23,8 @@ Units: temperatures / setpoints in degC; valve in percent (0..100);
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from custom_components.tortoise_ufh.core.config import ControllerConfig
@@ -293,53 +295,67 @@ class TestFastDwellSingleAccumulation:
         )
 
     @pytest.mark.unit
-    def test_sustained_s1_advances_dwell_by_exactly_dt(self) -> None:
-        """N held-S1 steps of dt=300 s advance the timer by N*300, not 2N*300.
+    def test_sustained_s1_keeps_boost_and_timer_monotonic(self) -> None:
+        """An active S1 no longer touches the split; the dwell has no sawtooth.
 
-        The room sits INSIDE the comfort band so the normal path issues no
-        engage requests: the timer moves only through the per-step
-        accumulation (plus the safety force-OFF edge reset).
+        Rewritten for K3 (2026-07-12): the old test pinned the FIXED bug (an
+        S1 CLOSE_VALVE force-stopped the air-side boost every cycle, sawtooting
+        the dwell clock and flapping the min-runtime flag). Now the water-side
+        S1 parks the valve while the wanted boost keeps running, and the dwell
+        timer advances by exactly dt per step — never resetting while the
+        state holds.
         """
         controller = RoomController(ControllerConfig(), name="salon")
         # Cold room, healthy supply: the split engages (dwell clock -> 0).
         engaged = controller.step(self._s1_inputs(19.0, 35.0), dt_seconds=300.0)
         assert engaged.fast_source.on is True
-        # Room recovers into the band; S1 trips (45 > 40): safety forces OFF.
-        tripped = controller.step(self._s1_inputs(21.0, 45.0), dt_seconds=300.0)
+        # S1 trips (45 > 40) with the room still cold: the valve parks at 0,
+        # the boost keeps running (air side untouched, K3).
+        tripped = controller.step(self._s1_inputs(19.0, 45.0), dt_seconds=300.0)
         assert "s1_floor_overheat" in tripped.report.flags
-        assert tripped.fast_source.on is False
-        # The ON->OFF edge restarts the OFF stretch at 0.
-        assert controller._fast_timer_s == pytest.approx(0.0)
-        # S1 held by hysteresis (39 > 38): exactly +300 s per 300 s step.
-        for n in range(1, 4):
-            out = controller.step(self._s1_inputs(21.0, 39.0), dt_seconds=300.0)
+        assert tripped.valve_position_pct == pytest.approx(0.0)
+        assert tripped.fast_source.on is True
+        assert tripped.fast_source.mode is FastSourceMode.HEATING
+        assert controller._fast_timer_s == pytest.approx(300.0)
+        # S1 held by hysteresis (39 > 38): exactly +300 s per 300 s step,
+        # split still ON, no flapping min-runtime flag once the min-ON passed.
+        for n in range(2, 5):
+            out = controller.step(self._s1_inputs(19.0, 39.0), dt_seconds=300.0)
             assert "s1_floor_overheat" in out.report.flags
-            assert out.fast_source.on is False
+            assert out.valve_position_pct == pytest.approx(0.0)
+            assert out.fast_source.on is True
             assert controller._fast_timer_s == pytest.approx(n * 300.0)
+            if n * 300.0 >= 600.0:  # min-ON elapsed: no runtime lock either
+                assert "fast_source_min_runtime" not in out.report.flags
 
     @pytest.mark.unit
-    def test_min_off_after_safety_release_counts_from_actual_stop(self) -> None:
+    def test_min_off_after_forced_stop_counts_from_actual_stop(self) -> None:
         """Min-OFF needs the full 10 min from the ACTUAL stop, not 5.
 
-        One held-S1 step (300 s) plus a 2 s debounced recompute after the rule
-        clears is only 302 s of real OFF time — the double-counting bug saw
-        602 s and re-engaged the compressor half a dwell too early.
+        One held sensor-lost step (300 s) plus a 2 s debounced recompute after
+        the sensor recovers is only 302 s of real OFF time — the
+        double-counting bug saw 602 s and re-engaged the compressor half a
+        dwell too early. (Rewritten for K3, 2026-07-12: an S1 no longer force-
+        stops the split, so the forced-OFF path is exercised via sensor loss,
+        which still does.)
         """
         controller = RoomController(ControllerConfig(), name="salon")
         engaged = controller.step(self._s1_inputs(19.0, 35.0), dt_seconds=300.0)
         assert engaged.fast_source.on is True
-        # S1 trip: force OFF (edge -> OFF stretch starts at 0).
-        controller.step(self._s1_inputs(19.0, 45.0), dt_seconds=300.0)
-        # One full cycle with S1 held: 300 s of genuine OFF time.
-        held = controller.step(self._s1_inputs(19.0, 39.0), dt_seconds=300.0)
+        sensor_lost = replace(self._s1_inputs(19.0, 35.0), room_temperature_c=None)
+        # Sensor lost: force OFF (edge -> OFF stretch starts at 0).
+        lost = controller.step(sensor_lost, dt_seconds=300.0)
+        assert lost.fast_source.on is False
+        # One full cycle still lost: 300 s of genuine OFF time.
+        held = controller.step(sensor_lost, dt_seconds=300.0)
         assert held.fast_source.on is False
-        # S1 clears (30 < 38); the cold room demands boost 2 s later, but only
+        # The sensor recovers; the cold room demands boost 2 s later, but only
         # 302 s have passed since the actual stop: min-OFF (600 s) must block.
-        blocked = controller.step(self._s1_inputs(19.0, 30.0), dt_seconds=2.0)
+        blocked = controller.step(self._s1_inputs(19.0, 35.0), dt_seconds=2.0)
         assert blocked.fast_source.on is False
         assert "fast_source_min_runtime" in blocked.report.flags
         # Once the full 10 min from the stop elapse, the boost returns.
-        released = controller.step(self._s1_inputs(19.0, 30.0), dt_seconds=300.0)
+        released = controller.step(self._s1_inputs(19.0, 35.0), dt_seconds=300.0)
         assert released.fast_source.on is True
         assert released.fast_source.mode is FastSourceMode.HEATING
 

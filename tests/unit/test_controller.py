@@ -114,13 +114,18 @@ class TestCoolingDewThrottle:
     """The cooling local dew-point throttle (S2)."""
 
     @pytest.mark.unit
-    def test_throttle_drives_valve_to_zero_near_dew_point(self) -> None:
-        """Supply within the margin of the dew point throttles the valve to 0."""
+    def test_throttle_drives_valve_to_zero_at_dew_point(self) -> None:
+        """Supply at the room dew point throttles the valve fully to 0.
+
+        K6 (2026-07-12): the local ramp ends at the dew point itself — the
+        heat pump's global ``dew + 2 K`` floor is the working margin, and the
+        local layer hard-closes only when the supply reaches the actual dew.
+        """
         cfg = ControllerConfig()
         controller = RoomController(cfg, name="salon")
         t_dew = dew_point(26.0, 70.0)
-        # Coldest loop supply only 1 K above dew -> gap < margin -> factor 0.
-        loops = (LoopInput(None, t_dew + 1.0, None),)
+        # Coldest loop supply AT the dew point -> gap <= 0 -> factor 0.
+        loops = (LoopInput(None, t_dew, None),)
         out = controller.step(
             make_inputs(
                 mode=Mode.COOLING,
@@ -133,7 +138,31 @@ class TestCoolingDewThrottle:
         )
         assert out.report.dew_throttle_factor == pytest.approx(0.0)
         assert out.valve_position_pct == pytest.approx(0.0)
-        assert "s2_condensation" in out.report.flags
+        assert "s2_throttle" in out.report.flags
+
+    @pytest.mark.unit
+    def test_throttle_partial_inside_pump_floor_band(self) -> None:
+        """A supply between the dew point and the pump floor ramps the valve.
+
+        K6 (2026-07-12): gap = 1 K with margin 2 / ramp 2 sits mid-ramp
+        (factor 0.5) — under the OLD stacked semantics this was a hard 0.
+        """
+        cfg = ControllerConfig()
+        controller = RoomController(cfg, name="salon")
+        t_dew = dew_point(26.0, 70.0)
+        loops = (LoopInput(None, t_dew + 1.0, None),)
+        out = controller.step(
+            make_inputs(
+                mode=Mode.COOLING,
+                setpoint_c=23.0,
+                room_temperature_c=26.0,
+                humidity_pct=70.0,
+                loops=loops,
+            ),
+            dt_seconds=300.0,
+        )
+        assert out.report.dew_throttle_factor == pytest.approx(0.5)
+        assert "s2_throttle" not in out.report.flags
 
     @pytest.mark.unit
     def test_throttle_open_when_supply_far_above_dew(self) -> None:
@@ -154,11 +183,15 @@ class TestCoolingDewThrottle:
         )
         assert out.report.dew_throttle_factor == pytest.approx(1.0)
         assert out.valve_position_pct > 0.0
-        assert "s2_condensation" not in out.report.flags
+        assert "s2_throttle" not in out.report.flags
 
     @pytest.mark.unit
     def test_throttle_conservative_when_humidity_missing(self) -> None:
-        """Missing humidity in cooling is conservative: factor 0 + S2 flag."""
+        """Missing humidity in cooling is conservative: factor 0 + S2 flag.
+
+        The local-layer flag is ``"s2_throttle"`` since 2026-07-12 (B7);
+        ``"s2_condensation"`` now belongs exclusively to the hard-safety rule.
+        """
         cfg = ControllerConfig()
         controller = RoomController(cfg, name="salon")
         loops = (LoopInput(None, 18.0, None),)
@@ -174,7 +207,7 @@ class TestCoolingDewThrottle:
         )
         assert out.report.dew_throttle_factor == pytest.approx(0.0)
         assert out.valve_position_pct == pytest.approx(0.0)
-        assert "s2_condensation" in out.report.flags
+        assert "s2_throttle" in out.report.flags
 
 
 class TestGlobalSafeDewPoint:
@@ -524,14 +557,15 @@ class TestIntegratorHygiene:
 
     def _throttled_cooling(self, temp: float) -> RoomInputs:
         """Cooling inputs whose supply sits INSIDE the dew ramp (factor < 1)."""
-        # Room 26 degC / RH 60 % -> dew ~ 17.9; margin 2, ramp 2: a supply of
-        # 21 degC sits mid-ramp (factor ~ 0.5) - throttle active, not closed.
+        # Room 26 degC / RH 60 % -> dew ~ 17.9; K6 semantics (margin 2,
+        # ramp 2 -> ramp spans gap 0..2): a supply of 19 degC gives gap ~1.1,
+        # mid-ramp (factor ~ 0.55) - throttle active, not closed.
         return make_inputs(
             mode=Mode.COOLING,
             setpoint_c=24.0,
             room_temperature_c=temp,
             humidity_pct=60.0,
-            loops=(LoopInput(None, 21.0, None),),
+            loops=(LoopInput(None, 19.0, None),),
         )
 
     @pytest.mark.unit
@@ -605,5 +639,5 @@ class TestSaturatedSemantics:
         )
         assert out.valve_position_pct == 0.0
         assert out.report.dew_throttle_factor == 0.0
-        assert "s2_condensation" in out.report.flags
+        assert "s2_throttle" in out.report.flags
         assert out.report.saturated is False

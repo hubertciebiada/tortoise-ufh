@@ -569,3 +569,39 @@ class TestEnumValueContract:
     ) -> None:
         """Each :class:`FastSourceMode` member maps to its documented value."""
         assert member.value == expected
+
+
+class TestSetpointScheduleValidation:
+    """Fail-fast validation of ``SimScenario.setpoint_schedule`` (K1, night setback)."""
+
+    @staticmethod
+    def _with_schedule(schedule: tuple[tuple[float, float], ...]) -> None:
+        """Rebuild the steady_heating scenario with the given schedule."""
+        from dataclasses import replace
+
+        from custom_components.tortoise_ufh.core.scenarios import steady_heating
+
+        replace(steady_heating(), setpoint_schedule=schedule)
+
+    @pytest.mark.unit
+    def test_valid_schedule_constructs(self) -> None:
+        """A strictly increasing, in-range schedule is accepted."""
+        self._with_schedule(((0.0, 21.0), (720.0, 19.0), (1440.0, 21.0)))
+
+    @pytest.mark.unit
+    def test_negative_minute_rejected(self) -> None:
+        """A negative schedule minute raises ``ValueError``."""
+        with pytest.raises(ValueError, match="must be >= 0"):
+            self._with_schedule(((-5.0, 21.0),))
+
+    @pytest.mark.unit
+    def test_non_increasing_minutes_rejected(self) -> None:
+        """Non-strictly-increasing minutes raise ``ValueError``."""
+        with pytest.raises(ValueError, match="strictly increasing"):
+            self._with_schedule(((0.0, 21.0), (0.0, 19.0)))
+
+    @pytest.mark.unit
+    def test_out_of_range_setpoint_rejected(self) -> None:
+        """A schedule setpoint outside [0, 35] degC raises ``ValueError``."""
+        with pytest.raises(ValueError, match=r"in \[0, 35\]"):
+            self._with_schedule(((0.0, 40.0),))

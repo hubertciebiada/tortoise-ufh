@@ -16,6 +16,7 @@
           "room_name": "Nazwa pomieszczenia",
           "room_area": "Powierzchnia podłogi (m²)",
           "fast_source_kind": "Szybkie źródło (split / grzałka)",
+          "fast_source_group": "Grupa wspólnego agregatu (multisplit, opcjonalnie)",
           "has_fast_source": "To pomieszczenie ma szybkie źródło pomocnicze",
           "cooling_enabled": "Udział w chłodzeniu podłogowym",
           "add_another": "Dodaj kolejne pomieszczenie"
@@ -120,6 +121,7 @@
           "room_offset": "Korekta pomieszczenia względem nastawy domu (K)",
           "has_fast_source": "To pomieszczenie ma szybkie źródło pomocnicze",
           "fast_source_kind": "Szybkie źródło (split / grzałka)",
+          "fast_source_group": "Grupa wspólnego agregatu (multisplit, opcjonalnie)",
           "cooling_enabled": "Udział w chłodzeniu podłogowym"
         }
       },
@@ -138,6 +140,7 @@
           "room_offset": "Korekta pomieszczenia względem nastawy domu (K)",
           "has_fast_source": "To pomieszczenie ma szybkie źródło pomocnicze",
           "fast_source_kind": "Szybkie źródło (split / grzałka)",
+          "fast_source_group": "Grupa wspólnego agregatu (multisplit, opcjonalnie)",
           "cooling_enabled": "Udział w chłodzeniu podłogowym"
         }
       },

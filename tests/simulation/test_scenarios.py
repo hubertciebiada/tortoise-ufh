@@ -22,7 +22,11 @@ exercised ``cold_snap`` / ``solar_overshoot`` / ``spring_transition``:
     * ``hot_july_floor_cooling``  -- 48 h floor cooling; the S2 throttle and
       the global safe dew point must be ACTIVE, and cooling must actually flow
       (the pre-calibration twin cooled itself through an absurd ground sink and
-      the assertion passed with permanently closed valves).
+      the assertion passed with permanently closed valves). Run at BOTH the
+      60 s harness step and the production 300 s takt (B8, 2026-07-12).
+    * ``night_setback``           -- 4-day 21 <-> 19 degC setpoint schedule;
+      the K1 (2026-07-12) operating-point gate: bounded heating-above-band
+      integral, prompt valve close after a setback, bounded sag.
     * ``sensor_dropout``          -- 24 h heating with heavy sensor noise.
     * ``split_boost``             -- 24 h heating with a 2.5 kW split boost.
 
@@ -68,6 +72,7 @@ GATE_SCENARIOS: list[str] = [
     "solar_overshoot",
     "spring_transition",
     "hot_july_floor_cooling",
+    "night_setback",
     "sensor_dropout",
     "split_boost",
 ]
@@ -114,6 +119,48 @@ _FREEZE_HARD_MIN_C: float = 16.0
 
 _MAX_VALVE_TRAVEL_PP_PER_H: float = 30.0
 """Actuator-wear ceiling: mean commanded-valve travel [pp/h] (D7)."""
+
+_RECOVERY_SETTLE_HOURS: float = 12.0
+"""Post-step settle window for the cold-snap recovery-overshoot check [h] (K8).
+
+The supply step (weather-comp curve jumping 29.5 -> 37 degC) is a 2-3x plant
+gain change the PI was not tuned at; the recovery transient is graded only
+after this window. Measured @ 300 s with the 2026-07-12 controller: worst-room
+max_over is +0.78 K from the step and +0.34 K from step+12 h (the K1 unwind
+discharges the recovery integral; before it the peak was +1.15 K).
+"""
+
+_RECOVERY_MAX_OVERSHOOT_K: float = 0.5
+"""Recovery-overshoot ceiling after the cold-snap settle window [K] (K8)."""
+
+_SETBACK_MAX_HOT_HEATING_PCT_H: float = 400.0
+"""Ceiling on the per-room heating integral while ABOVE the band [%*h] (K1).
+
+Sum of ``valve_pct * dt`` over records with ``T > setpoint + 0.3`` and
+``valve > 0.5 %`` across the whole 4-day ``night_setback`` run. Measured on
+the twin @ 60 s: worst room 264 %*h with the bumpless transfer + asymmetric
+unwind versus 2577 %*h without them (the old controller kept actively heating
+rooms sitting above a freshly lowered setpoint for hours).
+"""
+
+_SETBACK_MIN_ROOM_C: float = 17.8
+"""Undershoot floor for ``night_setback`` [degC] (K1).
+
+The deepest measured room temperature is 18.14 degC (a plant-limited room
+coasting below the 19 degC night target at T_out = 0). Guards against an
+unwind regression aggressive enough to let rooms sag markedly deeper.
+"""
+
+_SETBACK_CLOSE_WITHIN_MINUTES: float = 240.0
+"""Grace window after a 21 -> 19 setback [min] (K1).
+
+Past this window a room must not keep ACTIVELY heating above the new band
+(``valve > 5 %`` — the write threshold — while ``T > setpoint + 0.3``).
+Measured @ 60 s: strong rooms close within ~2.4 h; the worst plant-limited
+room trails a <= 5.5 % closing tail to ~3.2 h as the unwind rate shrinks near
+the band edge. Without the K1 mechanisms the discharge ran 10+ h at 50-80 %
+valve, so the regression margin stays enormous.
+"""
 
 # Fail fast on a stale scenario name so a library rename surfaces at collection.
 _UNKNOWN: list[str] = [name for name in GATE_SCENARIOS if name not in SCENARIO_LIBRARY]
@@ -250,6 +297,13 @@ class TestScenarioSimulation:
         authority; the controller must still keep every room above the hard
         freeze floor and recover it within the prolonged-cold budget.
 
+        Since 2026-07-12 (K8) the RECOVERY OVERSHOOT is asserted too: after
+        the supply step the plant gain is 2-3x what the PI was tuned at and
+        round 2 measured an unasserted +1.15 K recovery peak. The check runs
+        from :data:`_RECOVERY_SETTLE_HOURS` after the weather step (the raw
+        transient peak is plant-gain physics; the settled tail is the
+        controller's responsibility).
+
         Args:
             run_scenario: Session-scoped simulation harness fixture.
         """
@@ -257,6 +311,8 @@ class TestScenarioSimulation:
         log, _metrics = run_scenario(scenario)
 
         assert len(log) > 0, "cold_snap: empty simulation log"
+        step_minute = 1440
+        settle_from = step_minute + int(_RECOVERY_SETTLE_HOURS * 60.0)
         for room in scenario.building.rooms:
             room_log = log.get_room(room.name)
             assert_no_freezing(room_log, hard_min=_FREEZE_HARD_MIN_C)
@@ -264,6 +320,12 @@ class TestScenarioSimulation:
                 room_log,
                 threshold=18.0,
                 max_duration_minutes=1440,
+            )
+            assert_max_overshoot(
+                room_log,
+                _room_setpoint(scenario, room.name),
+                max_overshoot=_RECOVERY_MAX_OVERSHOOT_K,
+                settle_from_minute=settle_from,
             )
 
     def test_solar_surplus_closes_valves(
@@ -331,28 +393,40 @@ class TestScenarioSimulation:
             f"{min(temps):.1f}..{max(temps):.1f} degC"
         )
 
+    @pytest.mark.parametrize("dt_seconds", [60.0, 300.0])
     def test_no_condensation_and_cooling_actually_runs(
         self,
+        dt_seconds: float,
         run_scenario: RunScenario,
     ) -> None:
         """Floor cooling stays condensation-safe WHILE genuinely cooling.
 
-        Runs ``hot_july_floor_cooling`` and asserts three things per the I1
-        amendment (2026-07-09):
+        Runs ``hot_july_floor_cooling`` at both the 60 s harness step and the
+        production 300 s takt (B8, 2026-07-12 — mirroring steady_heating) and
+        asserts three things per the I1 amendment (2026-07-09):
 
         1. The slab stays ``margin`` kelvin above the Magnus dew point in
            every room (both protection layers + the supply floor fed back
-           from the global safe dew point).
+           from the global safe dew point). Measured minimum slab-dew margin
+           @ 300 s: +1.51 K.
         2. Cooling actually flows — valves open for a substantial share of
            the run (the pre-calibration twin passed condensation checks with
-           valves at a flat 0 %).
+           valves at a flat 0 %). After the K6 margin de-stacking
+           (2026-07-12) full cooling is available right on the heat pump's
+           dew floor: the measured open share jumped from 29.7 % to 94.2 %,
+           so the gate now demands a solid majority instead of a token 25 %.
         3. The local S2 throttle is genuinely ACTIVE (factor < 1 at times) —
-           the scenario exercises the protection, not just the PI loop.
+           the scenario exercises the protection, not just the PI loop
+           (measured @ 300 s: factor < 1 for 31.2 % of room-records, the
+           humid transients where the supply dips below the pump floor).
 
         Args:
+            dt_seconds: Control/physics step for this parametrization [s].
             run_scenario: Session-scoped simulation harness fixture.
         """
-        scenario = SCENARIO_LIBRARY["hot_july_floor_cooling"]()
+        scenario = replace(
+            SCENARIO_LIBRARY["hot_july_floor_cooling"](), dt_seconds=dt_seconds
+        )
         assert scenario.mode == Mode.COOLING, "expected a cooling scenario"
         log, _metrics = run_scenario(scenario)
 
@@ -367,9 +441,10 @@ class TestScenarioSimulation:
         open_share = sum(1 for r in log if r.outputs.valve_position_pct > 0.0) / (
             n_records
         )
-        assert open_share > 0.25, (
-            "hot_july_floor_cooling: cooling never really ran — valves open "
-            f"only {open_share:.0%} of room-records"
+        assert open_share > 0.60, (
+            "hot_july_floor_cooling: cooling under-delivers — valves open "
+            f"only {open_share:.0%} of room-records (K6 de-stacked margins "
+            "should yield a solid majority; measured 94 %)"
         )
         throttled = (
             sum(1 for r in log if r.outputs.report.dew_throttle_factor < 1.0)
@@ -380,6 +455,89 @@ class TestScenarioSimulation:
             f"({throttled:.0%} of room-records) — the scenario no longer "
             "exercises the condensation protection"
         )
+
+    def test_night_setback_bumpless_transfer(
+        self,
+        run_scenario: RunScenario,
+    ) -> None:
+        """A daily setpoint schedule neither heats warm rooms nor sags deep.
+
+        The K1 gate (2026-07-12): operating-point changes were the round-2
+        blind spot — a lowered setpoint left the saturated integral actively
+        heating an already-too-warm room for 17.4 h. Asserts, per room, over
+        the 4-day 21 <-> 19 degC schedule:
+
+        1. The heating integral accumulated while the room sits ABOVE the
+           current band (``T > setpoint + 0.3`` with ``valve > 0.5 %``) stays
+           under :data:`_SETBACK_MAX_HOT_HEATING_PCT_H` (measured: 264 %*h
+           with the bumpless transfer + unwind vs 2577 %*h without).
+        2. From :data:`_SETBACK_CLOSE_WITHIN_MINUTES` after each 21 -> 19
+           setback to the end of that phase, no room keeps ACTIVELY heating
+           clearly above the new band (``T > 19.4`` with ``valve > 5 %`` —
+           the actuator write threshold; a sub-5-pp closing tail parked at
+           the band edge is noise-level) — either the valve closed in time
+           (measured worst: strong rooms ~2.4 h) or the room legitimately
+           coasted into the band.
+        3. No room ever sags below :data:`_SETBACK_MIN_ROOM_C` — the unwind
+           must not turn the setback into a free-fall (measured worst:
+           18.14 degC on a plant-limited room).
+
+        Args:
+            run_scenario: Session-scoped simulation harness fixture.
+        """
+        scenario = SCENARIO_LIBRARY["night_setback"]()
+        assert scenario.setpoint_schedule, "expected a setpoint schedule"
+        log, _metrics = run_scenario(scenario)
+        assert len(log) > 0, "night_setback: empty simulation log"
+
+        dt_h = scenario.dt_seconds / 3600.0
+        setback_minutes = [
+            minute for minute, sp in scenario.setpoint_schedule if sp == 19.0
+        ]
+        for room in scenario.building.rooms:
+            room_log = list(log.get_room(room.name))
+            hot_heating_pct_h = sum(
+                rec.outputs.valve_position_pct * dt_h
+                for rec in room_log
+                if rec.inputs.room_temperature_c is not None
+                and rec.inputs.room_temperature_c > rec.inputs.setpoint_c + 0.3
+                and rec.outputs.valve_position_pct > 0.5
+            )
+            assert hot_heating_pct_h <= _SETBACK_MAX_HOT_HEATING_PCT_H, (
+                f"night_setback: room '{room.name}' spent "
+                f"{hot_heating_pct_h:.0f} %*h actively heating above the band "
+                f"(limit {_SETBACK_MAX_HOT_HEATING_PCT_H:.0f} %*h) — the "
+                "bumpless transfer / unwind regressed"
+            )
+            for rec in room_log:
+                t_room = rec.inputs.room_temperature_c
+                assert t_room is None or t_room >= _SETBACK_MIN_ROOM_C, (
+                    f"night_setback: room '{room.name}' sagged to "
+                    f"{t_room:.2f} degC at t={rec.t} min (floor "
+                    f"{_SETBACK_MIN_ROOM_C} degC)"
+                )
+            for minute in setback_minutes:
+                grace_end = minute + _SETBACK_CLOSE_WITHIN_MINUTES
+                phase_end = minute + 720.0  # the schedule alternates every 12 h
+                for rec in room_log:
+                    if not grace_end <= rec.t < phase_end:
+                        continue
+                    t_room = rec.inputs.room_temperature_c
+                    # "Clearly above the band": +0.1 K over the band edge, so
+                    # a room asymptotically parked AT 19.300x with a residual
+                    # write-threshold-level valve is not a violation.
+                    still_hot_and_heating = (
+                        t_room is not None
+                        and t_room > rec.inputs.setpoint_c + 0.4
+                        and rec.outputs.valve_position_pct > 5.0
+                    )
+                    assert not still_hot_and_heating, (
+                        f"night_setback: room '{room.name}' still heats above "
+                        f"the band {rec.t - minute:.0f} min after the setback "
+                        f"at t={minute:.0f} (T={t_room}, valve="
+                        f"{rec.outputs.valve_position_pct:.1f} %) — grace is "
+                        f"{_SETBACK_CLOSE_WITHIN_MINUTES:.0f} min"
+                    )
 
     def test_split_boost_engages_and_releases(
         self,

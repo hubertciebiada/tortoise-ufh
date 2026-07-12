@@ -62,6 +62,7 @@ from .const import (
     CONF_ENTITY_TEMP_OUTDOOR,
     CONF_ENTITY_TEMP_ROOM,
     CONF_ENTITY_VALVES,
+    CONF_FAST_SOURCE_GROUP,
     CONF_FAST_SOURCE_KIND,
     CONF_HOME_SETPOINT,
     CONF_ROOM_AREA,
@@ -78,6 +79,7 @@ from .const import (
     DEFAULT_ROOM_STATE,
     DOMAIN,
     FAST_SOURCE_KIND_NONE,
+    FAST_SOURCE_KIND_SPLIT,
     FAST_SOURCE_KINDS,
     ROOM_OFFSET_MAX_C,
     ROOM_OFFSET_MIN_C,
@@ -183,10 +185,16 @@ class RoomDefinition:
             when ``has_fast_source`` is ``False`` and a non-``"none"`` kind when
             it is ``True``.
         cooling_enabled: Whether the room participates in floor cooling.
+        fast_source_group: Optional multisplit outdoor-unit group key (K4,
+            2026-07-12) — rooms sharing one physical outdoor unit carry the
+            same generic label (e.g. ``"outdoor_unit_a"``) and are
+            direction-arbitrated by the core. Must be empty when the room has
+            no fast source.
 
     Raises:
-        ValueError: If the name is empty, the area is non-positive, or the
-            fast-source kind is inconsistent with ``has_fast_source``.
+        ValueError: If the name is empty, the area is non-positive, the
+            fast-source kind is inconsistent with ``has_fast_source``, or a
+            group is set without a fast source.
     """
 
     name: str
@@ -194,6 +202,7 @@ class RoomDefinition:
     has_fast_source: bool
     fast_source_kind: str
     cooling_enabled: bool
+    fast_source_group: str = ""
 
     def __post_init__(self) -> None:
         """Validate the room definition invariants."""
@@ -215,6 +224,12 @@ class RoomDefinition:
         if not self.has_fast_source and self.fast_source_kind != FAST_SOURCE_KIND_NONE:
             msg = "fast_source_kind must be 'none' when has_fast_source is False"
             raise ValueError(msg)
+        if self.fast_source_group and self.fast_source_kind != FAST_SOURCE_KIND_SPLIT:
+            # Only splits share a multisplit outdoor unit; a heater in a
+            # direction-arbitrated group is physically meaningless (review
+            # 2026-07-12). Subsumes the has_fast_source=False case too.
+            msg = "fast_source_group requires fast_source_kind='split'"
+            raise ValueError(msg)
 
     def as_dict(self) -> dict[str, Any]:
         """Serialise to the room base dict stored under ``CONF_ROOMS``."""
@@ -224,6 +239,7 @@ class RoomDefinition:
             CONF_HAS_FAST_SOURCE: self.has_fast_source,
             CONF_FAST_SOURCE_KIND: self.fast_source_kind,
             CONF_COOLING_ENABLED: self.cooling_enabled,
+            CONF_FAST_SOURCE_GROUP: self.fast_source_group.strip(),
         }
 
 
@@ -426,6 +442,12 @@ def _room_attributes_schema_dict(
             default=str(values.get(CONF_FAST_SOURCE_KIND, DEFAULT_FAST_SOURCE_KIND)),
         )
     ] = SelectSelector(SelectSelectorConfig(options=FAST_SOURCE_KINDS))
+    schema[
+        vol.Optional(
+            CONF_FAST_SOURCE_GROUP,
+            default=str(values.get(CONF_FAST_SOURCE_GROUP, "") or ""),
+        )
+    ] = TextSelector()
     schema[
         vol.Required(
             CONF_COOLING_ENABLED,
@@ -664,8 +686,13 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
             raw_kind = str(
                 user_input.get(CONF_FAST_SOURCE_KIND, DEFAULT_FAST_SOURCE_KIND)
             )
-            # A room without a fast source is always kind "none".
+            # A room without a fast source is always kind "none", group "".
             kind = raw_kind if has_fast else FAST_SOURCE_KIND_NONE
+            group = (
+                str(user_input.get(CONF_FAST_SOURCE_GROUP, "") or "").strip()
+                if has_fast
+                else ""
+            )
             add_another = bool(user_input.get(CONF_ADD_ANOTHER, False))
 
             if not name:
@@ -686,6 +713,7 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                                 CONF_COOLING_ENABLED, DEFAULT_COOLING_ENABLED
                             )
                         ),
+                        fast_source_group=group,
                     )
                 except ValueError as err:
                     _LOGGER.warning("Invalid room definition: %s", err)
@@ -710,6 +738,7 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required(
                     CONF_FAST_SOURCE_KIND, default=DEFAULT_FAST_SOURCE_KIND
                 ): SelectSelector(SelectSelectorConfig(options=FAST_SOURCE_KINDS)),
+                vol.Optional(CONF_FAST_SOURCE_GROUP, default=""): TextSelector(),
                 vol.Required(
                     CONF_COOLING_ENABLED, default=DEFAULT_COOLING_ENABLED
                 ): BooleanSelector(),
@@ -986,6 +1015,11 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 user_input.get(CONF_FAST_SOURCE_KIND, DEFAULT_FAST_SOURCE_KIND)
             )
             kind = raw_kind if has_fast else FAST_SOURCE_KIND_NONE
+            group = (
+                str(user_input.get(CONF_FAST_SOURCE_GROUP, "") or "").strip()
+                if has_fast
+                else ""
+            )
 
             if not name:
                 errors["base"] = "empty_room_name"
@@ -1005,6 +1039,7 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                                 CONF_COOLING_ENABLED, DEFAULT_COOLING_ENABLED
                             )
                         ),
+                        fast_source_group=group,
                     )
                 except ValueError as err:
                     _LOGGER.warning("Invalid room definition: %s", err)
@@ -1078,6 +1113,11 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 user_input.get(CONF_FAST_SOURCE_KIND, DEFAULT_FAST_SOURCE_KIND)
             )
             kind = raw_kind if has_fast else FAST_SOURCE_KIND_NONE
+            group = (
+                str(user_input.get(CONF_FAST_SOURCE_GROUP, "") or "").strip()
+                if has_fast
+                else ""
+            )
 
             room_def: RoomDefinition | None = None
             try:
@@ -1089,6 +1129,7 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                     cooling_enabled=bool(
                         user_input.get(CONF_COOLING_ENABLED, DEFAULT_COOLING_ENABLED)
                     ),
+                    fast_source_group=group,
                 )
             except ValueError as err:
                 _LOGGER.warning("Invalid room definition: %s", err)

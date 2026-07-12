@@ -111,6 +111,25 @@ class RoomInputs:
             data (adapter-supplied; additive field 2026-07-09, S6). Feeds the
             S5 watchdog rule; ``0.0`` (the default) keeps S5 quiet for callers
             that do not track staleness.
+        fast_source_group: Name of the shared outdoor-unit (multisplit) group
+            this room's fast source belongs to, or ``""`` for an ungrouped
+            unit (additive field 2026-07-12, K4). Rooms sharing a non-empty
+            group name are direction-arbitrated by the
+            ``BuildingController`` so one aggregate is never asked to heat and
+            cool at the same time. Purely a grouping key — use a generic label
+            like ``"outdoor_unit_a"``.
+        fast_source_hvac_mode: Raw HVAC-mode feedback string of the fast
+            source (e.g. ``"heat"`` / ``"cool"`` / ``"off"``), or ``None``
+            when unavailable (additive field 2026-07-12, K4). Lets the S4
+            reconciliation see a DIRECTION divergence (a unit standing by in
+            the opposite mode of a shared aggregate reports its set mode while
+            ``fast_source_on`` still reads ``True``).
+        humidity_stale: ``True`` when ``humidity_pct`` is a held reading whose
+            source stopped reporting 60-120 minutes ago (additive field
+            2026-07-12, K7). The cooling path then pads the effective dew
+            point by +1 K and flags ``"rh_stale_gated"`` instead of dropping
+            straight to the conservative full stop, so a slow-reporting RH
+            sensor cannot limit-cycle the cooling.
 
     Raises:
         ValueError: If ``humidity_pct`` is outside the 0..100 range or
@@ -128,6 +147,9 @@ class RoomInputs:
     hp_active_for_ufh: bool | None = None  # False during DHW/defrost -> freeze
     cooling_enabled: bool = True  # per-room "udzial w chlodzeniu"
     last_update_age_minutes: float = 0.0  # S5 watchdog input (additive)
+    fast_source_group: str = ""  # multisplit outdoor-unit group (K4, additive)
+    fast_source_hvac_mode: str | None = None  # raw hvac-mode feedback (K4)
+    humidity_stale: bool = False  # held 60-120 min old RH reading (K7)
 
     def __post_init__(self) -> None:
         """Validate the humidity range (percent) and the watchdog age."""

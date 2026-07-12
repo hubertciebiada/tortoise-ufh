@@ -224,3 +224,57 @@ class TestPerCallDt:
         pid = PIDController(kp=1.0, ki=0.02, kd=0.0, dt=300.0)
         with pytest.raises(ValueError, match="dt_seconds must be > 0"):
             pid.compute(1.0, dt_seconds=bad_dt)
+
+
+class TestShiftIntegral:
+    """K1 (2026-07-12): the external bumpless-transfer re-seed hook."""
+
+    def test_shift_moves_integral_by_delta(self) -> None:
+        """A shift adds exactly *delta* within the output range."""
+        pid = PIDController(kp=0.0, ki=0.001, kd=0.0, dt=300.0)
+        pid.compute(1.0, dt_seconds=1000.0)  # I = 1.0
+        pid.shift_integral(+20.0)
+        assert pid.integral == pytest.approx(21.0)
+        pid.shift_integral(-15.0)
+        assert pid.integral == pytest.approx(6.0)
+
+    def test_shift_clamps_to_output_range(self) -> None:
+        """A shift can never park the accumulator outside [min, max]."""
+        pid = PIDController(kp=0.0, ki=0.001, kd=0.0, dt=300.0)
+        pid.shift_integral(+250.0)
+        assert pid.integral == pytest.approx(100.0)
+        pid.shift_integral(-500.0)
+        assert pid.integral == pytest.approx(0.0)
+
+    def test_shift_is_noop_without_integral_gain(self) -> None:
+        """With ki == 0 the accumulator is unused and the shift is a no-op."""
+        pid = PIDController(kp=1.0, ki=0.0, kd=0.0, dt=300.0)
+        pid.shift_integral(+30.0)
+        assert pid.integral == pytest.approx(0.0)
+
+
+class TestUnwindFactor:
+    """K1 (2026-07-12): asymmetric unwinding of a sign-opposed integral."""
+
+    def test_opposed_sign_discharges_faster(self) -> None:
+        """A negative error against a positive integral unwinds N times faster."""
+        plain = PIDController(kp=0.0, ki=0.001, kd=0.0, dt=300.0)
+        unwound = PIDController(kp=0.0, ki=0.001, kd=0.0, dt=300.0, unwind_factor=8.0)
+        for pid in (plain, unwound):
+            pid.shift_integral(+50.0)
+            pid.compute(-1.0, dt_seconds=300.0)
+        plain_drop = 50.0 - plain.integral
+        unwound_drop = 50.0 - unwound.integral
+        assert plain_drop == pytest.approx(0.001 * 1.0 * 300.0)
+        assert unwound_drop == pytest.approx(8.0 * plain_drop)
+
+    def test_same_sign_accumulates_at_plain_ki(self) -> None:
+        """The asymmetry never touches same-sign (honest) accumulation."""
+        pid = PIDController(kp=0.0, ki=0.001, kd=0.0, dt=300.0, unwind_factor=8.0)
+        pid.compute(1.0, dt_seconds=300.0)
+        assert pid.integral == pytest.approx(0.001 * 1.0 * 300.0)
+
+    def test_unwind_below_one_rejected(self) -> None:
+        """A sub-1 unwind factor (slower unwinding than winding) is invalid."""
+        with pytest.raises(ValueError, match="unwind_factor must be >= 1"):
+            PIDController(kp=1.0, ki=0.001, kd=0.0, dt=300.0, unwind_factor=0.5)
