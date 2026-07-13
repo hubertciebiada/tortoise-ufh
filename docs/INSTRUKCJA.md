@@ -1,6 +1,6 @@
 # Tortoise-UFH — instrukcja użytkownika
 
-> Dotyczy wersji **0.10.1**. Instrukcja opisuje integrację po polsku; interfejs
+> Dotyczy wersji **0.10.3**. Instrukcja opisuje integrację po polsku; interfejs
 > (panel, encje, kreator konfiguracji, usługi) jest dostępny po polsku i po
 > angielsku i podąża za językiem ustawionym w Twoim profilu Home Assistant.
 
@@ -124,11 +124,12 @@ ustawienia sterowania i strojenia oraz opcjonalna sekcja **Pompa ciepła** (§11
 
 ## 5. Panel boczny
 
-U góry panelu **hero**: status algorytmu (Działa / Nieaktualne / Błąd) z wiekiem
-ostatniego cyklu, licznik **Steruje x/y** (ile pokoi pisze do sprzętu), liczba
-aktywnych **flag** (barwa wg najgroźniejszej — pełny rozkład w annunciatorze niżej),
-w chłodzeniu **bezpieczny punkt rosy** (§9), stepper **temperatury domu**
-i przełącznik **trybu**.
+U góry panelu **hero** — od v0.10.3 kompaktowy, mieszczący się w **jednym wierszu**
+(na wąskim ekranie zawija się czytelnie): status algorytmu (Działa / Nieaktualne /
+Błąd) z wiekiem ostatniego cyklu, licznik **Steruje x/y** (ile pokoi pisze do
+sprzętu), liczba aktywnych **flag** (barwa wg najgroźniejszej; **kliknięcie przenosi
+do zakładki Flagi** z pełnym rozkładem), w chłodzeniu **bezpieczny punkt rosy** (§9),
+stepper **temperatury domu** i przełącznik **trybu**.
 
 Przełączenie stanu pokoju (Wyłączony↔Steruje) oraz trybu domu wymaga od v0.8.0
 **lekkiego potwierdzenia**: przy klikniętym przycisku pojawia się dymek „na pewno?"
@@ -137,13 +138,7 @@ przełączniki były zbyt łatwe do trafienia przypadkiem.
 
 Zakładki:
 
-- **Pokoje** — u góry **annunciator flag** (od v0.10.0): zwijana, pogrupowana **lista**
-  (styl jak „Strojenie") wszystkich znanych flag w sekcjach **Bezpieczeństwo (S1–S6) /
-  Wspomaganie / Konfiguracja** — wiersze **wyszarzone**, gdy nieaktywne, i **zapalone**
-  (lewy pasek koloru severity + status „aktywna ×N pokoi", lista pokoi w dymku), gdy
-  zadziałają; zabezpieczenia noszą kod **S1–S6** na plakietce, a pod ikoną **„i"** przy
-  każdej fladze jest pełne objaśnienie (§12). Nagłówek zwija/rozwija listę, a nawet po
-  zwinięciu pokazuje plakietkę podsumowania. Pod annunciatorem tabela: przełącznik stanu
+- **Pokoje** — tabela: przełącznik stanu
   **Wyłączony/Steruje** (pierwsza kolumna),
   pomiar z trendem, zadana (z korektą), uchyb, zawór %, zasilanie/powrót pierwszej
   pętli oraz — pod wspólnym nagłówkiem **Wspomaganie** — tryb i temperatura zadana
@@ -158,6 +153,13 @@ Zakładki:
   podłączonego sygnału; źródłową encję pokazuje ikona „i", a kliknięcie wiersza
   otwiera natywne okno encji), domyślnie zwiniętą sekcję **Encje diagnostyczne**
   i **surowe dane** raportu.
+- **Flagi** — **annunciator flag** (od v0.10.3 osobna zakładka; wcześniej u góry Pokoje):
+  zwijana, pogrupowana **lista** (styl jak „Strojenie") wszystkich znanych flag w sekcjach
+  **Bezpieczeństwo (S1–S6) / Wspomaganie / Konfiguracja** — wiersze **wyszarzone**, gdy
+  nieaktywne, i **zapalone** (lewy pasek koloru severity + status „aktywna ×N pokoi", lista
+  pokoi w dymku), gdy zadziałają; zabezpieczenia noszą kod **S1–S6** na plakietce, a pod
+  ikoną **„i"** przy każdej fladze jest pełne objaśnienie (§12). Nagłówek zwija/rozwija
+  listę, a nawet po zwinięciu pokazuje plakietkę podsumowania.
 - **Strojenie** — nastawy globalne + rzadkie nadpisania per pokój (§8), od v0.8.0
   jako **lista parametrów w grupach tematycznych** (Regulator PI i trend / Pasmo
   komfortu i zawór / Człon pogodowy / Szybkie źródło / Ochrona przed kondensacją /
@@ -436,14 +438,20 @@ się przez ≥2 cykle, nie częściej niż co 15 minut.
 
 **Nastawa wody chłodzenia:** w trybie chłodzenia Tortoise pisze do pompy
 `max(bazowa temperatura wody chłodzenia, globalny bezpieczny punkt rosy)` (§8, §9) —
-woda nigdy nie zejdzie do strefy kondensacji. Zapis przy zmianie ≥ 0,5 K, wymuszany
+woda nigdy nie zejdzie do strefy kondensacji. Wartość jest **zaokrąglana do kroku
+(`step`) encji number pompy zwykłym zaokrągleniem matematycznym** (do najbliższej
+pełnej działki, połówka w górę), żeby trafić dokładnie w siatkę pompy — bez tego pompa
+o kroku 1 °C potrafiła sama ściąć np. 16,56 → 16, poniżej progu rosy (issue #5).
+Świadomie zwykłe zaokrąglenie, nie „zawsze w górę": 2 K marginesu punktu rosy z
+zapasem pokrywa najwyżej pół działki luzu. Zapis przy zmianie ≥ 0,5 K, wymuszany
 ponownie co ~45 min.
 
 **Nastawa wody grzania (opcjonalna):** prosta krzywa pogodowa — baza + nachylenie ×
 niedobór względem temperatury neutralnej, obcięta do 20–40 °C (§8). Bez odczytu
 temperatury zewnętrznej w danym cyklu nic nie jest pisane (pompa zostaje na
-ostatniej nastawie — jej firmware ma własne limity). Zanim wskażesz encję grzania,
-porównaj krzywą Tortoise z krzywą własnej pompy.
+ostatniej nastawie — jej firmware ma własne limity). Nastawa grzania jest
+zaokrąglana do kroku encji tym samym zwykłym zaokrągleniem co chłodzenie. Zanim
+wskażesz encję grzania, porównaj krzywą Tortoise z krzywą własnej pompy.
 
 **Przełącznik CWU (zakładka Pompa ciepła):** dokłada/zdejmuje człon „+DHW" w encji
 trybu (np. „Heat only" ↔ „Heat+DHW") — to ręczna prośba „dogrzej wodę teraz /
@@ -460,7 +468,8 @@ pokoju / usunięcie integracji) **nie dotyka pompy**.
 
 <!-- Słownik zgodny z FLAG_LABELS w frontend/tortoise-ufh-panel.js — zmieniaj razem. -->
 
-Od v0.10.0 wszystkie te flagi widzisz też jako **annunciator na górze zakładki Pokoje** —
+Wszystkie te flagi widzisz też jako **annunciator w osobnej zakładce „Flagi"** (od v0.10.0;
+od v0.10.3 własna zakładka, wcześniej u góry Pokoje) —
 zwijaną, pogrupowaną **listę** (styl jak „Strojenie"): każda flaga to wiersz — **wyszarzony**,
 gdy nieaktywna, i **zapalony** (lewy pasek koloru + status „aktywna ×N pokoi"), gdy zadziała.
 Zabezpieczenia noszą kod **S1–S6**, a pod ikoną **„i"** przy każdej fladze jest jej pełne
@@ -543,6 +552,20 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **0.10.3 (2026-07-13)** — panel: **hero w jednym wierszu** (był w trzech — zajmował dużo
+  miejsca; wysokość spada ~2×, na wąskim ekranie zawija się czytelnie), metryki jako inline
+  „podpis + wartość", ujednolicone kontrolki, metryka **Flagi klikalna** → przenosi do zakładki
+  Flagi, przycisk „Zarządzaj pokojami" jako ikona. **Annunciator flag** przeniesiony z góry
+  zakładki Pokoje do **własnej zakładki „Flagi"** (kolejność: Pokoje / Flagi / Strojenie /
+  Zawory / Wspomaganie / Pompa). Wyłącznie panel — bez migracji konfiguracji, kontrakt I/O
+  nietknięty.
+- **0.10.2 (2026-07-13)** — poprawka (issue #5): nastawa wody chłodzenia i grzania jest teraz
+  zaokrąglana do **realnego kroku (`step`) encji number pompy** zwykłym zaokrągleniem
+  matematycznym (połówka w górę), a nie do zaszytej siatki 0,5 K. Wcześniej dew-bezpieczny cel
+  16,56 °C był pisany jako 16,5, a pompa o kroku 1 °C ścinała go do 16 — poniżej progu punktu
+  rosy. Zwykłe zaokrąglenie (nie „zawsze w górę") świadomie oddaje najwyżej pół działki z 2 K
+  marginesu, żeby nie tracić mocy chłodzenia. Wyłącznie warstwa zapisu — bez migracji, kontrakt
+  I/O nietknięty.
 - **0.10.1 (2026-07-13)** — dopieszczenie panelu: annunciator flag przerobiony z kafelków na
   **zwijaną, pogrupowaną listę** w stylu „Strojenia" (wiersz na flagę, lewy pasek koloru severity
   + status „aktywna ×N", nagłówek zwija/rozwija i pokazuje podsumowanie po zwinięciu). W zakładce

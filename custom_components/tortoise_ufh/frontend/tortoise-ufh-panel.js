@@ -77,6 +77,7 @@ const STATE_META = [
 /** Top-level tabs. Order is authoritative for keyboard navigation. */
 const TABS = [
   { key: "rooms", label: "tab_rooms" },
+  { key: "flags", label: "tab_flags" },
   { key: "tuning", label: "tab_tuning" },
   { key: "valves", label: "tab_valves" },
   { key: "assist", label: "tab_assist" },
@@ -173,6 +174,7 @@ const STR = {
     mode_cooling: "Chłodzenie",
     mode_off: "Wył.",
     tab_rooms: "Pokoje",
+    tab_flags: "Flagi",
     tab_tuning: "Strojenie",
     tab_valves: "Zawory",
     tab_assist: "Wspomaganie",
@@ -657,6 +659,7 @@ const STR = {
     mode_cooling: "Cooling",
     mode_off: "Off",
     tab_rooms: "Rooms",
+    tab_flags: "Flags",
     tab_tuning: "Tuning",
     tab_valves: "Valves",
     tab_assist: "Assist",
@@ -2870,6 +2873,7 @@ class TortoiseUfhPanel extends HTMLElement {
     const roomsSection = this._buildRoomsSection();
     const sections = {
       rooms: roomsSection.el,
+      flags: this._buildFlagsSection(),
       tuning: this._buildTuningSection(),
       valves: this._buildValvesSection(),
       assist: this._buildAssistSection(),
@@ -3009,7 +3013,6 @@ class TortoiseUfhPanel extends HTMLElement {
       tbody: roomsSection.tbody,
       empty: roomsSection.empty,
       tableWrap: roomsSection.wrapEl,
-      legend: roomsSection.legend,
       detail,
       layout,
     };
@@ -3094,6 +3097,8 @@ class TortoiseUfhPanel extends HTMLElement {
     }
     if (this._activeTab === "rooms") {
       this._reconcileTable();
+    } else if (this._activeTab === "flags") {
+      this._updateFlagLegend();
     } else if (this._activeTab === "tuning") {
       this._ensureTuningLoaded();
     } else if (this._activeTab === "valves") {
@@ -3108,63 +3113,57 @@ class TortoiseUfhPanel extends HTMLElement {
   _buildHero() {
     const H = {};
 
-    // Brand + manage-rooms deep link. The mark is the served brand icon; on
-    // load failure (e.g. dev preview without the static path) it swaps itself
-    // for the previous mdi/glyph mark.
+    // Brand mark. The mark is the served brand icon; on load failure (e.g. dev
+    // preview without the static path) it swaps itself for the mdi/glyph mark.
     const brandImg = h("img", { class: "brand-img", src: BRAND_ICON_URL, alt: "" });
     brandImg.addEventListener("error", () => {
       brandImg.replaceWith(this._icon("mdi:tortoise", "🐢"));
     });
     const brand = h("div", { class: "brand" }, [
       brandImg,
-      h("span", { text: "Tortoise-UFH" }),
-    ]);
-    H.manageBtn = h(
-      "button",
-      { class: "ghost-btn", type: "button", on: { click: () => this._manageRooms() } },
-      [this._icon("mdi:cog-outline", "⚙"), h("span", { text: this._t("manage_rooms") })],
-    );
-    const brandRow = h("div", { class: "hero-row brand-row" }, [
-      brand,
-      h("span", { class: "spacer" }),
-      H.manageBtn,
+      h("span", { class: "brand-name", text: "Tortoise-UFH" }),
     ]);
 
-    // Status pill + metrics.
+    // Status pill + inline stats (single-row hero — caption beside value).
     H.pillDot = h("span", { class: "pill-dot" });
     H.pillText = h("span", { class: "pill-text" });
     H.pill = h("div", { class: "pill" }, [H.pillDot, H.pillText]);
 
-    H.liveVal = h("span", { class: "metric-val" });
-    const liveMetric = h("div", { class: "metric" }, [
+    H.liveVal = h("span", { class: "stat-val" });
+    const liveMetric = h("div", { class: "stat" }, [
+      h("span", { class: "stat-cap", text: this._t("rooms_live_cap") }),
       H.liveVal,
-      h("span", { class: "metric-cap", text: this._t("rooms_live_cap") }),
     ]);
 
-    H.flagsVal = h("span", { class: "metric-val" });
-    H.flagsMetric = h("div", { class: "metric" }, [
-      H.flagsVal,
-      h("span", { class: "metric-cap", text: this._t("flags_cap") }),
-    ]);
+    // The flags stat doubles as a shortcut to the dedicated Flags tab.
+    H.flagsVal = h("span", { class: "stat-val" });
+    const gotoFlags = () => this._setActiveTab("flags");
+    H.flagsMetric = h(
+      "div",
+      {
+        class: "stat flags-stat",
+        role: "button",
+        tabindex: "0",
+        on: {
+          click: gotoFlags,
+          keydown: (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              gotoFlags();
+            }
+          },
+        },
+      },
+      [h("span", { class: "stat-cap", text: this._t("flags_cap") }), H.flagsVal],
+    );
 
-    H.dewVal = h("span", { class: "metric-val" });
-    H.dewSub = h("span", { class: "chip-sub", style: "display:none" });
+    H.dewVal = h("span", { class: "stat-val" });
     H.dewChip = h("div", { class: "chip chip-dew", style: "display:none" }, [
-      h("div", { class: "chip-main" }, [
-        h("span", { class: "chip-cap", text: this._t("dew_cap") }),
-        H.dewVal,
-      ]),
-      H.dewSub,
+      h("span", { class: "stat-cap", text: this._t("dew_cap") }),
+      H.dewVal,
     ]);
 
-    const statusRow = h("div", { class: "hero-row status-row" }, [
-      H.pill,
-      liveMetric,
-      H.flagsMetric,
-      H.dewChip,
-    ]);
-
-    // Controls: home stepper + mode segmented.
+    // Controls: home stepper + mode segmented + manage (icon-only).
     H.homeMinus = h("button", {
       class: "step-btn",
       type: "button",
@@ -3186,7 +3185,7 @@ class TortoiseUfhPanel extends HTMLElement {
     H.modeBtns = {};
     const seg = h(
       "div",
-      { class: "seg", role: "group" },
+      { class: "seg", role: "group", "aria-label": this._t("mode_cap") },
       MODES.map((m) => {
         const b = h("button", {
           class: "seg-btn",
@@ -3204,10 +3203,30 @@ class TortoiseUfhPanel extends HTMLElement {
       seg,
     ]);
 
-    const ctlRow = h("div", { class: "hero-row ctl-row" }, [homeCtl, modeCtl]);
+    H.manageBtn = h(
+      "button",
+      {
+        class: "ghost-btn icon-only",
+        type: "button",
+        title: this._t("manage_rooms"),
+        "aria-label": this._t("manage_rooms"),
+        on: { click: () => this._manageRooms() },
+      },
+      [this._icon("mdi:cog-outline", "⚙")],
+    );
 
     this._hero = H;
-    return h("header", { class: "hero" }, [brandRow, statusRow, ctlRow]);
+    return h("header", { class: "hero" }, [
+      brand,
+      H.pill,
+      liveMetric,
+      H.flagsMetric,
+      H.dewChip,
+      h("span", { class: "spacer" }),
+      homeCtl,
+      modeCtl,
+      H.manageBtn,
+    ]);
   }
 
   /** Press-and-hold repeat with acceleration; keyboard-activated once. */
@@ -3333,7 +3352,7 @@ class TortoiseUfhPanel extends HTMLElement {
     }
     H.flagsVal.textContent = String(activeFlags.size);
     H.flagsMetric.className =
-      "metric" + (activeFlags.size ? " sev-" + this._sevName(flagRank) : "");
+      "stat flags-stat" + (activeFlags.size ? " sev-" + this._sevName(flagRank) : "");
 
     // Prefer live.mode: it is refreshed on every poll, whereas config.mode is
     // only re-fetched on writes / initial load (so it can lag an external
@@ -3351,15 +3370,10 @@ class TortoiseUfhPanel extends HTMLElement {
       H.dewChip.style.display = "";
       if (dew !== null) {
         H.dewVal.textContent = fmt(dew, 1, " °C");
-        H.dewSub.textContent = "";
-        H.dewSub.style.display = "none";
         H.dewChip.title = "";
       } else {
         H.dewVal.textContent = "—";
-        const reason = this._dewReasonSummary();
-        H.dewSub.textContent = reason;
-        H.dewSub.style.display = reason ? "" : "none";
-        H.dewChip.title = reason;
+        H.dewChip.title = this._dewReasonSummary();
       }
     } else {
       H.dewChip.style.display = "none";
@@ -3442,13 +3456,24 @@ class TortoiseUfhPanel extends HTMLElement {
       role: "tabpanel",
       dataset: { tab: "rooms" },
     });
-    // The flag annunciator sits above the table: it explains everything the
-    // rows can flag, always visible so the whole flag vocabulary is legible.
-    const legend = this._buildFlagLegend();
-    el.appendChild(legend.el);
     el.appendChild(empty);
     el.appendChild(wrapEl);
-    return { el, tbody, empty, wrapEl, legend };
+    return { el, tbody, empty, wrapEl };
+  }
+
+  /**
+   * Build the "Flags" tab: the flag annunciator on its own tab (moved out of
+   * the Rooms tab). `_buildFlagLegend` owns all the rendering and sets
+   * `this._legend`; here we just host it in a tab section.
+   */
+  _buildFlagsSection() {
+    const el = h("section", {
+      class: "tab-section",
+      role: "tabpanel",
+      dataset: { tab: "flags" },
+    });
+    el.appendChild(this._buildFlagLegend().el);
+    return el;
   }
 
   /**
@@ -6380,6 +6405,8 @@ button { font-family: inherit; cursor: pointer; }
   padding: 6px 12px; font-size: 13px;
 }
 .ghost-btn:hover { border-color: var(--t-primary); }
+.ghost-btn.icon-only { padding: 0; width: 32px; height: 32px; justify-content: center; }
+.ghost-btn.icon-only .hicon { --mdc-icon-size: 20px; }
 .step-btn {
   width: 30px; height: 30px; border-radius: 8px;
   border: 1px solid var(--t-line); background: var(--t-card); color: var(--t-fg);
@@ -6389,13 +6416,12 @@ button { font-family: inherit; cursor: pointer; }
 .step-btn:hover:not(:disabled) { border-color: var(--t-primary); color: var(--t-primary); }
 .step-btn:disabled { opacity: .4; cursor: default; }
 
-/* Hero */
+/* Hero — single compact row (wraps on narrow) */
 .hero {
   background: var(--t-card); border: 1px solid var(--t-line);
-  border-radius: var(--t-radius); padding: 14px 16px; margin-bottom: 16px;
-  display: flex; flex-direction: column; gap: 14px;
+  border-radius: var(--t-radius); padding: 10px 14px; margin-bottom: 16px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
 }
-.hero-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
 .brand .hicon { --mdc-icon-size: 22px; color: var(--t-primary); }
 .brand .brand-img { width: 22px; height: 22px; object-fit: contain; display: block; }
@@ -6413,26 +6439,34 @@ button { font-family: inherit; cursor: pointer; }
 .pill-warn { color: var(--t-warn); }
 .pill-problem { color: var(--t-error); }
 .pill-alarm { color: var(--t-error); }
-.metric { display: flex; flex-direction: column; line-height: 1.15; }
-.metric-val { font-size: 18px; font-weight: 600; }
-.metric-cap { font-size: 11px; color: var(--t-muted); letter-spacing: .02em; }
-.metric.sev-ok .metric-val { color: var(--t-ok); }
-.metric.sev-warn .metric-val { color: var(--t-warn); }
-.metric.sev-problem .metric-val { color: var(--t-error); }
-.metric.sev-alarm .metric-val { color: var(--t-error); }
+
+/* Inline stats: caption beside value (single-row hero). */
+.stat { display: inline-flex; align-items: baseline; gap: 5px; line-height: 1.15; }
+.stat-cap { font-size: 11px; color: var(--t-muted); letter-spacing: .02em; }
+.stat-val { font-size: 15px; font-weight: 600; }
+.stat.sev-ok .stat-val { color: var(--t-ok); }
+.stat.sev-warn .stat-val { color: var(--t-warn); }
+.stat.sev-problem .stat-val { color: var(--t-error); }
+.stat.sev-alarm .stat-val { color: var(--t-error); }
+/* Flags stat = shortcut to the Flags tab. */
+.flags-stat {
+  cursor: pointer; padding: 3px 8px; margin: -3px 0;
+  border-radius: 999px; border: 1px solid transparent;
+}
+.flags-stat:hover { background: var(--t-chip); }
+.flags-stat:focus-visible { outline: 2px solid var(--t-primary); outline-offset: 1px; }
 .chip-dew {
-  display: inline-flex; flex-direction: column; line-height: 1.15;
-  padding: 4px 12px; border-radius: 8px;
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 5px 11px; border-radius: 999px;
   background: color-mix(in srgb, var(--t-info) 14%, transparent);
   border: 1px solid var(--t-info);
 }
-.chip-dew .chip-cap { font-size: 11px; color: var(--t-muted); }
-.chip-dew .metric-val { font-size: 15px; color: var(--t-info); }
+.chip-dew .stat-val { font-size: 14px; color: var(--t-info); }
 
-.ctl { display: flex; flex-direction: column; gap: 4px; }
-.ctl-cap { font-size: 11px; color: var(--t-muted); letter-spacing: .02em; }
+.ctl { display: inline-flex; align-items: center; gap: 8px; }
+.ctl-cap { font-size: 12px; color: var(--t-muted); letter-spacing: .02em; }
 .stepper {
-  display: inline-flex; align-items: center; gap: 8px;
+  display: inline-flex; align-items: center; gap: 6px;
   border: 1px solid var(--t-line); border-radius: 8px; padding: 2px 6px; background: var(--t-card);
 }
 .step-val { min-width: 62px; text-align: center; font-size: 15px; font-weight: 600; }
@@ -6733,8 +6767,6 @@ details.flag-legend[open] > summary { margin-bottom: 12px; }
 .assist-actions { display: inline-flex; align-items: center; gap: 10px; }
 .link-btn { border: 0; background: transparent; color: var(--t-primary); cursor: pointer; font: inherit; font-size: 12px; padding: 0; text-decoration: underline; }
 .assist-none { font-size: 12px; margin-top: 10px; }
-.chip-dew .chip-main { display: inline-flex; align-items: baseline; gap: 6px; }
-.chip-dew .chip-sub { font-size: 11px; color: var(--t-muted); line-height: 1.3; max-width: 260px; }
 
 /* Narrow sidebar: drop the least-critical columns (data stays in the detail);
    Measured/Setpoint/Valve/Assist-mode stay visible. The "Wspomaganie" group
