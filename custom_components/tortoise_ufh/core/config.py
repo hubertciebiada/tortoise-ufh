@@ -112,6 +112,24 @@ class ControllerConfig:
         heating_supply_slope: Heating-water curve steepness [K_supply per K
             outdoor shortfall below ``ff_neutral_c``] (in [0, 2]; B2
             2026-07-12). GLOBAL knob.
+        flow_epsilon_k: Minimum loop supply-return temperature difference
+            counting as flow evidence for the S6 hydraulic no-flow watchdog
+            [K] (> 0; 2026-07-13, S6). Below it — and with no probe
+            displacement toward the source — an open valve command with no
+            hydraulic response raises ``loop_no_flow``. Raise for noisy
+            probes; lower with care.
+        flow_open_threshold_pct: Valve command above which the S6 watchdog
+            starts expecting a hydraulic response from the loop [%] (in
+            [0, 100]; 2026-07-13, S6). Below it the loop is not evaluated
+            for no-flow.
+        flow_response_window_min: Minutes of continuous missing flow
+            signature (with an open command and plausible circulation)
+            before ``loop_no_flow`` is raised; the same window guards a
+            valve that never closes (``loop_stuck_open``) [min] (> 0;
+            2026-07-13, S6). The slab is slow — the UI enforces a 30-min
+            minimum (the core accepts any positive value so simulation
+            tests can use short windows); the 1440-min maximum effectively
+            disables the watchdog.
         cycle_seconds: Nominal control-cycle period [s] (> 0, default 300 = 5
             minutes).
         valve_write_threshold_pct: Minimum valve change before a new value is
@@ -154,6 +172,11 @@ class ControllerConfig:
     cooling_supply_base_c: float = 18.0
     heating_supply_base_c: float = 26.0
     heating_supply_slope: float = 0.5
+    # S6 hydraulic no-flow watchdog knobs (2026-07-13): thresholds/windows of
+    # the loop-probe actuation witness; see core/flow_watchdog.py.
+    flow_epsilon_k: float = 0.3
+    flow_open_threshold_pct: float = 15.0
+    flow_response_window_min: float = 45.0
     cycle_seconds: float = 300.0
     # 2.0 -> 5.0 (2026-07-12, K2b): measured on the twin (steady_heating
     # @ 300 s, tail 24-48 h), the 2 pp threshold did NOT bound kt's noise
@@ -173,7 +196,10 @@ class ControllerConfig:
                 not exceed ``deadband_c``, ``fast_target_offset_k`` is outside
                 ``[0, 3]``, or a heat-pump water knob is outside its range
                 (``cooling_supply_base_c`` [10, 25], ``heating_supply_base_c``
-                [20, 40], ``heating_supply_slope`` [0, 2]).
+                [20, 40], ``heating_supply_slope`` [0, 2]), or an S6 watchdog
+                knob is out of range (``flow_epsilon_k`` > 0,
+                ``flow_open_threshold_pct`` [0, 100],
+                ``flow_response_window_min`` > 0).
         """
         for gain_name, gain in (
             ("kp", self.kp),
@@ -244,6 +270,21 @@ class ControllerConfig:
             msg = (
                 "heating_supply_slope must be in [0, 2], got "
                 f"{self.heating_supply_slope}"
+            )
+            raise ValueError(msg)
+        if self.flow_epsilon_k <= 0:
+            msg = f"flow_epsilon_k must be > 0, got {self.flow_epsilon_k}"
+            raise ValueError(msg)
+        if not 0.0 <= self.flow_open_threshold_pct <= 100.0:
+            msg = (
+                "flow_open_threshold_pct must be in [0, 100], got "
+                f"{self.flow_open_threshold_pct}"
+            )
+            raise ValueError(msg)
+        if self.flow_response_window_min <= 0:
+            msg = (
+                "flow_response_window_min must be > 0, got "
+                f"{self.flow_response_window_min}"
             )
             raise ValueError(msg)
         if self.cycle_seconds <= 0:

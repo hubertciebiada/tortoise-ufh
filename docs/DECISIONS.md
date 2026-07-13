@@ -841,3 +841,87 @@ groups with full knob names; diagnostics folded into their own collapsed section
 "Okablowanie" renamed to "Czujniki i sygnały" with the live VALUE as the headline and
 the entity id behind an "i" icon; a tooltip + manual paragraph explaining the deliberate
 ±1 K split-target offset (S12).
+
+---
+
+## 15. Revision — hydraulic no-flow watchdog (S6) + valve write-path fixes (2026-07-13, v0.9.0)
+
+> **Status: this EXTENDS the frozen contract additively.** New `RoomInputs` /
+> `RoomReport` / `ControllerConfig` fields (all defaulted, so old callers are
+> unchanged) and a new optional `BuildingController.step` keyword. No output-contract
+> change: the three external outputs (valve %, fast-source command, safe dew point)
+> are untouched; the watchdog only ADDS flags and freezes integrators. Motivated by a
+> production incident on the owner's LIVE house (11 rooms cooling) — see GitHub issue
+> #4 and `docs/NO_FLOW_WATCHDOG.md`.
+
+**The incident.** After a power-event reboot both valve controllers accepted targets
+but never moved the actuators, and the HA `valve` entities **echoed the commanded
+position back as `current_position`**. For ~2.5 h of LIVE cooling nothing on the data
+path noticed: `valve_mismatch` never fired (command == feedback, perfectly), the
+integrators wound up against an unresponsive plant, and a frozen-**open** cooling loop
+sat outside BOTH condensation guards (S2 modulates the *command*; the water kept
+flowing). Only a human watching the manifold rotameters caught it.
+
+**A. Hydraulic no-flow watchdog (new safety rule S6, pure core `core/flow_watchdog.py`).**
+The already-wired per-loop `entity_supply` / `entity_return` probes are an INDEPENDENT
+physical witness of actuation; the watchdog **never trusts the `valve` entity feedback**
+(that channel proved it can lie end-to-end).
+
+- **`loop_no_flow`:** a room LIVE + heating/cooling, valve commanded ≥
+  `flow_open_threshold_pct` for ≥ `flow_response_window_min`, but the loop shows no
+  hydraulic signature — `|T_supply − T_return| < flow_epsilon_k` AND no `T_supply`
+  displacement toward the source side — raises the flag and FREEZES that room's
+  integrator (stops the wind-up seen in the incident). Window starts on the second
+  cycle (the first only establishes the reference), so the flag lands within one
+  `response_window` + one cycle.
+- **`loop_stuck_open`:** valve commanded 0 for ≥ the window but the loop keeps a
+  persistent source-side signature — raises the flag and, in cooling, feeds the global
+  safe-dew logic (treated as "cold floor active" so the pump floor cannot drop under a
+  loop that is really flowing cold).
+- **False-positive gating (circulation evidence).** A loop is only judged when
+  circulation is plausible: at least one OTHER loop in the system shows a healthy ΔT,
+  or the optional `entity_global_supply` manifold probe reads source-side. Otherwise
+  the window is HELD (no accrual). Multi-loop rooms are judged per loop, worst
+  reported. The RETURN probe is weighted more than supply (supply sometimes sits on the
+  manifold bar before the valve). Rooms without probes: watchdog silently inactive,
+  panel shows "—". The global-probe path is **SUSPENDED while any room reports
+  `hp_active_for_ufh is False`** (DHW/defrost): a manifold probe can keep reading
+  source-side while every UFH loop is legitimately starved, so trusting it would bank
+  no-flow windows on healthy loops. The per-loop witness path needs no such guard (the
+  other loops are not flowing either → HELD).
+- **Reaction is passive:** flag + a per-room `binary_sensor` (`flow_fault`, device class
+  PROBLEM) + integrator freeze. **No automatic valve banging.**
+
+**B. Actuation self-test (manual service `tortoise_ufh.test_actuation`).** Per room, on
+demand (never scheduled): drive the valve to 100 % for `duration_minutes` (20–30),
+verify the loop's ΔT / supply-trend response, report pass/fail in the panel and via the
+`actuation_test_running` / `actuation_test_failed` flags. Requires the room LIVE with
+probes; overheat / condensation safety aborts it; the integrator is frozen during the
+run.
+
+**C. Valve write-path fixes (`writers.py`).**
+
+- **Re-assert parity with the splits.** Valve commands now re-assert unconditionally
+  every ~45 min (`_VALVE_REASSERT_SECONDS`) AND immediately when the entity's feedback
+  diverges from the last CACHED command by ≥ `_VALVE_FEEDBACK_DIVERGENCE_PCT` (10 %,
+  numerically the S8 mismatch tolerance). This heals the class where an external
+  controller reset reverts targets to its park position and the write cache said
+  "already written" forever. An echoing (lying) channel never trips this trigger — that
+  failure mode is S6's job.
+- **Diagnosis correction (issue #4 item 2).** The reported "threshold compares the wrong
+  baseline" bug did NOT reproduce: the threshold already compares against the
+  last-WRITTEN position, so a slow 30 % → 0.8 % decay DID emit writes
+  (30 → 24.5 → 17.5 → 10.5 → 4.0). The real residue was the final sub-threshold tail
+  (ending ~4 % while the command is 0.8 %); the re-assert above closes it within one
+  period. The write cache is still updated on DISPATCH (fire-and-forget) — a dropped
+  write is healed by the re-assert / feedback triggers, never trusted forever.
+
+**Simulator.** `BuildingSimulator` gained fault injection (`set_actuator_fault` +
+`update_loop_probes`) so the digital twin can model an echoing, frozen actuator; the
+acceptance-criteria tests (`tests/simulation/test_no_flow_watchdog.py`) exercise
+`loop_no_flow` / `loop_stuck_open` and assert ZERO false S6 flags across the existing
+gate scenarios (hot_july, night_setback, cold_snap, solar_overshoot).
+
+**New tuning knobs** (all in the "Flow watchdog (S6)" tuning group): `flow_epsilon_k`
+(0.3 K default), `flow_open_threshold_pct` (15 %), `flow_response_window_min` (45 min,
+UI floor 30, 1440 disables).

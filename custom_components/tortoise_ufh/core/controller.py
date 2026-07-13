@@ -37,11 +37,18 @@ from dataclasses import replace
 from .config import ControllerConfig
 from .dew_point import cooling_throttle_factor, dew_point
 from .fast_source import FAST_TARGET_OFFSET_K, FastSourceMachine  # noqa: F401
+from .flow_watchdog import (
+    CIRCULATION_DELTA_K,
+    GLOBAL_SUPPLY_MARGIN_K,
+    ActuationSelfTest,
+    FlowWatchdog,
+)
 from .models import (
     BuildingOutputs,
     FastSourceCommand,
     FastSourceKind,
     FastSourceMode,
+    LoopInput,
     Mode,
     RoomInputs,
     RoomOutputs,
@@ -297,6 +304,26 @@ class RoomController:
         # across cycles and applied as a post-processing override of the
         # computed outputs (PRD 8.7).
         self._safety = SafetyEvaluator()
+        # S6 hydraulic no-flow watchdog (2026-07-13): per-loop window
+        # machines over the supply/return probes — an independent physical
+        # witness of actuation that never trusts the valve-entity feedback.
+        self._flow = FlowWatchdog(config)
+        # Manual actuation self-test (S6/C): deliberate 100 % excursion with
+        # a displacement-based hydraulic verdict; see flow_watchdog.py.
+        self._selftest = ActuationSelfTest()
+        # The valve position the core actually EMITTED last cycle — the S6
+        # watchdog's command reference. Deliberately distinct from
+        # ``_last_valve_pct``: that one is NOT overwritten by the safety
+        # override (the sensor-lost freeze must hold healthy regulation), so
+        # during an S1/S2 episode it would hold a pre-safety value and fake
+        # a no-flow alarm on a valve that is honestly commanded 0.
+        self._last_emitted_valve_pct: float | None = None
+        # Snapshot of the last step's mode/loops/dew factor, so the
+        # out-of-band ``begin_actuation_test`` can validate its
+        # preconditions without a wall clock or fresh inputs.
+        self._last_seen_mode: Mode | None = None
+        self._last_loops: tuple[LoopInput, ...] = ()
+        self._last_dew_factor: float = 1.0
 
     # -- properties ---------------------------------------------------------
 
@@ -365,13 +392,34 @@ class RoomController:
         # wait under an active S1 elapsed twice as fast as wall-clock time.
         self._fast.tick(dt_seconds)
 
+        # -- S6: hydraulic no-flow watchdog (2026-07-13) ---------------------
+        # Updated at the START of the step (before the PID) with the valve
+        # position the core EMITTED last cycle, so the integrator-freeze
+        # verdict in step 7 is already current. Held while a self-test runs
+        # (the deliberate excursion would corrupt the window references).
+        self._flow.update(
+            inputs,
+            commanded_pct=self._last_emitted_valve_pct,
+            dt_seconds=dt_seconds,
+            paused=self._selftest.running,
+        )
+        self._last_seen_mode = inputs.mode
+        self._last_loops = inputs.loops
+
+        # Self-test abort conditions independent of the control path: a lost
+        # room sensor or a mode change invalidates the measurement.
+        if self._selftest.running and (
+            inputs.room_temperature_c is None or inputs.mode is not self._selftest.mode
+        ):
+            self._abort_selftest()
+
         # -- Step 1: missing room temperature -> safe degrade ---------------
         t_room = inputs.room_temperature_c
         if t_room is None:
             degraded = self._apply_safety(
                 inputs, self._safe_degrade(inputs.mode, dt_seconds)
             )
-            return self._finalize(inputs, degraded)
+            return self._finalize(inputs, degraded, dt_seconds=dt_seconds)
 
         # A live-sensor step has run: future safe-degrade holds the real last
         # commanded valve rather than the mode-aware cold-start default.
@@ -420,10 +468,25 @@ class RoomController:
                 dt_seconds=dt_seconds,
             )
 
-        return self._finalize(inputs, self._apply_safety(inputs, result))
+        # Actuation self-test excursion (S6/C): the valve is overridden to
+        # 100 % BEFORE the safety layer, so S1 (overheat) and S2
+        # (condensation) always win over the test.
+        if self._selftest.running and mode in (Mode.HEATING, Mode.COOLING):
+            result = replace(result, valve_position_pct=100.0)
+        result = self._apply_safety(inputs, result)
+        # A safety override on top of a running test means the measurement is
+        # meaningless (the valve is no longer at 100 %): abort, do not force.
+        if self._selftest.running and (
+            "s1_floor_overheat" in result.report.flags
+            or "s2_condensation" in result.report.flags
+        ):
+            self._abort_selftest()
+        return self._finalize(inputs, result, dt_seconds=dt_seconds)
 
-    def _finalize(self, inputs: RoomInputs, result: RoomOutputs) -> RoomOutputs:
-        """Stamp the additive dew-reason and dwell-remaining report fields.
+    def _finalize(
+        self, inputs: RoomInputs, result: RoomOutputs, *, dt_seconds: float
+    ) -> RoomOutputs:
+        """Stamp the additive report fields and advance the self-test.
 
         Runs after the safety override so the dwell value reflects the final
         fast-source state (a safety force-off clears it). Uses ``replace`` to
@@ -432,25 +495,60 @@ class RoomController:
         feedback disagreed with the previous cycle's command, and records this
         cycle's commanded on-state for the next comparison.
 
+        S6 (2026-07-13): merges the ``loop_no_flow`` / ``loop_stuck_open`` /
+        ``actuation_test_*`` flags, stamps the per-loop flow statuses and the
+        self-test payload, advances a running self-test by ``dt_seconds``
+        (restarting the watchdog windows when the test just ended — the
+        excursion moved the loop temperatures), and records the FINAL emitted
+        valve position as the watchdog's next command reference.
+
         Args:
             inputs: The room's raw inputs for this cycle (for the dew-reason
-                classification).
+                classification and the self-test's current probe values).
             result: The post-safety computed outputs.
+            dt_seconds: Elapsed time this cycle [s] (self-test progress).
 
         Returns:
-            The result with ``dew_excluded_reason`` and ``fast_dwell_remaining_s``
-            filled in.
+            The result with every additive report field filled in.
         """
+        if self._selftest.running:
+            self._selftest.advance(
+                dt_seconds,
+                inputs.loops,
+                epsilon_k=self._config.flow_epsilon_k,
+            )
+            if not self._selftest.running:
+                # The excursion moved the loop temperatures: pre-test window
+                # references are stale, so S6 re-arms from scratch.
+                self._flow.restart_windows()
         flags = result.report.flags
         if self._fast.mismatch:
             flags = tuple(dict.fromkeys((*flags, "fast_source_mismatch")))
+        extra: list[str] = []
+        if self._flow.no_flow_active:
+            extra.append("loop_no_flow")
+        if self._flow.stuck_open_active:
+            extra.append("loop_stuck_open")
+        if self._selftest.running:
+            extra.append("actuation_test_running")
+        if self._selftest.failed:
+            extra.append("actuation_test_failed")
+        if extra:
+            flags = tuple(dict.fromkeys((*flags, *extra)))
         report = replace(
             result.report,
             dew_excluded_reason=classify_dew_eligibility(inputs),
             fast_dwell_remaining_s=self._fast.dwell_remaining_s,
             flags=flags,
+            loop_flow_status=self._flow.loop_statuses,
+            actuation_test_status=self._selftest.report_status,
+            actuation_test_remaining_min=self._selftest.remaining_min,
+            actuation_test_loops=self._selftest.loop_results,
         )
         self._fast.note_command(result.fast_source.on, result.fast_source.mode)
+        # The S6 command reference: what the core ACTUALLY emitted, including
+        # safety overrides and the self-test excursion.
+        self._last_emitted_valve_pct = result.valve_position_pct
         return replace(result, report=report)
 
     def reset(self) -> None:
@@ -465,6 +563,76 @@ class RoomController:
         self._fast.reset()
         self._fast_entry_state = FastSourceMode.OFF
         self._safety.reset()
+        self._flow.reset()
+        self._selftest.reset()
+        self._last_emitted_valve_pct = None
+        self._last_seen_mode = None
+        self._last_loops = ()
+        self._last_dew_factor = 1.0
+
+    def begin_actuation_test(self, duration_s: float) -> str | None:
+        """Start the manual actuation self-test for this room (S6/C).
+
+        Validates the preconditions against the LAST control cycle's snapshot
+        (the core has no wall clock and no fresh inputs out-of-band), then
+        arms the :class:`~tortoise_ufh.core.flow_watchdog.ActuationSelfTest`
+        with the last cycle's probe values as displacement references. From
+        the next :meth:`step` on, the valve is driven to 100 % (safety rules
+        stay supreme), the integrator freezes, and after ``duration_s`` the
+        per-loop hydraulic response is graded.
+
+        Cooling gate (the key safety decision): a 100 % excursion of chilled
+        water is allowed ONLY with the local dew throttle fully open
+        (``dew_throttle_factor == 1.0`` — supply at least ``dew_margin_k``
+        above the room dew point); the throttle collapsing mid-test aborts
+        it, and the S2 hard rule keeps overriding the excursion regardless.
+
+        Args:
+            duration_s: Test duration [s] (> 0; the service layer bounds it
+                to 20-30 min).
+
+        Returns:
+            ``None`` when the test started, or a refusal reason:
+            ``"already_running"``, ``"mode_inactive"`` (mode is not
+            HEATING/COOLING), ``"no_probes"`` (no loop carries both water
+            probes), or ``"dew_unsafe"`` (cooling with a throttled dew gap).
+
+        Raises:
+            ValueError: If ``duration_s`` is not positive.
+        """
+        if self._selftest.running:
+            return "already_running"
+        if self._last_seen_mode not in (Mode.HEATING, Mode.COOLING):
+            return "mode_inactive"
+        if not any(
+            loop.supply_temperature_c is not None
+            and loop.return_temperature_c is not None
+            for loop in self._last_loops
+        ):
+            return "no_probes"
+        if self._last_seen_mode is Mode.COOLING and self._last_dew_factor < 1.0:
+            return "dew_unsafe"
+        return self._selftest.begin(
+            duration_s=duration_s,
+            loops=self._last_loops,
+            mode=self._last_seen_mode,
+        )
+
+    def cancel_actuation_test(self) -> None:
+        """Cancel a running actuation self-test (no-op when idle).
+
+        The valve returns to the PI value on the next cycle through the
+        normal write path; the S6 windows restart (the partial excursion
+        already moved the loop temperatures).
+        """
+        if self._selftest.running:
+            self._selftest.cancel()
+            self._flow.restart_windows()
+
+    def _abort_selftest(self) -> None:
+        """Abort a running self-test and re-arm the S6 windows."""
+        self._selftest.abort()
+        self._flow.restart_windows()
 
     def invalidate_trend(self) -> None:
         """Invalidate the filtered trend after a control-cycle gap.
@@ -849,6 +1017,13 @@ class RoomController:
         if mode is Mode.COOLING and not inputs.cooling_enabled:
             fast = self._fast.force_off()
             self._last_valve_pct = 0.0
+            # No throttle is computed for an opted-out room: keep the
+            # self-test dew gate conservative (a 100 % chilled-water
+            # excursion into a cooling-disabled room is never allowed) and
+            # abort a test that somehow survived into this branch.
+            self._last_dew_factor = 0.0
+            if self._selftest.running:
+                self._abort_selftest()
             self._note_inactive(dt_seconds)
             report = _passive_report(
                 error_c=error_c,
@@ -920,7 +1095,24 @@ class RoomController:
         dew_factor = 1.0
         if mode is Mode.COOLING:
             dew_factor = self._cooling_throttle(inputs, room_dew, flags)
-        freeze = inputs.hp_active_for_ufh is False or dew_factor < 1.0
+        # Snapshot for the out-of-band self-test start gate (dew_unsafe) and
+        # the per-cycle cooling abort below.
+        self._last_dew_factor = dew_factor
+        # A running self-test in COOLING loses its dew headroom the moment
+        # the throttle engages: abort, never "finish by force".
+        if self._selftest.running and mode is Mode.COOLING and dew_factor < 1.0:
+            self._abort_selftest()
+        # S6 (2026-07-13): a latched no-flow alarm freezes the integrator —
+        # the incident's wind-up against a non-responding plant. stuck_open
+        # deliberately does NOT freeze (with a 0 command the integral
+        # discharges legitimately). A running self-test freezes too: the PI
+        # must not wind against the forced 100 % excursion for 25 min.
+        freeze = (
+            inputs.hp_active_for_ufh is False
+            or dew_factor < 1.0
+            or self._flow.no_flow_active
+            or self._selftest.running
+        )
 
         # -- Step 8: PI compute (integral on the REAL elapsed dt) ------------
         pid_out = self._pid.compute(
@@ -1350,7 +1542,11 @@ class BuildingController:
         self._group_last_winner: dict[str, FastSourceMode] = {}
 
     def step(
-        self, inputs: dict[str, RoomInputs], *, dt_seconds: float = 300.0
+        self,
+        inputs: dict[str, RoomInputs],
+        *,
+        dt_seconds: float = 300.0,
+        global_supply_temperature_c: float | None = None,
     ) -> BuildingOutputs:
         """Run every room controller and compute the global safe dew point.
 
@@ -1359,10 +1555,24 @@ class BuildingController:
         it is ``None`` when no room is eligible. It never *lowers* on any single
         room — it is a maximum plus a fixed safety margin.
 
+        S6 (2026-07-13): before dispatching, the building-level circulation
+        gate is computed from the RAW inputs (see
+        :meth:`_circulation_evident`) and injected into every room's inputs
+        via ``dataclasses.replace`` — the ``step(inputs, *, dt_seconds)``
+        room contract stays verbatim. After the room steps, a COOLING room
+        whose report carries ``loop_stuck_open`` while it is excluded as
+        ``cooling_disabled`` is force-included into the global dew maximum
+        (its physically flowing cold floor is real; the pump's water floor
+        is the only defence an actuator that ignores commands cannot
+        bypass), and its ``dew_excluded_reason`` is re-stamped to ``None``.
+
         Args:
             inputs: Per-room :class:`~tortoise_ufh.models.RoomInputs` keyed by
                 room name.
             dt_seconds: Elapsed time since the previous step [s]. Must be > 0.
+            global_supply_temperature_c: Optional manifold-bar supply probe
+                [degC] feeding the S6 circulation gate; ``None`` when not
+                configured (additive kw-only parameter, 2026-07-13).
 
         Returns:
             The :class:`~tortoise_ufh.models.BuildingOutputs`.
@@ -1376,8 +1586,10 @@ class BuildingController:
 
         rooms: dict[str, RoomOutputs] = {}
         dew_points: list[float] = []
+        circulation = self._circulation_evident(inputs, global_supply_temperature_c)
 
-        for name, room_inputs in inputs.items():
+        for name, raw_inputs in inputs.items():
+            room_inputs = replace(raw_inputs, circulation_evident=circulation)
             controller = self._controllers.get(name)
             if controller is None:
                 rooms[name] = self._unknown_room_output(
@@ -1394,6 +1606,14 @@ class BuildingController:
             dew = self._eligible_dew_point(room_inputs)
             if dew is not None:
                 dew_points.append(dew)
+            else:
+                stuck_dew = self._stuck_open_dew_point(room_inputs, rooms[name])
+                if stuck_dew is not None:
+                    dew_points.append(stuck_dew)
+                    rooms[name] = replace(
+                        rooms[name],
+                        report=replace(rooms[name].report, dew_excluded_reason=None),
+                    )
 
         # K4 (2026-07-12): one direction per shared outdoor unit — arbitrate
         # conflicting fast-source commands within each multisplit group.
@@ -1439,7 +1659,145 @@ class BuildingController:
         if controller is not None:
             controller.notify_fast_source_farewell()
 
+    def begin_actuation_test(self, room_name: str, *, duration_s: float) -> str | None:
+        """Start one room's actuation self-test (S6/C; adapter hook).
+
+        Args:
+            room_name: The room to test.
+            duration_s: Test duration [s] (> 0).
+
+        Returns:
+            ``None`` when the test started, else the refusal reason (see
+            :meth:`RoomController.begin_actuation_test`) or
+            ``"unknown_room"``.
+        """
+        controller = self._controllers.get(room_name)
+        if controller is None:
+            return "unknown_room"
+        return controller.begin_actuation_test(duration_s)
+
+    def cancel_actuation_test(self, room_name: str) -> None:
+        """Cancel one room's running actuation self-test (adapter hook).
+
+        Unknown room names are ignored.
+
+        Args:
+            room_name: The room whose test to cancel.
+        """
+        controller = self._controllers.get(room_name)
+        if controller is not None:
+            controller.cancel_actuation_test()
+
     # -- internal helpers ---------------------------------------------------
+
+    @staticmethod
+    def _circulation_evident(
+        inputs: dict[str, RoomInputs],
+        global_supply_temperature_c: float | None,
+    ) -> bool | None:
+        """Compute the S6 building-level circulation gate from RAW inputs.
+
+        ``True`` when (a) ANY loop in the building carries both probes with
+        ``|supply - return|`` at or above
+        :data:`~tortoise_ufh.core.flow_watchdog.CIRCULATION_DELTA_K` —
+        deliberately including the inspected room's own loop (a post-valve
+        dead loop shows ~0 delta-T and contributes nothing, while a
+        manifold-bar pair with a large delta-T proves a live source) — or
+        (b) the optional global supply probe reads source-side of the mean
+        available room temperature by
+        :data:`~tortoise_ufh.core.flow_watchdog.GLOBAL_SUPPLY_MARGIN_K`
+        (heating above / cooling below, using the building's single active
+        direction). The global-probe path is SUSPENDED (contributes neither
+        ``True`` nor ``judged``) while any room reports
+        ``hp_active_for_ufh is False``: during DHW/defrost a manifold probe
+        can keep reading source-side while every UFH loop is legitimately
+        starved, so trusting it would accumulate no-flow windows on healthy
+        loops. ``False`` when evidence sources exist but none indicates
+        circulation (pump provably idle). ``None`` when nothing can judge —
+        the per-room watchdogs then HOLD.
+
+        Args:
+            inputs: Per-room raw inputs of this cycle.
+            global_supply_temperature_c: Optional manifold supply probe
+                [degC].
+
+        Returns:
+            ``True`` / ``False`` / ``None`` as described.
+        """
+        judged = False
+        for room_inputs in inputs.values():
+            for loop in room_inputs.loops:
+                supply = loop.supply_temperature_c
+                ret = loop.return_temperature_c
+                if supply is None or ret is None:
+                    continue
+                judged = True
+                if abs(supply - ret) >= CIRCULATION_DELTA_K:
+                    return True
+        hp_diverted = any(ri.hp_active_for_ufh is False for ri in inputs.values())
+        if global_supply_temperature_c is not None and not hp_diverted:
+            temps = [
+                ri.room_temperature_c
+                for ri in inputs.values()
+                if ri.room_temperature_c is not None
+            ]
+            active_modes = {
+                ri.mode
+                for ri in inputs.values()
+                if ri.mode in (Mode.HEATING, Mode.COOLING)
+            }
+            if temps and len(active_modes) == 1:
+                judged = True
+                t_mean = sum(temps) / len(temps)
+                mode = next(iter(active_modes))
+                if (
+                    mode is Mode.HEATING
+                    and global_supply_temperature_c >= t_mean + GLOBAL_SUPPLY_MARGIN_K
+                ) or (
+                    mode is Mode.COOLING
+                    and global_supply_temperature_c <= t_mean - GLOBAL_SUPPLY_MARGIN_K
+                ):
+                    return True
+        return False if judged else None
+
+    @staticmethod
+    def _stuck_open_dew_point(
+        room_inputs: RoomInputs, outputs: RoomOutputs
+    ) -> float | None:
+        """Dew point of a stuck-open COOLING room excluded as cooling_disabled.
+
+        S6 (2026-07-13): a room whose valve physically passes chilled water
+        DESPITE a 0 command (``loop_stuck_open``) has an actively cold floor
+        — but a ``cooling_disabled`` room is excluded from the global safe
+        dew point, so the heat pump's water floor (the ONLY protection an
+        actuator that ignores commands cannot bypass; the local S2 modulates
+        a command nobody executes) would ignore exactly the room that needs
+        it. Force its dew point (with the K7 staleness pad) into the global
+        maximum.
+
+        Args:
+            room_inputs: The room's raw inputs this cycle.
+            outputs: The room's finalised outputs this cycle.
+
+        Returns:
+            The padded dew point [degC], or ``None`` when the room does not
+            qualify (no stuck-open flag, not COOLING/cooling_disabled, or
+            unusable temperature/humidity).
+        """
+        if "loop_stuck_open" not in outputs.report.flags:
+            return None
+        if room_inputs.mode is not Mode.COOLING:
+            return None
+        if classify_dew_eligibility(room_inputs) != "cooling_disabled":
+            return None
+        t_room = room_inputs.room_temperature_c
+        rh = room_inputs.humidity_pct
+        if t_room is None or rh is None or rh <= 0.0:
+            return None
+        dew = dew_point(t_room, rh)
+        if room_inputs.humidity_stale_frac > 0.0:
+            dew += _STALE_RH_DEW_PAD_K * room_inputs.humidity_stale_frac
+        return dew
 
     def _arbitrate_fast_groups(
         self,

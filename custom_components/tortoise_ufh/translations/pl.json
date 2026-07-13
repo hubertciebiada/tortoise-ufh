@@ -64,6 +64,9 @@
           "ff_neutral_c": "Temperatura neutralna sprzężenia pogodowego (°C)",
           "ff_gain_pct_per_k": "Wzmocnienie sprzężenia pogodowego (%/K)",
           "ff_max_pct": "Limit sprzężenia pogodowego (%)",
+          "flow_epsilon_k": "Watchdog przepływu: minimalna ΔT uznawana za przepływ (K)",
+          "flow_open_threshold_pct": "Watchdog przepływu: próg komendy otwarcia (%)",
+          "flow_response_window_min": "Watchdog przepływu: okno odpowiedzi (min)",
           "outdoor_ff_enabled": "Sprzężenie w przód od temperatury zewnętrznej"
         }
       },
@@ -126,7 +129,14 @@
           "ff_neutral_c": "Temperatura neutralna sprzężenia pogodowego (°C)",
           "ff_gain_pct_per_k": "Wzmocnienie sprzężenia pogodowego (%/K)",
           "ff_max_pct": "Limit sprzężenia pogodowego (%)",
-          "outdoor_ff_enabled": "Sprzężenie w przód od temperatury zewnętrznej"
+          "flow_epsilon_k": "Watchdog przepływu: minimalna ΔT uznawana za przepływ (K)",
+          "flow_open_threshold_pct": "Watchdog przepływu: próg komendy otwarcia (%)",
+          "flow_response_window_min": "Watchdog przepływu: okno odpowiedzi (min)",
+          "outdoor_ff_enabled": "Sprzężenie w przód od temperatury zewnętrznej",
+          "entity_global_supply": "Globalny czujnik temperatury zasilania na belce (opcjonalnie)"
+        },
+        "data_description": {
+          "entity_global_supply": "Opcjonalna sonda na belce zasilającej rozdzielacza, przed zaworami pętli. Zasila bramkę cyrkulacji watchdoga przepływu: gdy wyraźnie wskazuje stronę źródła względem średniej temperatury pomieszczeń, cyrkulacja jest uznana za dowiedzioną, nawet gdy wszystkie sondy pętli siedzą za zaworami. Uwaga: podczas CWU/odszraniania (encja dostępności pompy w stanie off) bramka ignoruje tę sondę."
         }
       },
       "add_room": {
@@ -292,6 +302,9 @@
       },
       "s2_condensation_active": {
         "name": "Aktywna ochrona przed kondensacją"
+      },
+      "flow_fault": {
+        "name": "Awaria przepływu pętli"
       }
     }
   },
@@ -335,6 +348,24 @@
         "mode": {
           "name": "Tryb",
           "description": "Tryb pracy systemu (grzanie / przejściowy / chłodzenie / wyłączony)."
+        }
+      }
+    },
+    "test_actuation": {
+      "name": "Test aktuacji",
+      "description": "Uruchamia ręczny self-test aktuacji dla jednego pomieszczenia: zawór jest celowo wysterowany na 100 % na zadany czas, a o wyniku (zaliczony/niezaliczony) decyduje hydrauliczna odpowiedź pętli (sondy zasilania/powrotu). Do uruchamiania po serwisie lub zdarzeniu zasilania — nigdy cyklicznie. Wymaga pomieszczenia w stanie Steruje i skonfigurowanych sond wody; reguły bezpieczeństwa (przegrzanie, kondensacja) przerywają test.",
+      "fields": {
+        "room": {
+          "name": "Pomieszczenie",
+          "description": "Identyfikator (nazwa) pomieszczenia do przetestowania."
+        },
+        "duration_minutes": {
+          "name": "Czas trwania",
+          "description": "Czas trwania testu w minutach (20-30; domyślnie 25)."
+        },
+        "cancel": {
+          "name": "Anuluj",
+          "description": "Anuluje trwający self-test pomieszczenia zamiast uruchamiać nowy."
         }
       }
     }

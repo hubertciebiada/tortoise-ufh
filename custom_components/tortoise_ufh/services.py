@@ -7,6 +7,8 @@ panel websocket API uses):
 * ``tortoise_ufh.set_home_temperature`` -> ``coordinator.set_home_temperature``
 * ``tortoise_ufh.set_room_offset``      -> ``coordinator.set_room_offset``
 * ``tortoise_ufh.set_mode``             -> ``coordinator.set_mode``
+* ``tortoise_ufh.test_actuation``       -> ``coordinator.async_test_actuation``
+  (S6/C, 2026-07-13 — the manual per-room actuation self-test)
 
 Registration is process-wide: :func:`async_register_services` is called exactly
 once per Home Assistant instance (guarded by the caller in ``__init__.py``),
@@ -39,11 +41,38 @@ if TYPE_CHECKING:
 SERVICE_SET_HOME_TEMPERATURE = "set_home_temperature"
 SERVICE_SET_ROOM_OFFSET = "set_room_offset"
 SERVICE_SET_MODE = "set_mode"
+SERVICE_TEST_ACTUATION = "test_actuation"
 
 _ATTR_TEMPERATURE = "temperature"
 _ATTR_ROOM = "room"
 _ATTR_OFFSET = "offset"
 _ATTR_MODE = "mode"
+_ATTR_DURATION_MINUTES = "duration_minutes"
+_ATTR_CANCEL = "cancel"
+
+_TEST_DURATION_MIN_MINUTES = 20.0
+"""Lower bound of the self-test duration [min] — shorter excursions leave too
+faint a hydraulic signature to grade reliably."""
+
+_TEST_DURATION_MAX_MINUTES = 30.0
+"""Upper bound of the self-test duration [min] — a longer 100 % excursion of
+chilled/hot water serves no diagnostic purpose."""
+
+_TEST_DURATION_DEFAULT_MINUTES = 25.0
+"""Default self-test duration [min]."""
+
+# Human-readable elaborations of the refusal reasons returned by
+# ``coordinator.async_test_actuation`` (kept terse and English-only, matching
+# HomeAssistantError conventions; the panel renders its own localised copy).
+_TEST_REFUSAL_DETAILS: dict[str, str] = {
+    "unknown_room": "the room is not configured",
+    "not_ready": "the controller is not ready yet",
+    "room_not_live": "the room is not LIVE (only a live room may move a valve)",
+    "no_probes": "the room has no loop with both supply and return probes",
+    "already_running": "a self-test is already running for this room",
+    "mode_inactive": "the system mode is neither heating nor cooling",
+    "dew_unsafe": "cooling dew-point headroom is insufficient for an excursion",
+}
 
 _SET_HOME_TEMPERATURE_SCHEMA = vol.Schema(
     {
@@ -66,6 +95,19 @@ _SET_ROOM_OFFSET_SCHEMA = vol.Schema(
 _SET_MODE_SCHEMA = vol.Schema(
     {
         vol.Required(_ATTR_MODE): vol.In(list(MODE_OPTIONS)),
+    }
+)
+
+_TEST_ACTUATION_SCHEMA = vol.Schema(
+    {
+        vol.Required(_ATTR_ROOM): cv.string,
+        vol.Optional(
+            _ATTR_DURATION_MINUTES, default=_TEST_DURATION_DEFAULT_MINUTES
+        ): vol.All(
+            vol.Coerce(float),
+            vol.Range(min=_TEST_DURATION_MIN_MINUTES, max=_TEST_DURATION_MAX_MINUTES),
+        ),
+        vol.Optional(_ATTR_CANCEL, default=False): cv.boolean,
     }
 )
 
@@ -127,6 +169,26 @@ def async_register_services(hass: HomeAssistant) -> None:
         coordinator = _resolve_coordinator(hass)
         coordinator.set_mode(Mode(str(call.data[_ATTR_MODE])))
 
+    async def _handle_test_actuation(call: ServiceCall) -> None:
+        coordinator = _resolve_coordinator(hass)
+        room = str(call.data[_ATTR_ROOM])
+        cancel = bool(call.data[_ATTR_CANCEL])
+        duration_s = float(call.data[_ATTR_DURATION_MINUTES]) * 60.0
+        reason = await coordinator.async_test_actuation(
+            room, duration_s=duration_s, cancel=cancel
+        )
+        if reason is None:
+            return
+        detail = _TEST_REFUSAL_DETAILS.get(reason, reason)
+        message = (
+            f"Cannot start actuation self-test for room {room!r}: {detail} ({reason})."
+        )
+        # Caller-fixable preconditions are validation errors; anything else
+        # (unexpected core refusal) is a generic HomeAssistantError.
+        if reason in _TEST_REFUSAL_DETAILS:
+            raise ServiceValidationError(message)
+        raise HomeAssistantError(message)
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_SET_HOME_TEMPERATURE,
@@ -145,6 +207,12 @@ def async_register_services(hass: HomeAssistant) -> None:
         _handle_set_mode,
         schema=_SET_MODE_SCHEMA,
     )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_TEST_ACTUATION,
+        _handle_test_actuation,
+        schema=_TEST_ACTUATION_SCHEMA,
+    )
 
 
 @callback
@@ -158,5 +226,6 @@ def async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SET_HOME_TEMPERATURE,
         SERVICE_SET_ROOM_OFFSET,
         SERVICE_SET_MODE,
+        SERVICE_TEST_ACTUATION,
     ):
         hass.services.async_remove(DOMAIN, service)

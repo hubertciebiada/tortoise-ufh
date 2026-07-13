@@ -617,6 +617,40 @@ whose uncontrolled error used to strangle the LIVE rooms' split.
 | Room has no controller (orchestrator) | valve 0, split OFF | `unknown_room` |
 | Room controller raised | HEATING: hold last valve; COOLING/TRANSITIONAL/OFF: valve 0 (K5, 2026-07-12 — a crashed controller computes neither condensation defence); split OFF | `controller_error` |
 | Per-room data age > 15 min (S5, 2026-07-09) | **neutral position**: `valve_floor_pct` in heating / 0 in cooling (defer to the HP curve), split OFF; clears below 5 min | `s5_watchdog` |
+| Loop commanded open but no hydraulic response (S6, 2026-07-13) | integrator **frozen**; `binary_sensor.flow_fault` on; no valve action | `loop_no_flow` |
+| Loop commanded closed but persistent source-side flow (S6, 2026-07-13) | flag + (cooling) treated as cold-floor-active for the global safe dew point | `loop_stuck_open` |
+
+### 9.1 Hydraulic no-flow watchdog (S6, 2026-07-13)
+
+The data path (age gates, plausibility, `valve_mismatch`) cannot catch a `valve` entity
+that **echoes the commanded position back as feedback** — a real production failure mode
+(issue #4: both controllers froze after a reboot yet reported obedience; 2.5 h of LIVE
+cooling with a frozen-open loop outside both condensation guards). S6 (pure core
+`flow_watchdog.py`) uses the per-loop `entity_supply` / `entity_return` probes as an
+INDEPENDENT physical witness and **never reads the valve feedback**.
+
+```
+flow_signature = |T_supply − T_return| ≥ flow_epsilon_k
+                 OR T_supply displaced toward the source side (cooling: down, heating: up)
+circulation_evident = any OTHER loop shows a healthy ΔT
+                      OR entity_global_supply reads source-side          # else HOLD (no accrual)
+loop_no_flow    : cmd ≥ flow_open_threshold_pct for ≥ flow_response_window_min,
+                  circulation_evident, and NOT flow_signature            → freeze integrator
+loop_stuck_open : cmd == 0 for ≥ window with a persistent source-side signature
+```
+
+The window starts on the SECOND cycle (the first sets the reference), so the flag lands
+within one window + one cycle. The RETURN probe is weighted over supply (supply may sit on
+the manifold bar before the valve). Rooms without probes: inactive (`—`). Reaction is
+PASSIVE — flag + `binary_sensor.flow_fault` (device class PROBLEM) + integrator freeze;
+never an automatic valve move. The `entity_global_supply` evidence path is **suspended
+while any room reports `hp_active_for_ufh is False`** (DHW/defrost) — a manifold probe can
+read source-side while UFH loops are legitimately starved, so it would otherwise bank
+no-flow windows on healthy loops; the per-loop witness path needs no guard (the other loops
+are not flowing either → HOLD). The manual
+`tortoise_ufh.test_actuation` service drives one room's valve to 100 % for 20–30 min and
+reads the probe response (`actuation_test_running` / `actuation_test_failed`), gated by the
+condensation/overheat safety rules and the room being LIVE with probes.
 
 `BuildingController.step` never raises on a single room: it catches `(ValueError, ArithmeticError)`
 per room and substitutes a degraded `RoomOutputs`; it also counts the currently degraded rooms
@@ -715,3 +749,5 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 | 2026-07-12 | Round-2 review (DECISIONS §11): K1 bumpless setpoint transfer (`shift_integral(kp·dK)`, mode-correct sign) + asymmetric integrator unwind (`unwind_factor = 8`) with the `night_setback` gate scenario (`SimScenario.setpoint_schedule`); K6 margin de-stacking — the local throttle ramp ENDS at `dew_margin_k` (full cooling on the pump's dew floor; hard S2 at the dew point itself); K3 CLOSE_VALVE is water-side only (the air-side decision stands); K4 multisplit group arbiter (`fast_source_group`, one direction per aggregate, direction-aware S4 mismatch via `fast_source_hvac_mode`); K5 mode-aware `controller_error` degrade; K7 two-stage RH staleness (+1 K dew pad, `rh_stale_gated`); K8 cold-snap recovery assertion; K9 throttle-freeze retained (back-calc from the final valve measured and rejected); K10 farewell syncs the fast machine; flag split `s2_throttle` vs `s2_condensation`; write threshold 2 → 5 pp; kt documented as an open question with data (unit sign canary). |
 | 2026-07-12 | Round-3 hardening (DECISIONS §12, v0.6.1): group arbiter grew the incumbent hysteresis (§8.4 — challenger wins only beyond +0.5 K over the incumbent; largest-excess tie-break documented) and the adapter stopped SHADOW rooms from voting (`fast_source_group` emptied for non-LIVE rooms); PID `shift_integral` banks the clamp-cut as a signed residual netted against opposite shifts, and the back-calculation is suppressed while an opposite-sign residual is outstanding — a setpoint wiggle at a small integral is idempotent (was: pumped to ~2·kp·ΔK); the RH staleness pad is linear (`humidity_stale_frac` 0 → 1 over 60-120 min, `frac * 1 K`; the unavailable-entity cache branch reads as fully stale). Adapter lifecycle: coordinator shutdown + Store flush BEFORE the unload farewell, `_parked` write gate, LOADED-entry filter in WS/services, non-finite setpoint guard, hub device registered before platforms. |
 | 2026-07-12 | Shadow removal (DECISIONS §13, v0.7.0): the per-room control state is a two-state `off` / `live`; `off` is the default for new/unknown rooms; migration v2→v3 maps `shadow` (and garbage) to `off` (v1→v3 chain in one call). Core untouched (it never knew shadow — only `Mode` + the farewell hook); K1 reduces to "an OFF room does not vote" with the emptied `fast_source_group` kept as belt-and-braces. |
+| 2026-07-12 | Quiet hours + heat-pump link (DECISIONS §14, v0.8.0): per-room fast-source allowed-window (`RoomInputs.fast_source_allowed`, adapter computes the bool from the HA clock, pure `window_allows` in the core; crosses midnight; S3/S4 emergency overrides silence); opt-in heat-pump link (`core/hp_link.py`: direction sync always preserving `+DHW`, `max(cooling_supply_base_c, safe dew)` cooling water, optional heating curve). |
+| 2026-07-13 | Hydraulic no-flow watchdog S6 + write-path fixes (DECISIONS §15, v0.9.0): loop supply/return probes as an independent witness of actuation (never trusts valve feedback — it can echo); `loop_no_flow` (freeze integrator) / `loop_stuck_open` (feeds cooling dew logic); circulation-evidence gating (other-loop ΔT or `entity_global_supply`); manual `test_actuation` service; valve re-assert (~45 min + feedback-divergence) at parity with the splits; simulator fault injection for the echoing/frozen actuator. New knobs `flow_epsilon_k` / `flow_open_threshold_pct` / `flow_response_window_min`. |

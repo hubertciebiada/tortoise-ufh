@@ -204,6 +204,14 @@ integrator (``RoomInputs.hp_active_for_ufh``). Moved here from the
 coordinator's dead zone (B2, 2026-07-12); the legacy per-room key of the same
 name is still honoured as an override."""
 
+CONF_ENTITY_GLOBAL_SUPPLY: str = "entity_global_supply"
+"""Optional GLOBAL manifold supply-temperature probe (sensor, temperature;
+top-level ``entry.options`` key set in options -> settings; S6, 2026-07-13).
+Feeds the S6 hydraulic watchdog's circulation gate: when it reads clearly
+source-side of the mean room temperature, circulation is proven even while
+every per-loop probe pair sits post-valve. Unset = the gate relies on the
+per-loop delta-T witnesses only."""
+
 # ---------------------------------------------------------------------------
 # Closed option sets (mirror core enum ``.value`` strings verbatim)
 # ---------------------------------------------------------------------------
@@ -291,6 +299,13 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     ("cooling_supply_base_c", 10.0, 25.0, 0.5),
     ("heating_supply_base_c", 20.0, 40.0, 0.5),
     ("heating_supply_slope", 0.0, 2.0, 0.1),
+    # S6 hydraulic no-flow watchdog (2026-07-13, issue #4). The response
+    # window's UI minimum is 30 min — the slab is slow and shorter windows
+    # would flap (the CORE accepts any positive value so simulation tests
+    # can run short windows); 1440 min effectively disables the watchdog.
+    ("flow_epsilon_k", 0.1, 3.0, 0.1),
+    ("flow_open_threshold_pct", 5.0, 100.0, 1.0),
+    ("flow_response_window_min", 30.0, 1440.0, 5.0),
 )
 """Numeric :class:`~tortoise_ufh.config.ControllerConfig` fields exposed as
 advanced knobs, each as ``(field, min, max, step)``.
@@ -328,6 +343,9 @@ CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "cooling_supply_base_c": "°C",
     "heating_supply_base_c": "°C",
     "heating_supply_slope": "K/K",
+    "flow_epsilon_k": "K",
+    "flow_open_threshold_pct": "%",
+    "flow_response_window_min": "min",
     CONTROLLER_BOOL_KNOB: "",
 }
 """Display unit per controller knob (empty for the boolean knob). Surfaced in the

@@ -166,7 +166,7 @@ def test_every_knob_has_label_and_tooltip_in_both_languages() -> None:
     """Each exposed knob has tune_<name> and tip_knob_<name> in pl AND en."""
     sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
     knobs = _knob_names()
-    assert len(knobs) == 18, f"expected 18 exposed knobs, parsed {knobs}"
+    assert len(knobs) == 21, f"expected 21 exposed knobs, parsed {knobs}"
     missing: list[str] = []
     for knob in knobs:
         for key in (f"tune_{knob}", f"tip_knob_{knob}"):
@@ -287,6 +287,41 @@ def test_v080_surfaces_have_their_str_keys() -> None:
     missing = [
         f"{lang}:{key}"
         for key in _REQUIRED_V080_KEYS
+        for lang in ("pl", "en")
+        if key not in sections[lang]
+    ]
+    assert not missing, f"missing STR keys: {missing}"
+
+
+# New v0.9.0 surfaces: the S6 flow-health chip, the actuation self-test button
+# and its status labels, plus the flow-watchdog knob group (issue #4). Pinned
+# so a rename cannot silently drop a flow/self-test surface.
+_REQUIRED_V090_KEYS = (
+    "tune_grp_flow",
+    "tip_flow_chip",
+    "tip_actuation_test",
+    "val_th_flow",
+    "val_th_test",
+    "flow_ok",
+    "flow_no_flow",
+    "flow_stuck",
+    "test_btn_start",
+    "test_btn_cancel",
+    "test_running_min",
+    "test_passed",
+    "test_failed",
+    "test_aborted",
+    "test_untested",
+)
+
+
+@pytest.mark.unit
+def test_v090_surfaces_have_their_str_keys() -> None:
+    """The v0.9.0 S6 / self-test UI surfaces keep their STR keys in both langs."""
+    sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
+    missing = [
+        f"{lang}:{key}"
+        for key in _REQUIRED_V090_KEYS
         for lang in ("pl", "en")
         if key not in sections[lang]
     ]

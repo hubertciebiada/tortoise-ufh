@@ -59,3 +59,42 @@ set_mode:
             - transitional
             - cooling
             - "off"
+
+test_actuation:
+  name: Test actuation
+  description: >-
+    Run a manual actuation self-test for one room: the valve is deliberately
+    driven to 100 % for the given duration and the loop's hydraulic response
+    (supply/return probes) decides pass or fail. Meant to be run after
+    maintenance or a power event — never scheduled. Requires the room to be
+    LIVE with water probes configured; safety rules (overheat, condensation)
+    abort the test.
+  fields:
+    room:
+      name: Room
+      description: Identifier of the room to test.
+      required: true
+      example: living_room
+      selector:
+        text:
+    duration_minutes:
+      name: Duration
+      description: Test duration in minutes (20-30; default 25).
+      required: false
+      default: 25
+      example: 25
+      selector:
+        number:
+          min: 20
+          max: 30
+          step: 1
+          unit_of_measurement: "min"
+          mode: box
+    cancel:
+      name: Cancel
+      description: Cancel the room's running self-test instead of starting one.
+      required: false
+      default: false
+      example: false
+      selector:
+        boolean:

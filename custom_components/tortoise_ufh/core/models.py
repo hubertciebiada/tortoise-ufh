@@ -133,6 +133,16 @@ class RoomInputs:
             ``frac > 0``) instead of jumping a full +1 K at the 60-min edge —
             so a threshold-reporting RH sensor can neither limit-cycle the
             cooling nor step the throttle discontinuously.
+        circulation_evident: Building-level circulation gate of the S6
+            hydraulic no-flow watchdog (additive field 2026-07-13, S6).
+            ``True`` = a live circulating source is proven (some loop in the
+            building shows a healthy delta-T, or the optional global supply
+            probe reads source-side), ``False`` = provably idle, ``None``
+            (the default) = unknown — the watchdog HOLDS its no-flow windows
+            in both non-``True`` cases. Injected by
+            :meth:`~tortoise_ufh.core.controller.BuildingController.step`
+            via ``dataclasses.replace`` before the room dispatch; the
+            adapter and the simulator never set it directly.
         fast_source_allowed: Whether the room's fast source MAY run this cycle
             (additive field 2026-07-12, B1 — per-room quiet hours). The core
             deliberately knows no wall clock: the ADAPTER evaluates the room's
@@ -166,6 +176,7 @@ class RoomInputs:
     fast_source_hvac_mode: str | None = None  # raw hvac-mode feedback (K4)
     humidity_stale_frac: float = 0.0  # RH staleness 0..1 (age 60->120 min; K7/D5)
     fast_source_allowed: bool = True  # quiet-hours verdict from the adapter (B1)
+    circulation_evident: bool | None = None  # S6 circulation gate (additive)
 
     def __post_init__(self) -> None:
         """Validate the humidity range/staleness (percent) and the watchdog age."""
@@ -265,9 +276,28 @@ class RoomReport:
             the lock has already elapsed or there is no fast source. Additive,
             non-breaking field (defaults to ``None``); the panel renders it as
             "unlocks in ~N min".
+        loop_flow_status: Per-loop S6 hydraulic flow-watchdog status
+            (additive field 2026-07-13, S6), aligned index-by-index with the
+            room's ``inputs.loops``. Each entry is one of ``"ok"``,
+            ``"no_flow"``, ``"stuck_open"`` or ``"inactive"`` (``inactive``
+            = missing probes, inactive mode, or a paused/unknown circulation
+            gate). Empty (the default) for callers without the watchdog.
+        actuation_test_status: Status of the manual actuation self-test
+            (additive field 2026-07-13, S6): ``"running"``, ``"passed"``,
+            ``"failed"``, ``"aborted"``, or ``None`` when no test ran since
+            the controller was built.
+        actuation_test_remaining_min: Minutes remaining of a RUNNING
+            actuation self-test, or ``None`` when idle (additive, S6).
+        actuation_test_loops: Per-loop verdicts of the last COMPLETED
+            actuation self-test — ``"passed"`` / ``"failed"`` /
+            ``"untested"`` — aligned with ``inputs.loops``; empty while no
+            completed verdict exists (additive, S6).
 
     Raises:
-        ValueError: If ``dew_throttle_factor`` is outside [0, 1].
+        ValueError: If ``dew_throttle_factor`` is outside [0, 1], a
+            ``loop_flow_status`` / ``actuation_test_loops`` entry or the
+            ``actuation_test_status`` is outside its vocabulary, or
+            ``actuation_test_remaining_min`` is negative.
     """
 
     error_c: float | None  # setpoint - room_temp (heating sign convention)
@@ -287,14 +317,55 @@ class RoomReport:
     room_temperature_c: float | None = None  # echoed measurement, None if lost
     dew_excluded_reason: str | None = None  # why excluded from safe dew point
     fast_dwell_remaining_s: float | None = None  # min ON/OFF lock remaining [s]
+    loop_flow_status: tuple[str, ...] = ()  # per-loop S6 status (additive)
+    actuation_test_status: str | None = None  # self-test status (additive)
+    actuation_test_remaining_min: float | None = None  # self-test countdown
+    actuation_test_loops: tuple[str, ...] = ()  # per-loop test verdicts
+
+    _LOOP_FLOW_STATUSES = frozenset({"ok", "no_flow", "stuck_open", "inactive"})
+    _TEST_STATUSES = frozenset({"running", "passed", "failed", "aborted"})
+    _TEST_LOOP_RESULTS = frozenset({"passed", "failed", "untested"})
 
     def __post_init__(self) -> None:
-        """Validate the dew-point throttle factor range."""
+        """Validate the throttle factor and the S6/self-test vocabularies."""
         if not (0.0 <= self.dew_throttle_factor <= 1.0):
             msg = (
                 f"dew_throttle_factor must be in [0, 1], got {self.dew_throttle_factor}"
             )
             raise ValueError(msg)
+        for status in self.loop_flow_status:
+            if status not in self._LOOP_FLOW_STATUSES:
+                msg = (
+                    "loop_flow_status entries must be one of "
+                    f"{sorted(self._LOOP_FLOW_STATUSES)}, got {status!r}"
+                )
+                raise ValueError(msg)
+        if (
+            self.actuation_test_status is not None
+            and self.actuation_test_status not in self._TEST_STATUSES
+        ):
+            msg = (
+                "actuation_test_status must be one of "
+                f"{sorted(self._TEST_STATUSES)} or None, got "
+                f"{self.actuation_test_status!r}"
+            )
+            raise ValueError(msg)
+        if (
+            self.actuation_test_remaining_min is not None
+            and self.actuation_test_remaining_min < 0.0
+        ):
+            msg = (
+                "actuation_test_remaining_min must be >= 0, got "
+                f"{self.actuation_test_remaining_min}"
+            )
+            raise ValueError(msg)
+        for result in self.actuation_test_loops:
+            if result not in self._TEST_LOOP_RESULTS:
+                msg = (
+                    "actuation_test_loops entries must be one of "
+                    f"{sorted(self._TEST_LOOP_RESULTS)}, got {result!r}"
+                )
+                raise ValueError(msg)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable dict (``None`` preserved, flags -> list).
@@ -320,6 +391,10 @@ class RoomReport:
             "room_temperature_c": self.room_temperature_c,
             "dew_excluded_reason": self.dew_excluded_reason,
             "fast_dwell_remaining_s": self.fast_dwell_remaining_s,
+            "loop_flow_status": list(self.loop_flow_status),
+            "actuation_test_status": self.actuation_test_status,
+            "actuation_test_remaining_min": self.actuation_test_remaining_min,
+            "actuation_test_loops": list(self.actuation_test_loops),
         }
 
 

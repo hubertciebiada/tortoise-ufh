@@ -231,6 +231,10 @@ class RoomInputs:
     fast_source_group: str = ""              # ADDITIVE (2026-07-12, K4): multisplit outdoor-unit group key
     fast_source_hvac_mode: str | None = None # ADDITIVE (2026-07-12, K4): raw hvac-mode feedback -> S4 sees direction
     humidity_stale_frac: float = 0.0         # K7 2026-07-12 (linearised D5, R3): RH staleness 0..1 (age 60->120 min) -> frac * 1 K dew pad
+    fast_source_allowed: bool = True         # ADDITIVE (2026-07-12, B1 quiet hours): adapter's per-room allowed-window verdict (crosses midnight); False = fast source may not engage
+    # LoopInput additionally carries the S6 hydraulic no-flow watchdog probe reads
+    # (2026-07-13): supply/return already present; the watchdog reads them as an
+    # INDEPENDENT witness and never trusts valve_position_pct feedback (it can echo).
 
 @dataclass(frozen=True)
 class FastSourceCommand:
@@ -258,6 +262,13 @@ class RoomReport:
     room_temperature_c: float | None = None  # ADDITIVE: echoed measured room temp, None if sensor lost
     dew_excluded_reason: str | None = None   # ADDITIVE: None if eligible, else not_cooling_mode|cooling_disabled|no_temperature|no_humidity
     fast_dwell_remaining_s: float | None = None  # ADDITIVE: min ON/OFF dwell lock remaining [s], None if unlocked / no fast source
+    loop_flow_status: tuple[str, ...] = ()   # ADDITIVE (2026-07-13, S6): per-loop watchdog status "ok"|"no_flow"|"stuck_open"|"inactive"
+    actuation_test_status: str | None = None # ADDITIVE (2026-07-13, S6): self-test "running"|"passed"|"failed"|"aborted", None when idle/untested
+    actuation_test_remaining_min: float | None = None  # ADDITIVE (2026-07-13): minutes left of a running self-test
+    actuation_test_loops: tuple[str, ...] = ()  # ADDITIVE (2026-07-13): per-loop verdicts of the last completed self-test
+    # New flags: "loop_no_flow","loop_stuck_open","actuation_test_running","actuation_test_failed".
+    # BuildingController.step gained an optional kw-only `global_supply_temperature_c: float | None = None`
+    # (the manifold-bar probe feeding the S6 circulation gate); default None keeps old callers unchanged.
 
 @dataclass(frozen=True)
 class RoomOutputs:
@@ -568,16 +579,25 @@ class ControllerConfig:
     boost_offset_c: float = 1.0          # split engages beyond this |error|; must be > deadband_c (D2)
     fast_min_on_minutes: float = 10.0
     fast_min_off_minutes: float = 10.0
+    fast_target_offset_k: float = 1.0    # ADDITIVE (2026-07-13): S12 boost overdrive, now a knob in [0,3]; 0 = split gets the plain setpoint
     dew_margin_k: float = 2.0            # gap at which the local throttle is FULLY OPEN
                                          # (K6 2026-07-12: the ramp ENDS here — the same design
                                          # gap the pump's global dew floor already guarantees)
     dew_ramp_k: float = 2.0             # ramp width BELOW dew_margin_k (K6: previously above)
+    cooling_supply_base_c: float = 18.0  # ADDITIVE (2026-07-12, B2): heat-pump cooling water base, GLOBAL-only, [10,25]
+    heating_supply_base_c: float = 26.0  # ADDITIVE (2026-07-12, B2): heating water base at ff_neutral_c, GLOBAL-only, [20,40]
+    heating_supply_slope: float = 0.5    # ADDITIVE (2026-07-12, B2): heating curve slope, GLOBAL-only, [0,2]
+    flow_epsilon_k: float = 0.3          # ADDITIVE (2026-07-13, S6): min loop |ΔT| counted as flow, (0,3]
+    flow_open_threshold_pct: float = 15.0  # ADDITIVE (2026-07-13, S6): valve cmd above which no-flow is evaluated, [0,100]
+    flow_response_window_min: float = 45.0  # ADDITIVE (2026-07-13, S6): no-flow window, >0 (UI floor 30, 1440 disables)
     cycle_seconds: float = 300.0        # 5 min
     valve_write_threshold_pct: float = 5.0   # 2.0 -> 5.0 (K2b 2026-07-12: measured, 2 pp did
                                          # NOT bound kt's noise cost — 11.2 pp/h @ sigma 0.05;
                                          # 5 pp cuts it to 1.4 pp/h at zero regulation cost)
     # __post_init__: all gains >=0, 0<=valve_floor<=100, deadband>=0, margins>=0, cycle>0,
-    # boost_offset_c > deadband_c, ff_neutral_c in [-30,40], ff_max_pct in [0,100]
+    # boost_offset_c > deadband_c, ff_neutral_c in [-30,40], ff_max_pct in [0,100],
+    # fast_target_offset_k in [0,3], cooling_supply_base_c in [10,25], heating_supply_base_c in [20,40],
+    # heating_supply_slope in [0,2], flow_epsilon_k > 0, 0<=flow_open_threshold_pct<=100, flow_response_window_min > 0
 
 @dataclass(frozen=True)
 class RoomConfig:

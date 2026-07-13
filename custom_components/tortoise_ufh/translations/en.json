@@ -64,6 +64,9 @@
           "ff_neutral_c": "Feedforward neutral outdoor temperature (°C)",
           "ff_gain_pct_per_k": "Feedforward gain (%/K)",
           "ff_max_pct": "Feedforward cap (%)",
+          "flow_epsilon_k": "Flow watchdog: minimum ΔT counting as flow (K)",
+          "flow_open_threshold_pct": "Flow watchdog: open-command threshold (%)",
+          "flow_response_window_min": "Flow watchdog: response window (min)",
           "outdoor_ff_enabled": "Outdoor feedforward enabled"
         }
       },
@@ -126,7 +129,14 @@
           "ff_neutral_c": "Feedforward neutral outdoor temperature (°C)",
           "ff_gain_pct_per_k": "Feedforward gain (%/K)",
           "ff_max_pct": "Feedforward cap (%)",
-          "outdoor_ff_enabled": "Outdoor feedforward enabled"
+          "flow_epsilon_k": "Flow watchdog: minimum ΔT counting as flow (K)",
+          "flow_open_threshold_pct": "Flow watchdog: open-command threshold (%)",
+          "flow_response_window_min": "Flow watchdog: response window (min)",
+          "outdoor_ff_enabled": "Outdoor feedforward enabled",
+          "entity_global_supply": "Global manifold supply temperature sensor (optional)"
+        },
+        "data_description": {
+          "entity_global_supply": "Optional probe on the manifold supply bar, before the loop valves. It feeds the hydraulic flow watchdog's circulation gate: when it clearly reads source-side of the mean room temperature, circulation is considered proven even while every per-loop probe sits post-valve. Note: during DHW/defrost (pump-available entity off) the gate ignores this probe."
         }
       },
       "add_room": {
@@ -292,6 +302,9 @@
       },
       "s2_condensation_active": {
         "name": "Condensation protection active"
+      },
+      "flow_fault": {
+        "name": "Loop flow fault"
       }
     }
   },
@@ -335,6 +348,24 @@
         "mode": {
           "name": "Mode",
           "description": "Operating mode of the system (heating / transitional / cooling / off)."
+        }
+      }
+    },
+    "test_actuation": {
+      "name": "Test actuation",
+      "description": "Run a manual actuation self-test for one room: the valve is deliberately driven to 100 % for the given duration and the loop's hydraulic response (supply/return probes) decides pass or fail. Meant to be run after maintenance or a power event — never scheduled. Requires the room to be LIVE with water probes configured; safety rules (overheat, condensation) abort the test.",
+      "fields": {
+        "room": {
+          "name": "Room",
+          "description": "Identifier of the room to test."
+        },
+        "duration_minutes": {
+          "name": "Duration",
+          "description": "Test duration in minutes (20-30; default 25)."
+        },
+        "cancel": {
+          "name": "Cancel",
+          "description": "Cancel the room's running self-test instead of starting one."
         }
       }
     }

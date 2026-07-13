@@ -283,12 +283,18 @@ const STR = {
     tune_cooling_supply_base_c: "Bazowa temperatura wody chłodzenia",
     tune_heating_supply_base_c: "Bazowa temperatura wody grzania",
     tune_heating_supply_slope: "Nachylenie krzywej wody grzania",
+    tune_grp_flow: "Watchdog przepływu (S6)",
+    tune_flow_epsilon_k: "Minimalna ΔT uznawana za przepływ",
+    tune_flow_open_threshold_pct: "Próg komendy otwarcia watchdoga",
+    tune_flow_response_window_min: "Okno odpowiedzi hydraulicznej",
     val_th_command: "Komenda",
     val_th_raw: "Surowy",
     val_th_floor: "Podłoga",
     val_th_sat: "Saturacja",
     val_th_s2: "Dławienie S2",
     val_th_feedback: "Feedback",
+    val_th_flow: "Przepływ",
+    val_th_test: "Test aktuacji",
     val_raw_tooltip: "P {p} · I {i} · Trend {t} · FF {f}",
     val_floor_chip: "min. otwarcie {v}%",
     val_s2_flow: "przepływ {v}%",
@@ -297,11 +303,23 @@ const STR = {
     val_supply: "Zasilanie",
     val_return: "Powrót",
     val_dt: "ΔT",
+    val_flow_cap: "Przepływ",
+    val_test_cap: "Test",
     val_feedback_pos: "poz. {v}%",
     val_no_loops: "brak przypisanych zaworów",
     val_show_loops: "Pokaż pętle ({n})",
     val_hide_loops: "Ukryj pętle",
     val_empty: "Brak skonfigurowanych pokoi.",
+    flow_ok: "ok",
+    flow_no_flow: "brak przepływu?",
+    flow_stuck: "nie domyka?",
+    test_btn_start: "Testuj aktuację",
+    test_btn_cancel: "Anuluj test",
+    test_running_min: "~{m} min",
+    test_passed: "zaliczony",
+    test_failed: "niezaliczony",
+    test_aborted: "przerwany",
+    test_untested: "niezbadana",
     ast_th_kind: "Rodzaj",
     ast_th_group: "Grupa",
     ast_th_command: "Komenda",
@@ -411,6 +429,21 @@ const STR = {
       "O ile kelwinów rośnie nastawa wody grzania na każdy 1 K temperatury " +
       "zewnętrznej poniżej temperatury neutralnej. Domyślnie 0,5 K/K; " +
       "typowo 0,3–0,8 dla dobrze ocieplonego domu z podłogówką.",
+    tip_knob_flow_epsilon_k:
+      "Watchdog przepływu (S6): minimalna różnica temperatur zasilanie−powrót " +
+      "pętli uznawana za dowód przepływu wody. Poniżej niej (i bez ruchu sond " +
+      "ku źródłu) otwarta komenda bez odpowiedzi hydraulicznej podnosi flagę " +
+      "„brak przepływu”. Domyślnie 0,3 K; podnieś przy szumiących sondach.",
+    tip_knob_flow_open_threshold_pct:
+      "Watchdog przepływu (S6): od jakiej komendy zaworu pętla ma obowiązek " +
+      "pokazać odpowiedź hydrauliczną. Poniżej progu pętla nie jest oceniana " +
+      "pod kątem braku przepływu. Domyślnie 15 %.",
+    tip_knob_flow_response_window_min:
+      "Watchdog przepływu (S6): ile minut ciągłego braku sygnatury przepływu " +
+      "(przy otwartej komendzie i wiarygodnej cyrkulacji) podnosi flagę „brak " +
+      "przepływu”; to samo okno pilnuje zaworu, który nie domyka. Płyta jest " +
+      "wolna — minimum 30 min, żeby uniknąć trzepotania. Domyślnie 45 min; " +
+      "1440 praktycznie wyłącza watchdoga.",
     // Tooltipy szczegółów pokoju (tip_dec_*) i nagłówków tabel (tip_val_* /
     // tip_ast_* / tip_th_*) — treść wspólna z docs/INSTRUKCJA.md: zmieniaj razem.
     tip_th_assist:
@@ -488,6 +521,19 @@ const STR = {
     tip_val_feedback:
       "Pozycja raportowana przez siłownik; trwała rozbieżność z komendą " +
       "podnosi flagę valve_mismatch.",
+    tip_flow_chip:
+      "Zdrowie przepływu z sond wody pętli (watchdog S6) — niezależny, " +
+      "fizyczny świadek aktuacji, który nie ufa feedbackowi encji zaworu " +
+      "(ten kanał potrafi kłamać po restarcie kontrolera). „brak przepływu?” " +
+      "= otwarta komenda bez sygnatury hydraulicznej; „nie domyka?” = komenda " +
+      "0 z uporczywą sygnaturą źródła; „—” = brak sond lub watchdog " +
+      "wstrzymany (cyrkulacja niepewna).",
+    tip_actuation_test:
+      "Ręczny self-test aktuacji: zawór jest celowo wysterowany na 100 % na " +
+      "20–30 min, a o wyniku decyduje odpowiedź hydrauliczna sond pętli. " +
+      "Do uruchamiania po serwisie lub zdarzeniu zasilania. Wymaga pokoju w " +
+      "stanie Steruje i sond wody; reguły bezpieczeństwa (przegrzanie, " +
+      "kondensacja) przerywają test. Podczas testu integrator jest zamrożony.",
     tip_ast_timer:
       "Blokada minimalnego czasu pracy/postoju: tyle jeszcze musi upłynąć, " +
       "zanim wspomaganie może zmienić stan. Chroni sprężarkę.",
@@ -989,6 +1035,56 @@ const STR = {
       "room controllers freeze their integral term so it does not wind up " +
       "while no water reaches the floor.",
     hp_writes_paused: "Writes paused — no room is in control (Live).",
+    // S6 hydraulic no-flow watchdog + actuation self-test (issue #4,
+    // 2026-07-13). EN mirror of the PL keys above.
+    tune_grp_flow: "Flow watchdog (S6)",
+    tune_flow_epsilon_k: "Minimum ΔT counted as flow",
+    tune_flow_open_threshold_pct: "Watchdog open-command threshold",
+    tune_flow_response_window_min: "Hydraulic response window",
+    tip_knob_flow_epsilon_k:
+      "Flow watchdog (S6): the minimum loop supply−return temperature " +
+      "difference counted as evidence of water flow. Below it (and with no " +
+      "probe movement toward the source) an open command with no hydraulic " +
+      "response raises the “no flow” flag. Default 0.3 K; raise for noisy " +
+      "probes.",
+    tip_knob_flow_open_threshold_pct:
+      "Flow watchdog (S6): the valve command above which a loop is expected " +
+      "to show a hydraulic response. Below the threshold the loop is not " +
+      "evaluated for no-flow. Default 15 %.",
+    tip_knob_flow_response_window_min:
+      "Flow watchdog (S6): how many minutes of continuous missing flow " +
+      "signature (with an open command and plausible circulation) raise the " +
+      "“no flow” flag; the same window guards a valve that never closes. The " +
+      "slab is slow — minimum 30 min to avoid flapping. Default 45 min; 1440 " +
+      "effectively disables the watchdog.",
+    tip_flow_chip:
+      "Flow health from the loop water probes (S6 watchdog) — an " +
+      "independent, physical witness of actuation that does NOT trust the " +
+      "valve entity's feedback (that channel can lie after a controller " +
+      "reset). “no flow?” = an open command with no hydraulic signature; " +
+      "“stuck open?” = a 0 command with a persistent source-side signature; " +
+      "“—” = no probes, or the watchdog is on hold (circulation uncertain).",
+    tip_actuation_test:
+      "Manual actuation self-test: the valve is deliberately driven to " +
+      "100 % for 20–30 min and the verdict comes from the loop probes' " +
+      "hydraulic response. Run it after maintenance or a power event. " +
+      "Requires the room in Control and water probes; safety rules " +
+      "(overheat, condensation) abort the test. The integrator is frozen " +
+      "during the test.",
+    val_th_flow: "Flow",
+    val_th_test: "Actuation test",
+    val_flow_cap: "Flow",
+    val_test_cap: "Test",
+    flow_ok: "ok",
+    flow_no_flow: "no flow?",
+    flow_stuck: "stuck open?",
+    test_btn_start: "Test actuation",
+    test_btn_cancel: "Cancel test",
+    test_running_min: "~{m} min",
+    test_passed: "passed",
+    test_failed: "failed",
+    test_aborted: "aborted",
+    test_untested: "untested",
   },
 };
 
@@ -1063,6 +1159,26 @@ const FLAG_LABELS = {
     en: "Cooling disabled in this room",
     sev: "warn",
   },
+  loop_no_flow: {
+    pl: "Brak przepływu w pętli (S6)",
+    en: "Loop no flow (S6)",
+    sev: "alarm",
+  },
+  loop_stuck_open: {
+    pl: "Pętla nie domyka (S6)",
+    en: "Loop stuck open (S6)",
+    sev: "alarm",
+  },
+  actuation_test_running: {
+    pl: "Trwa test aktuacji",
+    en: "Actuation test running",
+    sev: "ok",
+  },
+  actuation_test_failed: {
+    pl: "Test aktuacji niezaliczony",
+    en: "Actuation test failed",
+    sev: "alarm",
+  },
 };
 
 const SEV_RANK = { ok: 0, warn: 1, problem: 2 };
@@ -1108,6 +1224,15 @@ const KNOB_GROUPS = [
     key: "dew",
     labelKey: "tune_grp_dew",
     knobs: ["dew_margin_k", "dew_ramp_k"],
+  },
+  {
+    key: "flow",
+    labelKey: "tune_grp_flow",
+    knobs: [
+      "flow_epsilon_k",
+      "flow_open_threshold_pct",
+      "flow_response_window_min",
+    ],
   },
   {
     key: "hp",

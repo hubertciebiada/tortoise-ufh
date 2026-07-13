@@ -96,6 +96,42 @@ _FALLBACK_T_SUPPLY_COOLING_C: float = 18.0
 _DEFAULT_SETPOINT_C: float = 21.0
 """Default per-room setpoint used until overridden via ``set_setpoint`` [degC]."""
 
+# -- Loop water-probe thermal model (S6, 2026-07-13) ---------------------------
+#
+# Before S6 the twin was idealised: the loop probes reported the SOURCE
+# signature (supply = t_supply, return = supply -/+ delta-T) regardless of the
+# valve position, so a loop commanded 0 % for hours still "flowed" — exactly
+# the stuck-open signature. The probes are now actuation-aware
+# UNCONDITIONALLY (an opt-in flag would have left the old scenarios with
+# unphysical readings and false S6 alarms): with flow the probes relax fast
+# to the source targets; in stagnation both relax to the slab temperature.
+
+_PROBE_FLOW_TAU_S: float = 120.0
+"""Probe relaxation time constant WITH flow [s] — pipe water renews quickly."""
+
+_PROBE_STAGNATION_TAU_S: float = 600.0
+"""Probe relaxation time constant in STAGNATION [s].
+
+Chosen deliberately: after flow stops, the pipe water near the probes
+equilibrates with the slab/manifold environment within tens of minutes —
+much faster than the slab's own multi-hour tau. With this value the residual
+supply-return difference of a freshly closed healthy loop decays below the
+default ``flow_epsilon_k`` (0.3 K) in ~28 min, comfortably inside the 45-min
+S6 stuck-open window, so healthy scenario runs raise no flags (acceptance
+criterion 4)."""
+
+_PROBE_STAGNATION_MAX_VALVE_PCT: float = 5.0
+"""Physical valve opening at/below which the loop water STAGNATES [%].
+
+A thermal/gear actuator has dead travel near fully-closed, so the sub-5 %
+closing tails the PI emits while parking a room do not establish a
+measurable through-flow — the probes must decay toward the slab exactly as
+they do at a hard 0 %. Numerically equal to the S6 watchdog's
+"commanded closed" bound (``flow_watchdog._FLOW_CLOSED_CMD_PCT``): a loop
+the watchdog treats as closed must not keep a synthetic source signature in
+the twin, or every healthy closing tail would fake a stuck-open valve
+(acceptance criterion 4)."""
+
 # Mapping from the twin's heat-pump mode to the controller's room mode.  The
 # twin has no TRANSITIONAL state (that is a controller-only concept), so only
 # the three shared modes appear here.
@@ -256,6 +292,7 @@ class SimulatedRoom:
         windows: tuple[WindowConfig, ...] = (),
         initial_temperature_c: float | None = None,
         loop_geometry: LoopGeometry,
+        supply_probe_on_manifold: bool = False,
     ) -> None:
         """Initialize a simulated room.
 
@@ -281,6 +318,11 @@ class SimulatedRoom:
                 reset default (2026-07-09 — summer runs start summer-warm).
             loop_geometry: Pipe/floor geometry for the EN 1264 power model
                 (required so ``ufh_loop.loop_power`` can be evaluated).
+            supply_probe_on_manifold: When ``True``, the SUPPLY probe sits on
+                the manifold bar BEFORE the valve (S6, 2026-07-13): in
+                stagnation it stays at the source temperature while only the
+                return probe relaxes to the slab — the installation variant
+                that makes the return probe the decisive flow witness.
 
         Raises:
             ValueError: If ``name`` is empty, ``n_loops`` < 1,
@@ -320,7 +362,20 @@ class SimulatedRoom:
         self._x: NDArray[np.float64] = model.reset()
         if initial_temperature_c is not None:
             self._x = np.full(model.n_states, float(initial_temperature_c))
-        self._valve_position: float = 0.0
+        # Commanded vs physical valve split (S6, 2026-07-13): normally
+        # identical; the fault-injection API below can freeze the physical
+        # actuator (targets accepted, never executed) and/or make the
+        # reported feedback ECHO the command — the incident of issue #4.
+        self._commanded_valve: float = 0.0
+        self._physical_valve: float = 0.0
+        self._actuator_frozen: bool = False
+        self._echo_feedback: bool = False
+        self._supply_probe_on_manifold = supply_probe_on_manifold
+        # Loop water-probe thermal state (S6): ``None`` while the pump is
+        # OFF; initialised to the flowing targets on the first pump-ON step
+        # so healthy runs read identically to the pre-S6 twin.
+        self._probe_supply_c: float | None = None
+        self._probe_return_c: float | None = None
         self._applied_fast_source_power_w: float = 0.0
 
     # -- Properties ----------------------------------------------------------
@@ -387,10 +442,49 @@ class SimulatedRoom:
 
     @property
     def valve_position(self) -> float:
-        """Return the last-applied valve position [0-100 %]."""
-        return self._valve_position
+        """Return the PHYSICAL valve position [0-100 %] (drives the physics)."""
+        return self._physical_valve
+
+    @property
+    def commanded_valve_position(self) -> float:
+        """Return the last COMMANDED valve position [0-100 %] (S6)."""
+        return self._commanded_valve
+
+    @property
+    def echo_feedback(self) -> bool:
+        """Whether the valve feedback echoes the command (fault injection)."""
+        return self._echo_feedback
+
+    @property
+    def probe_supply_c(self) -> float | None:
+        """Loop supply-probe temperature [degC], or ``None`` (pump OFF)."""
+        return self._probe_supply_c
+
+    @property
+    def probe_return_c(self) -> float | None:
+        """Loop return-probe temperature [degC], or ``None`` (pump OFF)."""
+        return self._probe_return_c
 
     # -- Actuation + physics -------------------------------------------------
+
+    def set_actuator_fault(
+        self, *, frozen: bool = False, echo_feedback: bool = False
+    ) -> None:
+        """Inject (or clear) the issue-#4 actuator fault (S6, 2026-07-13).
+
+        Args:
+            frozen: ``True`` freezes the PHYSICAL valve at its current
+                position — targets keep being accepted but are never
+                executed (the incident's motor-MCU state). ``False`` releases
+                the freeze (the physical valve snaps to the current command
+                on the next :meth:`apply_actions`).
+            echo_feedback: ``True`` makes the reported feedback
+                (``LoopInput.valve_position_pct``) ECHO the commanded value
+                instead of the physical one — the bridge publishing the
+                requested position, which blinded ``valve_mismatch``.
+        """
+        self._actuator_frozen = frozen
+        self._echo_feedback = echo_feedback
 
     def apply_actions(
         self,
@@ -401,17 +495,69 @@ class SimulatedRoom:
 
         Args:
             valve_position: Desired UFH valve position [0-100 %]. Clamped
-                defensively to the valid range.
+                defensively to the valid range. With a ``frozen`` actuator
+                fault the command is recorded but the physical valve does
+                not move.
             fast_source_power_w: Signed fast-source power to apply [W]
                 (positive heating, negative cooling). Its magnitude is capped
                 at the room's nominal ``fast_source_power_w``.
         """
-        self._valve_position = max(0.0, min(100.0, valve_position))
+        self._commanded_valve = max(0.0, min(100.0, valve_position))
+        if not self._actuator_frozen:
+            self._physical_valve = self._commanded_valve
         capped = max(
             -self._fast_source_power_w,
             min(self._fast_source_power_w, fast_source_power_w),
         )
         self._applied_fast_source_power_w = capped
+
+    def update_loop_probes(
+        self,
+        *,
+        flowing_supply_c: float | None,
+        flowing_return_c: float | None,
+        dt_seconds: float,
+    ) -> None:
+        """Relax the loop water probes one tick (S6, 2026-07-13).
+
+        With the pump OFF the probes read ``None`` (pre-S6 behaviour, keeps
+        ``spring_transition`` untouched). On the first pump-ON step they
+        initialise directly to the flowing targets (healthy runs identical
+        to the pre-S6 twin from the first step). Afterwards: with flow
+        (physical valve above :data:`_PROBE_STAGNATION_MAX_VALVE_PCT`) they
+        relax fast (:data:`_PROBE_FLOW_TAU_S`) to the source targets; in
+        stagnation both relax slowly (:data:`_PROBE_STAGNATION_TAU_S`) to
+        the slab temperature — except a manifold-mounted supply probe, which
+        stays at the source.
+
+        Args:
+            flowing_supply_c: The source supply temperature [degC], or
+                ``None`` while the pump is OFF.
+            flowing_return_c: The flowing return target [degC]
+                (``supply -/+`` the EN 1264 default delta-T), or ``None``.
+            dt_seconds: Physics tick [s].
+        """
+        if flowing_supply_c is None or flowing_return_c is None:
+            self._probe_supply_c = None
+            self._probe_return_c = None
+            return
+        if self._probe_supply_c is None or self._probe_return_c is None:
+            self._probe_supply_c = flowing_supply_c
+            self._probe_return_c = flowing_return_c
+            return
+        if self._physical_valve > _PROBE_STAGNATION_MAX_VALVE_PCT:
+            tau = _PROBE_FLOW_TAU_S
+            supply_target = flowing_supply_c
+            return_target = flowing_return_c
+        else:
+            tau = _PROBE_STAGNATION_TAU_S
+            supply_target = (
+                flowing_supply_c if self._supply_probe_on_manifold else self.T_slab
+            )
+            return_target = self.T_slab
+        alpha = 1.0 - math.exp(-dt_seconds / tau)
+        self._probe_supply_c += alpha * (supply_target - self._probe_supply_c)
+        self._probe_return_c += alpha * (return_target - self._probe_return_c)
 
     def step_with_power(
         self,
@@ -706,10 +852,21 @@ class BuildingSimulator:
     ) -> tuple[LoopInput, ...]:
         """Build the per-loop water probes + valve feedback for one room.
 
-        All of a room's loops share the same valve and supply. The return
-        temperature is estimated from the supply using the EN 1264 default
-        delta-T (subtracted in heating, added in cooling). When the pump is OFF
-        the supply/return are unknown and reported as ``None``.
+        All of a room's loops share the same valve and probe pair. Since S6
+        (2026-07-13) the probes come from the room's actuation-aware thermal
+        model (:meth:`SimulatedRoom.update_loop_probes`): with real flow they
+        track the source signature, in stagnation they relax to the slab —
+        so a valve that is physically closed stops "flowing" after ~30 min,
+        and a physically OPEN valve keeps the source signature even when the
+        COMMAND says 0 (the stuck-open case). Before the first physics step
+        with the pump ON, the probes fall back to the idealised flowing
+        signature (supply, supply -/+ the EN 1264 default delta-T), matching
+        the pre-S6 first reading. When the pump is OFF the probes are
+        ``None`` (unchanged behaviour).
+
+        The valve feedback is the PHYSICAL position — unless the
+        ``echo_feedback`` fault is injected, in which case it ECHOES the
+        commanded position (the issue-#4 lying bridge).
 
         Args:
             room: The simulated room.
@@ -718,16 +875,27 @@ class BuildingSimulator:
         Returns:
             A tuple of ``room.n_loops`` identical :class:`LoopInput` values.
         """
+        probe_supply = room.probe_supply_c
+        probe_return = room.probe_return_c
         if t_supply is None:
-            t_return: float | None = None
-        elif self._hp_mode == HeatPumpMode.COOLING:
-            t_return = t_supply + DEFAULT_DT_COOLING
-        else:
-            t_return = t_supply - DEFAULT_DT_HEATING
+            probe_supply = None
+            probe_return = None
+        elif probe_supply is None or probe_return is None:
+            # First reading with the pump ON, before any physics step has
+            # initialised the probe model: idealised flowing signature.
+            probe_supply = t_supply
+            probe_return = (
+                t_supply + DEFAULT_DT_COOLING
+                if self._hp_mode == HeatPumpMode.COOLING
+                else t_supply - DEFAULT_DT_HEATING
+            )
+        feedback = (
+            room.commanded_valve_position if room.echo_feedback else room.valve_position
+        )
         loop = LoopInput(
-            valve_position_pct=room.valve_position,
-            supply_temperature_c=t_supply,
-            return_temperature_c=t_return,
+            valve_position_pct=feedback,
+            supply_temperature_c=probe_supply,
+            return_temperature_c=probe_return,
         )
         return tuple(loop for _ in range(room.n_loops))
 
@@ -763,10 +931,7 @@ class BuildingSimulator:
             cooling_enabled=room.cooling_enabled,
         )
 
-    def _distribute_hp_power(
-        self,
-        actions: dict[str, RoomOutputs],
-    ) -> dict[str, float]:
+    def _distribute_hp_power(self) -> dict[str, float]:
         """Compute per-room floor power respecting finite HP capacity [W].
 
         Algorithm:
@@ -776,12 +941,12 @@ class BuildingSimulator:
            weather-compensation curve (or fallback constant).
         3. Per-room demand is ``valve_fraction * loop_power(...)``; ``loop_power``
            carries the mode-correct sign (positive heating, negative cooling) and
-           returns ``0.0`` on a wrong-direction gradient.
+           returns ``0.0`` on a wrong-direction gradient. The valve fraction is
+           the PHYSICAL position (S6, 2026-07-13) — set by ``apply_actions``
+           just before — never the commanded one, so a frozen actuator keeps
+           heating/cooling at its frozen opening regardless of the command.
         4. If the absolute total demand exceeds ``hp_max_power_w``, every room's
            allocation is scaled uniformly (signs preserved).
-
-        Args:
-            actions: Per-room controller outputs keyed by room name.
 
         Returns:
             Allocated floor power [W] keyed by room name.
@@ -802,7 +967,7 @@ class BuildingSimulator:
 
         demands: dict[str, float] = {}
         for r in self._rooms:
-            valve_pct = actions[r.name].valve_position_pct
+            valve_pct = r.valve_position
             valve_frac = max(0.0, min(100.0, valve_pct)) / 100.0
             q_max = loop_power(t_supply, r.T_slab, r.loop_geometry, mode_str)
             demands[r.name] = valve_frac * q_max
@@ -826,10 +991,10 @@ class BuildingSimulator:
 
         Produces the same snapshot the HA coordinator builds:
         ``room_temperature_c`` (noised), ``humidity_pct`` / ``outdoor_temperature_c``
-        from weather, per-loop supply (weather-comp/fallback), return
-        (supply -/+ delta-T), valve feedback (last applied), ``mode`` mapped from
-        the pump mode, and ``hp_active_for_ufh=True``. ``T_slab`` is never
-        included.
+        from weather, per-loop supply/return from the actuation-aware probe
+        model (S6), valve feedback (physical position, or the echoed command
+        under the ``echo_feedback`` fault), ``mode`` mapped from the pump
+        mode, and ``hp_active_for_ufh=True``. ``T_slab`` is never included.
 
         Returns:
             Dictionary keyed by room name with :class:`RoomInputs` values.
@@ -891,11 +1056,27 @@ class BuildingSimulator:
                 fast_source_power_w=fast_power,
             )
 
-        allocated = self._distribute_hp_power(actions)
+        allocated = self._distribute_hp_power()
         wp = self._weather.get(float(self._time_minutes))
+        # Loop water-probe relaxation targets (S6): the flowing source
+        # signature this tick, or None while the pump is OFF.
+        flowing_supply = self._last_t_supply_c
+        if flowing_supply is None:
+            flowing_return: float | None = None
+        elif self._hp_mode == HeatPumpMode.COOLING:
+            flowing_return = flowing_supply + DEFAULT_DT_COOLING
+        else:
+            flowing_return = flowing_supply - DEFAULT_DT_HEATING
         for r in self._rooms:
             q_sol = _window_solar_gain_w(r.windows, wp.GHI, float(self._time_minutes))
             r.step_with_power(wp, q_floor_w=allocated[r.name], q_sol_w=q_sol)
+            # Probes relax AFTER the physics tick so a stagnating loop chases
+            # the post-step slab temperature (S6, 2026-07-13).
+            r.update_loop_probes(
+                flowing_supply_c=flowing_supply,
+                flowing_return_c=flowing_return,
+                dt_seconds=r.dt_seconds,
+            )
 
         self._time_minutes += self._dt_minutes
         return self.get_all_measurements()

@@ -25,6 +25,8 @@ from .core.models import FastSourceMode, Mode
 from .readers import is_valve_domain
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from homeassistant.core import HomeAssistant
 
     from .core.models import RoomOutputs
@@ -41,6 +43,32 @@ unchanged (hvac_mode, target) pair is normally NOT re-sent every cycle (no IR
 beeps / stomping on manual tweaks), but a periodic re-assert self-heals the
 hardware after a missed write or a manual override — the machine stays the
 owner (S3, 2026-07-09).
+"""
+
+_VALVE_REASSERT_SECONDS: float = 45.0 * 60.0
+"""Age after which an unchanged valve command is re-written anyway [s].
+
+Parity with the splits' :data:`_FAST_REASSERT_SECONDS` (issue #4 gap 3,
+2026-07-13): after an external valve-controller reset reverted its targets to
+the park position, rooms whose command had not changed since (e.g. a
+cooling-disabled room commanded 0 %) were never re-written — the write cache
+said "already written", so the stale park position stood indefinitely. The
+periodic unconditional re-assert heals that whole class of failure; it also
+closes sub-threshold command tails (a 4 % residue left by the drift
+threshold converges to the exact command within one period).
+"""
+
+_VALVE_FEEDBACK_DIVERGENCE_PCT: float = 10.0
+"""Feedback-vs-cached-command divergence that forces an immediate rewrite [%].
+
+Issue #4 gap 3 fast path (2026-07-13): when the valve entity's reported
+position diverges from the last command this writer CACHED (not merely from
+the previous feedback), the external controller has almost certainly been
+reset/overridden — rewrite this cycle instead of waiting out the re-assert
+period. Numerically equal to the coordinator's S8
+``_VALVE_MISMATCH_TOLERANCE_PCT`` so the write path heals exactly the
+divergences S8 would flag. An ECHOING (lying) feedback channel never trips
+this trigger — that failure mode is the S6 hydraulic watchdog's job.
 """
 
 # FastSourceMode -> Home Assistant climate HVAC mode string.
@@ -76,8 +104,10 @@ class CommandWriter:
             hass: The Home Assistant instance whose services are called.
         """
         self._hass = hass
-        # Last value written to each valve entity (for the write threshold).
-        self._last_written_valve: dict[str, float] = {}
+        # Last valve command written per entity, as (value_pct, monotonic
+        # timestamp) — the write threshold's reference AND the re-assert
+        # clock (issue #4, 2026-07-13).
+        self._last_written_valve: dict[str, tuple[float, float]] = {}
         # Last fast-source command written per climate entity (S3):
         # entity_id -> (hvac_mode, target_temp_c or None, monotonic timestamp).
         # An unchanged command younger than _FAST_REASSERT_SECONDS is skipped.
@@ -99,7 +129,8 @@ class CommandWriter:
         Returns:
             The last written position [%], or ``None`` when never written.
         """
-        return self._last_written_valve.get(entity_id)
+        cached = self._last_written_valve.get(entity_id)
+        return None if cached is None else cached[0]
 
     @staticmethod
     def recent_farewell(entity_id: str | None, *, max_age_s: float) -> bool:
@@ -129,28 +160,72 @@ class CommandWriter:
         outputs: RoomOutputs,
         *,
         threshold_pct: float,
+        feedback_pct: Sequence[float | None] | None = None,
     ) -> None:
         """Write the recommended valve position to every room valve entity.
 
         Each actuator is driven per its domain: a ``valve``-domain entity via
         ``valve.set_valve_position`` (integer ``position`` 0..100) and any other
-        (``number`` …) via ``number.set_value`` (float ``value``). A value is
-        written to an entity only when it differs from the last value written to
-        that entity by at least ``threshold_pct``. All calls are non-blocking.
+        (``number`` …) via ``number.set_value`` (float ``value``). All calls
+        are non-blocking; the cache is updated when the call was DISPATCHED
+        successfully (fire-and-forget — a dispatched-but-dropped write is
+        healed by the re-assert / feedback triggers below, never trusted
+        forever).
+
+        An entity is written when ANY of five triggers fires (issue #4,
+        2026-07-13):
+
+        1. **never written** — no cached command for this entity yet;
+        2. **threshold vs LAST WRITTEN** — the new command differs from the
+           last command actually written to this entity by at least
+           ``threshold_pct``. The reference is the written value, never the
+           previous computed command, so slow per-cycle drift accumulates
+           into a write once the total gap crosses the threshold;
+        3. **endpoint snap** — a command of exactly 0 or 100 % is always
+           written when the cache differs: the endpoints are semantically
+           special (fully closed seals a cooling loop; fully open is the
+           self-test excursion), so a sub-threshold residue (e.g. cache 4 %,
+           command 0 %) must not linger there;
+        4. **periodic re-assert** — the cached command is older than
+           :data:`_VALVE_REASSERT_SECONDS` (parity with the splits' S3);
+        5. **feedback diverged from the CACHED command** — the entity's
+           reported position (``feedback_pct``, aligned with ``valves``)
+           differs from the cached command by more than
+           :data:`_VALVE_FEEDBACK_DIVERGENCE_PCT`: an external controller
+           reset to its park position is corrected this cycle instead of
+           after the re-assert period.
 
         Args:
             valves: The room's valve actuator entity ids.
             name: The room name (log context).
             outputs: The room's controller outputs.
             threshold_pct: The room's ``valve_write_threshold_pct`` [%].
+            feedback_pct: The valve positions read back this cycle, aligned
+                index-by-index with ``valves`` (``None`` entries = no
+                usable feedback); ``None`` when the caller has none.
         """
         if not valves:
             return
         value = outputs.valve_position_pct
-        for valve_entity in valves:
-            last = self._last_written_valve.get(valve_entity)
-            if last is not None and abs(value - last) < threshold_pct:
-                continue
+        now_monotonic = time.monotonic()
+        for i, valve_entity in enumerate(valves):
+            cached = self._last_written_valve.get(valve_entity)
+            if cached is not None:
+                last_value, last_stamp = cached
+                feedback = (
+                    feedback_pct[i]
+                    if feedback_pct is not None and i < len(feedback_pct)
+                    else None
+                )
+                drift = abs(value - last_value) >= threshold_pct
+                endpoint_snap = value in (0.0, 100.0) and value != last_value
+                reassert = now_monotonic - last_stamp >= _VALVE_REASSERT_SECONDS
+                feedback_diverged = (
+                    feedback is not None
+                    and abs(feedback - last_value) > _VALVE_FEEDBACK_DIVERGENCE_PCT
+                )
+                if not (drift or endpoint_snap or reassert or feedback_diverged):
+                    continue
             try:
                 if is_valve_domain(valve_entity):
                     # valve.set_valve_position expects an int 0..100 position.
@@ -172,7 +247,7 @@ class CommandWriter:
                     "Failed to set valve %s for room %s", valve_entity, name
                 )
             else:
-                self._last_written_valve[valve_entity] = value
+                self._last_written_valve[valve_entity] = (value, now_monotonic)
 
     async def write_fast_source(
         self, entity_id: str | None, name: str, outputs: RoomOutputs
@@ -384,4 +459,4 @@ class CommandWriter:
                     name,
                 )
             else:
-                self._last_written_valve[valve_entity] = 0.0
+                self._last_written_valve[valve_entity] = (0.0, time.monotonic())

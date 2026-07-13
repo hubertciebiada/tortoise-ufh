@@ -1,6 +1,6 @@
 # Tortoise-UFH — instrukcja użytkownika
 
-> Dotyczy wersji **0.8.0**. Instrukcja opisuje integrację po polsku; interfejs
+> Dotyczy wersji **0.9.0**. Instrukcja opisuje integrację po polsku; interfejs
 > (panel, encje, kreator konfiguracji, usługi) jest dostępny po polsku i po
 > angielsku i podąża za językiem ustawionym w Twoim profilu Home Assistant.
 
@@ -299,6 +299,24 @@ sprzężeniem — §11)**
 | **Bazowa temperatura wody grzania** (`heating_supply_base_c`) | °C | 26 | Zasilanie wody grzewczej przy neutralnej temperaturze zewnętrznej (parametr „Temperatura neutralna członu pogodowego", domyślnie 15 °C). Poniżej niej nastawa rośnie według nachylenia krzywej; całość obcinana do 20–40 °C. Pisana do pompy tylko przy skonfigurowanej encji nastawy grzania — domyślnie pompa jedzie na własnej krzywej. Parametr globalny. Domyślnie 26 °C. |
 | **Nachylenie krzywej wody grzania** (`heating_supply_slope`) | K/K | 0,5 | O ile kelwinów rośnie nastawa wody grzania na każdy 1 K temperatury zewnętrznej poniżej temperatury neutralnej. Domyślnie 0,5 K/K; typowo 0,3–0,8 dla dobrze ocieplonego domu z podłogówką. |
 
+**Watchdog przepływu (S6; działa tylko z czujnikami zasilania i powrotu pętli)**
+
+| Parametr | Jednostka | Domyślnie | Co robi i kiedy ruszać |
+|---|---|---|---|
+| **Minimalna ΔT uznawana za przepływ** (`flow_epsilon_k`) | K | 0,3 | Najmniejsza różnica zasilanie−powrót pętli, którą watchdog uznaje za dowód, że woda faktycznie płynie. Poniżej niej (i bez ruchu sond ku źródłu) otwarta komenda bez odpowiedzi hydraulicznej podnosi flagę „brak przepływu". Podnieś przy szumiących czujnikach. |
+| **Próg komendy otwarcia watchdoga** (`flow_open_threshold_pct`) | % | 15 | Od jakiej komendy zaworu pętla ma obowiązek pokazać odpowiedź hydrauliczną. Poniżej progu pętla nie jest oceniana pod kątem braku przepływu. |
+| **Okno odpowiedzi hydraulicznej** (`flow_response_window_min`) | min | 45 | Ile minut ciągłego braku sygnatury przepływu (przy otwartej komendzie i wiarygodnej cyrkulacji) podnosi flagę; to samo okno pilnuje zaworu, który nie domyka. Płyta jest wolna — minimum 30 min, żeby uniknąć trzepotania; 1440 praktycznie wyłącza watchdoga. |
+
+Watchdog to niezależny, **fizyczny** świadek pracy zaworów: opiera się wyłącznie na
+czujnikach wody pętli i **nie ufa** pozycji zgłaszanej przez encję zaworu (ten kanał
+potrafi „echować" komendę po restarcie kontrolera — realna awaria z lata 2026, gdy
+zawory stały, a raportowały posłuszeństwo). Reakcja jest bierna: flaga + encja
+`binary_sensor` „usterka przepływu" + zamrożenie integratora; watchdog sam nie rusza
+zaworem. W zakładce Zawory jest chip zdrowia przepływu (ok / brak przepływu? / nie
+domyka?) oraz przycisk **ręcznego testu aktuacji** — zawór jest celowo otwierany na
+100 % na 20–30 min, a o wyniku decyduje odpowiedź sond (do uruchamiania po serwisie lub
+zdarzeniu zasilania; przerywany przez reguły bezpieczeństwa).
+
 ## 9. Chłodzenie podłogowe i kondensacja
 
 Chłodzenie podłogą ma jedno twarde ryzyko: **skropliny na posadzce**, gdy zimna woda
@@ -452,6 +470,10 @@ pokoju / usunięcie integracji) **nie dotyka pompy**.
 | `s5_watchdog` | Brak świeżych danych pokoju > 15 min — pozycja neutralna, alarm w raporcie. | Sprawdź czujniki/sieć; kasuje się po 5 min ciągłych świeżych danych. |
 | `unknown_room` | Pokój bez konfiguracji regulatora (stan przejściowy po zmianach konfiguracji). | Przeładuj integrację; jeśli trwa — usuń i dodaj pokój. |
 | `controller_error` | Wyjątek w regulatorze pokoju — bezpieczna degradacja (w grzaniu zawór trzyma pozycję, w chłodzeniu 0; split OFF). | Zajrzyj do logów HA i zgłoś problem (patrz §13). |
+| `loop_no_flow` | Watchdog przepływu (S6): zawór jest otwarty od dłuższego czasu, ale sondy pętli nie widzą przepływu wody — integrator zamrożony, encja „usterka przepływu" włączona. | Sprawdź kontroler zaworów/siłownik i przepływ na rozdzielaczu (rotametry). Watchdog nie ufa feedbackowi zaworu — patrz §8, „Watchdog przepływu". |
+| `loop_stuck_open` | Watchdog przepływu (S6): zawór jest komendowany na 0, ale pętla wciąż niesie wodę od strony źródła (nie domyka). W chłodzeniu pętla liczy się do bezpiecznego punktu rosy. | Sprawdź, czy siłownik faktycznie domyka; ryzyko wychłodzenia/skroplin na tej pętli. |
+| `actuation_test_running` | Trwa ręczny test aktuacji tego pokoju (zawór celowo na 100 %). | Informacyjne. Zaczekaj do końca albo anuluj w panelu. |
+| `actuation_test_failed` | Test aktuacji zakończony niepowodzeniem — pętla nie odpowiedziała hydraulicznie na otwarcie. | Sprawdź kontroler/siłownik/przepływ tej pętli. |
 
 ## 13. Rozwiązywanie problemów
 
@@ -505,6 +527,15 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **0.9.0 (2026-07-13)** — **watchdog przepływu (S6)**: niezależny, fizyczny świadek
+  pracy zaworów z sond wody pętli, który nie ufa feedbackowi encji zaworu (flagi
+  `loop_no_flow` / `loop_stuck_open`, encja „usterka przepływu", zamrożenie
+  integratora); **ręczny test aktuacji** (usługa `tortoise_ufh.test_actuation`), chip
+  zdrowia przepływu w zakładce Zawory, trzy nowe parametry strojenia (§8). Poprawki
+  ścieżki zapisu zaworów: ponowne wymuszanie komendy (~45 min) i zapis przy rozjeździe
+  feedbacku — po awarii kontrolera zaworów pozycja parkingowa już nie „zamarza".
+  Podbicie nastawy splita (±1 K, S12) jest teraz parametrem `fast_target_offset_k`
+  (0 = bez podbicia). Bez migracji konfiguracji. Naprawia zgłoszenie #4.
 - **0.8.0 (2026-07-12)** — **ciche godziny wspomagania** per pokój (okno dozwolonych
   godzin splita, także przez północ — §10) i **opcjonalne sprzężenie z pompą ciepła**
   (synchronizacja kierunku trybu z zachowaniem flagi CWU, nastawy wody chłodzenia /

@@ -56,6 +56,7 @@ from .const import (
     CONF_CONTROLLER,
     CONF_COOLING_ENABLED,
     CONF_ENTITY_FAST_SOURCE,
+    CONF_ENTITY_GLOBAL_SUPPLY,
     CONF_ENTITY_HP_ACTIVE,
     CONF_ENTITY_HP_COOLING_SETPOINT,
     CONF_ENTITY_HP_HEATING_SETPOINT,
@@ -1120,7 +1121,10 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         :class:`ControllerConfig` knobs; the primary control surface is the
         panel and the per-room ``select`` entities. Writes the state map to
         ``entry.options[CONF_ROOM_STATE]``. An unknown or invalid persisted
-        state falls back to :data:`DEFAULT_ROOM_STATE` (``off``).
+        state falls back to :data:`DEFAULT_ROOM_STATE` (``off``). Also hosts
+        the OPTIONAL global manifold supply probe (S6, 2026-07-13) stored as
+        the top-level ``entry.options[CONF_ENTITY_GLOBAL_SUPPLY]``; leaving
+        the picker empty removes the key.
         """
         entry = self.config_entry
         rooms: list[dict[str, Any]] = list(entry.data.get(CONF_ROOMS, []))
@@ -1147,14 +1151,19 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 # manage (notably the sparse per-room tuning map CONF_ROOM_TUNING,
                 # set from the panel) are preserved rather than wiped: an options
                 # flow's async_create_entry REPLACES entry.options wholesale.
-                return self.async_create_entry(
-                    title="",
-                    data={
-                        **entry.options,
-                        CONF_ROOM_STATE: room_states,
-                        CONF_CONTROLLER: asdict(controller),
-                    },
-                )
+                new_options: dict[str, Any] = {
+                    **entry.options,
+                    CONF_ROOM_STATE: room_states,
+                    CONF_CONTROLLER: asdict(controller),
+                }
+                global_supply = str(
+                    user_input.get(CONF_ENTITY_GLOBAL_SUPPLY, "") or ""
+                ).strip()
+                if global_supply:
+                    new_options[CONF_ENTITY_GLOBAL_SUPPLY] = global_supply
+                else:
+                    new_options.pop(CONF_ENTITY_GLOBAL_SUPPLY, None)
+                return self.async_create_entry(title="", data=new_options)
 
         current_states: dict[str, Any] = entry.options.get(CONF_ROOM_STATE, {})
         schema_dict: dict[Any, Any] = {}
@@ -1171,6 +1180,19 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                     )
                 )
             )
+        current_global_supply = str(
+            entry.options.get(CONF_ENTITY_GLOBAL_SUPPLY, "") or ""
+        )
+        if current_global_supply:
+            global_supply_marker = vol.Optional(
+                CONF_ENTITY_GLOBAL_SUPPLY,
+                description={"suggested_value": current_global_supply},
+            )
+        else:
+            global_supply_marker = vol.Optional(CONF_ENTITY_GLOBAL_SUPPLY)
+        schema_dict[global_supply_marker] = EntitySelector(
+            EntitySelectorConfig(domain=["sensor", "input_number", "number"])
+        )
         schema_dict.update(_controller_schema_dict(current_defaults))
 
         return self.async_show_form(

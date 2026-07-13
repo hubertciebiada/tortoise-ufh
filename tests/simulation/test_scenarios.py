@@ -162,6 +162,27 @@ the band edge. Without the K1 mechanisms the discharge ran 10+ h at 50-80 %
 valve, so the regression margin stays enormous.
 """
 
+_S6_QUIET_FLAGS: frozenset[str] = frozenset(
+    {
+        "loop_no_flow",
+        "loop_stuck_open",
+        "actuation_test_running",
+        "actuation_test_failed",
+    }
+)
+"""S6 / self-test flags that must NEVER appear on healthy loops.
+
+Acceptance criterion 4 of ``docs/NO_FLOW_WATCHDOG.md`` (2026-07-13): the
+hydraulic no-flow watchdog must be silent across every healthy library
+scenario. This is the permanent regression fence — before the twin's probes
+became actuation-aware, a loop commanded 0 for >= 45 min still "flowed" and
+raised false ``loop_stuck_open`` in night_setback / hot_july / solar runs.
+"""
+
+_S6_QUIET_LOOP_STATUSES: frozenset[str] = frozenset({"no_flow", "stuck_open"})
+"""Per-loop ``loop_flow_status`` values that count as an S6 alarm."""
+
+
 # Fail fast on a stale scenario name so a library rename surfaces at collection.
 _UNKNOWN: list[str] = [name for name in GATE_SCENARIOS if name not in SCENARIO_LIBRARY]
 if _UNKNOWN:  # pragma: no cover - guards the GATE_SCENARIOS <-> library contract
@@ -577,6 +598,42 @@ class TestScenarioSimulation:
                     "split_boost: anti priority-inversion violated — split ON "
                     f"with a closed valve at t={rec.t} (T_room={t_room:.2f})"
                 )
+
+    @pytest.mark.parametrize("scenario_name", GATE_SCENARIOS)
+    def test_flow_watchdog_silent_on_healthy_loops(
+        self,
+        scenario_name: str,
+        run_scenario: RunScenario,
+    ) -> None:
+        """S6 acceptance criterion 4: zero watchdog flags on healthy loops.
+
+        Every record of every library scenario — heating, cooling,
+        transitional, setbacks, sensor dropout, split boost — must be free
+        of :data:`_S6_QUIET_FLAGS` and must not report a per-loop status in
+        :data:`_S6_QUIET_LOOP_STATUSES`. All actuators in these runs are
+        honest and healthy, so any hit is a false positive of the hydraulic
+        no-flow watchdog (or a self-test that nobody started).
+
+        Args:
+            scenario_name: Gate scenario key.
+            run_scenario: Session-scoped simulation harness fixture.
+        """
+        scenario = SCENARIO_LIBRARY[scenario_name]()
+        log, _metrics = run_scenario(scenario)
+        assert len(log) > 0, f"{scenario_name}: empty simulation log"
+
+        for rec in log:
+            offending = _S6_QUIET_FLAGS.intersection(rec.outputs.report.flags)
+            assert not offending, (
+                f"{scenario_name}: false S6 flag(s) {sorted(offending)} on a "
+                f"healthy loop (room '{rec.room_name}', t={rec.t} min)"
+            )
+            statuses = set(rec.outputs.report.loop_flow_status)
+            alarmed = statuses & _S6_QUIET_LOOP_STATUSES
+            assert not alarmed, (
+                f"{scenario_name}: false per-loop status {sorted(alarmed)} on "
+                f"a healthy loop (room '{rec.room_name}', t={rec.t} min)"
+            )
 
     @pytest.mark.parametrize("scenario_name", GATE_SCENARIOS)
     def test_no_freezing(
