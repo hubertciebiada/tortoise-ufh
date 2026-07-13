@@ -1,6 +1,6 @@
 # Tortoise-UFH — instrukcja użytkownika
 
-> Dotyczy wersji **0.10.0**. Instrukcja opisuje integrację po polsku; interfejs
+> Dotyczy wersji **0.10.1**. Instrukcja opisuje integrację po polsku; interfejs
 > (panel, encje, kreator konfiguracji, usługi) jest dostępny po polsku i po
 > angielsku i podąża za językiem ustawionym w Twoim profilu Home Assistant.
 
@@ -137,12 +137,14 @@ przełączniki były zbyt łatwe do trafienia przypadkiem.
 
 Zakładki:
 
-- **Pokoje** — u góry **annunciator flag** (od v0.10.0): wszystkie znane flagi jako
-  kafelki pogrupowane w **Bezpieczeństwo (S1–S6) / Wspomaganie / Konfiguracja** —
-  **wyszarzone**, gdy nieaktywne, i **zapalone w kolorze** (z licznikiem `×N` pokoi
-  i listą pokoi w dymku), gdy zadziałają; zabezpieczenia noszą kod **S1–S6** na
-  plakietce, a pod ikoną **„i"** przy każdej fladze jest pełne objaśnienie (§12).
-  Pod annunciatorem tabela: przełącznik stanu **Wyłączony/Steruje** (pierwsza kolumna),
+- **Pokoje** — u góry **annunciator flag** (od v0.10.0): zwijana, pogrupowana **lista**
+  (styl jak „Strojenie") wszystkich znanych flag w sekcjach **Bezpieczeństwo (S1–S6) /
+  Wspomaganie / Konfiguracja** — wiersze **wyszarzone**, gdy nieaktywne, i **zapalone**
+  (lewy pasek koloru severity + status „aktywna ×N pokoi", lista pokoi w dymku), gdy
+  zadziałają; zabezpieczenia noszą kod **S1–S6** na plakietce, a pod ikoną **„i"** przy
+  każdej fladze jest pełne objaśnienie (§12). Nagłówek zwija/rozwija listę, a nawet po
+  zwinięciu pokazuje plakietkę podsumowania. Pod annunciatorem tabela: przełącznik stanu
+  **Wyłączony/Steruje** (pierwsza kolumna),
   pomiar z trendem, zadana (z korektą), uchyb, zawór %, zasilanie/powrót pierwszej
   pętli oraz — pod wspólnym nagłówkiem **Wspomaganie** — tryb i temperatura zadana
   splita/grzałki („—" = pokój bez wspomagania, „wył." = wspomaganie stoi; ikona „i"
@@ -159,9 +161,10 @@ Zakładki:
 - **Strojenie** — nastawy globalne + rzadkie nadpisania per pokój (§8), od v0.8.0
   jako **lista parametrów w grupach tematycznych** (Regulator PI i trend / Pasmo
   komfortu i zawór / Człon pogodowy / Szybkie źródło / Ochrona przed kondensacją /
-  Pompa ciepła — woda) z pełnymi nazwami. Przy każdym parametrze ikona **„i"**
-  z objaśnieniem (najedź myszą, kliknij lub tapnij). Grupa „Pompa ciepła — woda"
-  jest widoczna tylko w zakresie Globalne (§8).
+  Pompa ciepła — woda) z pełnymi nazwami. Wybór zakresu (**Globalne** lub konkretny
+  pokój) to **zakładki** u góry (od v0.10.1 — wcześniej chipy). Przy każdym parametrze
+  ikona **„i"** z objaśnieniem (najedź myszą, kliknij lub tapnij). Grupa „Pompa ciepła —
+  woda" jest widoczna tylko w zakresie Globalne (§8).
 - **Zawory** — per pokój: Komenda, Surowy, Podłoga (minimalne otwarcie), Saturacja,
   Dławienie S2, Feedback (pozycja raportowana przez siłownik); rozwijane pętle
   z zasilaniem/powrotem/ΔT. Nagłówki kolumn też mają ikony „i".
@@ -457,11 +460,12 @@ pokoju / usunięcie integracji) **nie dotyka pompy**.
 
 <!-- Słownik zgodny z FLAG_LABELS w frontend/tortoise-ufh-panel.js — zmieniaj razem. -->
 
-Od v0.10.0 wszystkie te flagi widzisz też jako **annunciator na górze zakładki Pokoje**:
-każda flaga to kafelek — **wyszarzony**, gdy nieaktywna, i **zapalony w kolorze** (z licznikiem
-`×N` pokoi), gdy zadziała. Kafelki są pogrupowane, zabezpieczenia noszą kod **S1–S6**, a pod
-ikoną **„i"** przy każdej fladze jest jej pełne objaśnienie. Legenda renderuje się z jednego
-rejestru — nowa flaga pojawia się w niej automatycznie. Pełny słownik poniżej:
+Od v0.10.0 wszystkie te flagi widzisz też jako **annunciator na górze zakładki Pokoje** —
+zwijaną, pogrupowaną **listę** (styl jak „Strojenie"): każda flaga to wiersz — **wyszarzony**,
+gdy nieaktywna, i **zapalony** (lewy pasek koloru + status „aktywna ×N pokoi"), gdy zadziała.
+Zabezpieczenia noszą kod **S1–S6**, a pod ikoną **„i"** przy każdej fladze jest jej pełne
+objaśnienie. Lista renderuje się z jednego rejestru — nowa flaga pojawia się w niej
+automatycznie. Pełny słownik poniżej:
 
 | Flaga | Znaczenie | Co zrobić |
 |---|---|---|
@@ -539,6 +543,11 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **0.10.1 (2026-07-13)** — dopieszczenie panelu: annunciator flag przerobiony z kafelków na
+  **zwijaną, pogrupowaną listę** w stylu „Strojenia" (wiersz na flagę, lewy pasek koloru severity
+  + status „aktywna ×N", nagłówek zwija/rozwija i pokazuje podsumowanie po zwinięciu). W zakładce
+  „Strojenie" wybór zakresu (Globalne / pokój) zmieniony z chipów na **zakładki**. Wyłącznie panel —
+  bez migracji konfiguracji.
 - **0.10.0 (2026-07-13)** — **annunciator flag** na górze zakładki Pokoje: wszystkie znane
   flagi jako kafelki (wyszarzone, gdy nieaktywne; zapalone w kolorze z licznikiem `×N`, gdy
   zadziałają), pogrupowane w Bezpieczeństwo (S1–S6) / Wspomaganie / Konfiguracja, każda z „i"

@@ -372,6 +372,7 @@ _REQUIRED_V0100_KEYS = (
     "flag_grp_config",
     "flag_grp_other",
     "flag_active_in",
+    "flag_active",
     "flag_none_active",
     "flag_desc_unknown",
 )

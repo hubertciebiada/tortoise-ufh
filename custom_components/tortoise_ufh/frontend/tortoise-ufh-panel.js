@@ -162,6 +162,7 @@ const STR = {
     flag_grp_config: "Konfiguracja / stan",
     flag_grp_other: "Pozostałe",
     flag_active_in: "Aktywna w: ",
+    flag_active: "aktywna",
     flag_none_active: "Brak aktywnych flag",
     flag_desc_unknown: "Nowa lub nieopisana flaga — patrz instrukcja (docs/INSTRUKCJA.md §12).",
     dew_cap: "Bezpieczny punkt rosy",
@@ -645,6 +646,7 @@ const STR = {
     flag_grp_config: "Configuration / state",
     flag_grp_other: "Other",
     flag_active_in: "Active in: ",
+    flag_active: "active",
     flag_none_active: "No active flags",
     flag_desc_unknown: "New or undocumented flag — see the manual (docs/INSTRUKCJA.md §12).",
     dew_cap: "Safe dew point",
@@ -1783,6 +1785,7 @@ class TortoiseUfhPanel extends HTMLElement {
     this._detailRoom = null; // room name the detail is currently built for
     this._wiringOpen = true; // signals <details> state, persists across rooms
     this._diagOpen = false; // diagnostics <details> state (A5: collapsed)
+    this._flagLegendOpen = true; // flag annunciator <details> state (default open)
 
     this._view = []; // normalized room view-models
     this._viewByName = new Map();
@@ -3449,18 +3452,19 @@ class TortoiseUfhPanel extends HTMLElement {
   }
 
   /**
-   * Build the flag annunciator once, driven ENTIRELY by `FLAG_LABELS`: every
-   * registered flag becomes a dimmed tile (grouped, SX-badged, with an "i"
-   * explanation) that lights up in `_updateFlagLegend` when a room raises it.
-   * Adding a flag to the registry is enough — no edit is needed here. Live
-   * codes missing from the registry are materialised on the fly into the
-   * "other" group at update time, so nothing is ever invisible.
+   * Build the flag annunciator once, driven ENTIRELY by `FLAG_LABELS`. Styled
+   * like the Tuning tab: a collapsible `<details>` whose body is a set of
+   * grouped cards (`.tune-group` look), one flag PER ROW — dimmed when
+   * inactive, lit (severity) with a status when a room raises it. Adding a flag
+   * to the registry is enough; a live code missing from the registry is
+   * materialised on the fly into the "other" group, so nothing is invisible.
    */
   _buildFlagLegend() {
-    const L = { tiles: {}, otherTiles: {}, groupEls: {} };
+    const L = { rows: {}, otherRows: {}, groupEls: {} };
 
     L.summary = h("span", { class: "flag-legend-summary" });
-    const head = h("div", { class: "flag-legend-head" }, [
+    // The summary line doubles as the collapse toggle (chevron via .sub-fold).
+    const summary = h("summary", { class: "flag-legend-head" }, [
       h("span", { class: "flag-legend-title", text: this._t("flag_legend_title") }),
       this._infoIcon("flag_legend_info"),
       L.summary,
@@ -3482,57 +3486,61 @@ class TortoiseUfhPanel extends HTMLElement {
 
     const groupsWrap = h("div", { class: "flag-legend-groups" });
     for (const g of groups) {
-      const tilesEl = h("div", { class: "flag-tiles" });
+      const rowsEl = h("div", { class: "flag-rows" });
       for (const code of buckets[g] || []) {
-        const tile = this._buildFlagTile(code);
-        L.tiles[code] = tile;
-        tilesEl.appendChild(tile.el);
+        const row = this._buildFlagRow(code);
+        L.rows[code] = row;
+        rowsEl.appendChild(row.el);
       }
       const grpEl = h("div", { class: "flag-grp", dataset: { group: g } }, [
         h("div", {
           class: "flag-grp-title",
           text: this._t("flag_grp_" + g) || g,
         }),
-        tilesEl,
+        rowsEl,
       ]);
-      // The "other" group holds only runtime-materialised tiles; hide it until
+      // The "other" group holds only runtime-materialised rows; hide it until
       // an unknown flag actually fires.
       if (g === FLAG_GROUP_FALLBACK && !(buckets[g] || []).length) {
         grpEl.style.display = "none";
       }
-      L.groupEls[g] = { el: grpEl, tilesEl };
+      L.groupEls[g] = { el: grpEl, rowsEl };
       groupsWrap.appendChild(grpEl);
     }
 
-    L.el = h("section", { class: "flag-legend", "aria-label": this._t("flag_legend_title") }, [
-      head,
-      groupsWrap,
-    ]);
+    const details = h(
+      "details",
+      { class: "flag-legend sub-fold", "aria-label": this._t("flag_legend_title") },
+      [summary, groupsWrap],
+    );
+    details.open = this._flagLegendOpen;
+    details.addEventListener("toggle", () => {
+      this._flagLegendOpen = details.open;
+    });
+    L.el = details;
     this._legend = L;
     return L;
   }
 
-  /** A single annunciator tile (works for registry AND unknown codes). */
-  _buildFlagTile(code) {
+  /** A single annunciator ROW (works for registry AND unknown codes). */
+  _buildFlagRow(code) {
     const sx = this._flagSx(code);
-    const children = [];
+    const head = [];
     if (sx) {
-      children.push(h("span", { class: "flag-sx", text: sx }));
+      head.push(h("span", { class: "flag-sx", text: sx }));
     }
-    children.push(h("span", { class: "flag-tile-label", text: this._flagLabel(code) }));
-    const countEl = h("span", { class: "flag-count" });
-    children.push(countEl);
+    head.push(h("span", { class: "flag-row-label", text: this._flagLabel(code) }));
     // Live getter so the bubble tracks the current language.
-    children.push(this._infoBtn(() => this._flagDesc(code), this._t("tooltip_show")));
-    const el = h(
-      "span",
-      { class: "flag-tile is-off", dataset: { code } },
-      children,
-    );
-    return { el, countEl };
+    head.push(this._infoBtn(() => this._flagDesc(code), this._t("tooltip_show")));
+    const statusEl = h("span", { class: "flag-row-status" });
+    const el = h("div", { class: "flag-row is-off", dataset: { code } }, [
+      h("div", { class: "flag-row-head" }, head),
+      statusEl,
+    ]);
+    return { el, statusEl };
   }
 
-  /** Light up the tiles for flags active in any room; dim the rest. */
+  /** Light up the rows for flags active in any room; dim the rest. */
   _updateFlagLegend() {
     const L = this._legend;
     if (!L) {
@@ -3549,24 +3557,28 @@ class TortoiseUfhPanel extends HTMLElement {
       }
     }
 
-    const applyTile = (code, tile) => {
+    const applyRow = (code, row) => {
       const rooms = active.get(code);
       const on = !!rooms;
-      tile.el.classList.toggle("is-on", on);
-      tile.el.classList.toggle("is-off", !on);
-      tile.el.classList.remove("sev-ok", "sev-warn", "sev-problem", "sev-alarm");
+      row.el.classList.toggle("is-on", on);
+      row.el.classList.toggle("is-off", !on);
+      row.el.classList.remove("sev-ok", "sev-warn", "sev-problem", "sev-alarm");
+      row.statusEl.textContent = "";
       if (on) {
-        tile.el.classList.add("sev-" + this._flagSev(code));
-        tile.countEl.textContent = rooms.length > 1 ? "×" + rooms.length : "";
-        tile.el.title = this._t("flag_active_in") + rooms.join(", ");
+        row.el.classList.add("sev-" + this._flagSev(code));
+        const label =
+          this._t("flag_active") + (rooms.length > 1 ? " ×" + rooms.length : "");
+        row.statusEl.appendChild(h("span", { class: "flag-dot" }));
+        row.statusEl.appendChild(h("span", { text: label }));
+        row.el.title = this._t("flag_active_in") + rooms.join(", ");
       } else {
-        tile.countEl.textContent = "";
-        tile.el.title = "";
+        row.statusEl.textContent = "—";
+        row.el.title = "";
       }
     };
 
-    for (const code of Object.keys(L.tiles)) {
-      applyTile(code, L.tiles[code]);
+    for (const code of Object.keys(L.rows)) {
+      applyRow(code, L.rows[code]);
     }
 
     // Unknown (unregistered) active codes → materialise/refresh in "other".
@@ -3576,21 +3588,21 @@ class TortoiseUfhPanel extends HTMLElement {
       if (code in FLAG_LABELS) {
         continue;
       }
-      let tile = L.otherTiles[code];
-      if (!tile) {
-        tile = this._buildFlagTile(code);
-        L.otherTiles[code] = tile;
-        otherGroup.tilesEl.appendChild(tile.el);
+      let row = L.otherRows[code];
+      if (!row) {
+        row = this._buildFlagRow(code);
+        L.otherRows[code] = row;
+        otherGroup.rowsEl.appendChild(row.el);
       }
-      applyTile(code, tile);
+      applyRow(code, row);
       otherCount += 1;
       void rooms;
     }
-    // Drop stale unknown tiles that no longer fire (keep the group tidy).
-    for (const code of Object.keys(L.otherTiles)) {
+    // Drop stale unknown rows that no longer fire (keep the group tidy).
+    for (const code of Object.keys(L.otherRows)) {
       if (!active.has(code)) {
-        L.otherTiles[code].el.remove();
-        delete L.otherTiles[code];
+        L.otherRows[code].el.remove();
+        delete L.otherRows[code];
       }
     }
     if (otherGroup) {
@@ -5212,7 +5224,11 @@ class TortoiseUfhPanel extends HTMLElement {
   /** Build the Tuning section skeleton (populated lazily by `_renderTuning`). */
   _buildTuningSection() {
     const intro = h("div", { class: "tune-intro", text: this._t("tune_intro") });
-    const scopeBar = h("div", { class: "tune-scopes", role: "group" });
+    const scopeBar = h("div", {
+      class: "tune-scopes",
+      role: "tablist",
+      "aria-label": this._t("tune_scope_global"),
+    });
     const body = h("div", { class: "tune-body" }, [
       h("div", { class: "empty", text: this._t("loading") }),
     ]);
@@ -5320,14 +5336,17 @@ class TortoiseUfhPanel extends HTMLElement {
     const scopes = ["global", ...this._configRoomNames()];
     for (const scope of scopes) {
       const label = scope === "global" ? this._t("tune_scope_global") : scope;
-      const chip = h("button", {
-        class: "tune-scope" + (scope === this._tuningScope ? " active" : ""),
+      const isActive = scope === this._tuningScope;
+      const tab = h("button", {
+        class: "tune-scope" + (isActive ? " active" : ""),
         type: "button",
+        role: "tab",
         text: label,
-        "aria-pressed": scope === this._tuningScope ? "true" : "false",
+        "aria-selected": isActive ? "true" : "false",
+        tabindex: isActive ? "0" : "-1",
         on: { click: () => this._setTuningScope(scope) },
       });
-      E.scopeBar.appendChild(chip);
+      E.scopeBar.appendChild(tab);
     }
   }
 
@@ -6444,14 +6463,19 @@ button { font-family: inherit; cursor: pointer; }
 /* Tuning tab */
 .tune { display: flex; flex-direction: column; gap: 14px; }
 .tune-intro { font-size: 12px; color: var(--t-muted); line-height: 1.4; }
-.tune-scopes { display: flex; flex-wrap: wrap; gap: 8px; }
-.tune-scope {
-  border: 1px solid var(--t-line); background: var(--t-card); color: var(--t-fg);
-  border-radius: 999px; padding: 6px 14px; font-size: 13px; font-weight: 600;
+/* Scope selector as underline tabs (like the main .tabbar / .tab). */
+.tune-scopes {
+  display: flex; gap: 2px; overflow-x: auto;
+  border-bottom: 1px solid var(--t-line);
 }
-.tune-scope:hover { border-color: var(--t-primary); }
-.tune-scope.active { background: var(--t-primary); color: var(--t-on-primary); border-color: var(--t-primary); }
-.tune-scope:focus-visible { outline: 2px solid var(--t-primary); outline-offset: 2px; }
+.tune-scope {
+  border: 0; background: transparent; color: var(--t-muted);
+  padding: 9px 14px; font-size: 13px; font-weight: 600; white-space: nowrap;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tune-scope:hover { color: var(--t-fg); }
+.tune-scope.active { color: var(--t-primary); border-bottom-color: var(--t-primary); }
+.tune-scope:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; border-radius: 6px; }
 /* Grouped vertical parameter list (A4): titled sections, one knob per row. */
 .tune-body { display: flex; flex-direction: column; gap: 14px; max-width: 860px; }
 .tune-group {
@@ -6612,13 +6636,12 @@ button { font-family: inherit; cursor: pointer; }
 .chip-problem { background: color-mix(in srgb, var(--t-error) 18%, transparent); color: var(--t-error); }
 .chip-alarm { background: color-mix(in srgb, var(--t-error) 30%, transparent); color: var(--t-error); font-weight: 600; }
 
-/* Flag annunciator (Rooms tab): every flag, dimmed until a room raises it. */
-.flag-legend {
-  border: 1px solid var(--t-line); border-radius: var(--t-radius);
-  background: var(--t-card); padding: 12px 14px; margin-bottom: 14px;
-  display: flex; flex-direction: column; gap: 10px;
-}
-.flag-legend-head { display: flex; align-items: center; gap: 6px; }
+/* Flag annunciator (Rooms tab): a collapsible, grouped LIST styled like the
+   Tuning tab — one flag per row, dimmed until a room raises it. */
+details.flag-legend { margin-bottom: 14px; }
+details.flag-legend > summary { padding: 4px 2px; font-size: 13px; }
+details.flag-legend[open] > summary { margin-bottom: 12px; }
+.flag-legend-head { min-width: 0; }
 .flag-legend-title { font-size: 13px; font-weight: 700; }
 .flag-legend-summary {
   margin-left: auto; font-size: 12px; font-weight: 600; color: var(--t-muted);
@@ -6628,38 +6651,54 @@ button { font-family: inherit; cursor: pointer; }
 .flag-legend-summary.sev-warn { color: var(--t-warn); background: color-mix(in srgb, var(--t-warn) 16%, transparent); }
 .flag-legend-summary.sev-problem { color: var(--t-error); background: color-mix(in srgb, var(--t-error) 16%, transparent); }
 .flag-legend-summary.sev-alarm { color: var(--t-error); background: color-mix(in srgb, var(--t-error) 26%, transparent); }
-.flag-legend-groups { display: flex; flex-direction: column; gap: 10px; }
-.flag-grp { display: flex; flex-direction: column; gap: 6px; }
-.flag-grp-title { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--t-muted); }
-.flag-tiles { display: flex; flex-wrap: wrap; gap: 8px; }
-.flag-tile {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 4px 8px 4px 6px; border-radius: 8px;
-  border: 1px solid var(--t-line); background: var(--t-bg);
-  font-size: 12px; line-height: 1.2;
+.flag-legend-groups { display: flex; flex-direction: column; gap: 14px; max-width: 860px; }
+/* Group card + header mirror the Tuning tab's .tune-group / .tune-group-cap. */
+.flag-grp {
+  border: 1px solid var(--t-line); border-radius: var(--t-radius);
+  background: var(--t-card); overflow: hidden;
+}
+.flag-grp-title {
+  padding: 10px 14px; font-size: 13px; font-weight: 700;
+  border-bottom: 1px solid var(--t-line);
+  background: color-mix(in srgb, var(--t-chip) 55%, transparent);
+}
+.flag-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 14px; border-bottom: 1px solid var(--t-line);
+  border-left: 3px solid transparent;
   transition: opacity .15s ease, border-color .15s ease, background .15s ease;
 }
-.flag-tile.is-off { opacity: .45; }
-.flag-tile-label { color: var(--t-fg); }
+.flag-row:last-child { border-bottom: 0; }
+.flag-row.is-off { opacity: .5; }
+.flag-row-head { flex: 1 1 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.flag-row-label { font-size: 13px; font-weight: 600; color: var(--t-fg); }
+.flag-row .info-btn { margin-left: 0; }
 .flag-sx {
   font-size: 10px; font-weight: 700; letter-spacing: .02em;
-  padding: 1px 5px; border-radius: 5px; background: var(--t-chip); color: var(--t-muted);
+  padding: 1px 6px; border-radius: 5px; background: var(--t-chip); color: var(--t-muted);
 }
-.flag-count { font-size: 11px; font-weight: 700; color: inherit; }
-.flag-tile .info-btn { margin-left: 0; }
-.flag-tile.is-on { opacity: 1; }
-.flag-tile.is-on.sev-ok { border-color: var(--t-ok); background: color-mix(in srgb, var(--t-ok) 12%, transparent); }
-.flag-tile.is-on.sev-ok .flag-sx { background: var(--t-ok); color: var(--t-on-primary); }
-.flag-tile.is-on.sev-ok .flag-tile-label, .flag-tile.is-on.sev-ok .flag-count { color: var(--t-ok); }
-.flag-tile.is-on.sev-warn { border-color: var(--t-warn); background: color-mix(in srgb, var(--t-warn) 14%, transparent); }
-.flag-tile.is-on.sev-warn .flag-sx { background: var(--t-warn); color: var(--t-on-primary); }
-.flag-tile.is-on.sev-warn .flag-tile-label, .flag-tile.is-on.sev-warn .flag-count { color: var(--t-warn); }
-.flag-tile.is-on.sev-problem { border-color: var(--t-error); background: color-mix(in srgb, var(--t-error) 14%, transparent); }
-.flag-tile.is-on.sev-problem .flag-sx { background: var(--t-error); color: var(--t-on-primary); }
-.flag-tile.is-on.sev-problem .flag-tile-label, .flag-tile.is-on.sev-problem .flag-count { color: var(--t-error); }
-.flag-tile.is-on.sev-alarm { border-color: var(--t-error); background: color-mix(in srgb, var(--t-error) 22%, transparent); box-shadow: 0 0 0 1px var(--t-error); }
-.flag-tile.is-on.sev-alarm .flag-sx { background: var(--t-error); color: var(--t-on-primary); }
-.flag-tile.is-on.sev-alarm .flag-tile-label, .flag-tile.is-on.sev-alarm .flag-count { color: var(--t-error); font-weight: 700; }
+.flag-row-status {
+  margin-left: auto; font-size: 12px; font-weight: 600; color: var(--t-muted);
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 6px;
+}
+.flag-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--t-muted); flex: none; }
+/* Lit rows: a left severity stripe, tinted ground, coloured SX badge + status. */
+.flag-row.is-on.sev-ok { border-left-color: var(--t-ok); background: color-mix(in srgb, var(--t-ok) 8%, transparent); }
+.flag-row.is-on.sev-ok .flag-sx { background: var(--t-ok); color: var(--t-on-primary); }
+.flag-row.is-on.sev-ok .flag-row-status { color: var(--t-ok); }
+.flag-row.is-on.sev-ok .flag-dot { background: var(--t-ok); }
+.flag-row.is-on.sev-warn { border-left-color: var(--t-warn); background: color-mix(in srgb, var(--t-warn) 9%, transparent); }
+.flag-row.is-on.sev-warn .flag-sx { background: var(--t-warn); color: var(--t-on-primary); }
+.flag-row.is-on.sev-warn .flag-row-status { color: var(--t-warn); }
+.flag-row.is-on.sev-warn .flag-dot { background: var(--t-warn); }
+.flag-row.is-on.sev-problem { border-left-color: var(--t-error); background: color-mix(in srgb, var(--t-error) 9%, transparent); }
+.flag-row.is-on.sev-problem .flag-sx { background: var(--t-error); color: var(--t-on-primary); }
+.flag-row.is-on.sev-problem .flag-row-status { color: var(--t-error); }
+.flag-row.is-on.sev-problem .flag-dot { background: var(--t-error); }
+.flag-row.is-on.sev-alarm { border-left-color: var(--t-error); background: color-mix(in srgb, var(--t-error) 15%, transparent); }
+.flag-row.is-on.sev-alarm .flag-sx { background: var(--t-error); color: var(--t-on-primary); }
+.flag-row.is-on.sev-alarm .flag-row-status { color: var(--t-error); font-weight: 700; }
+.flag-row.is-on.sev-alarm .flag-dot { background: var(--t-error); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t-error) 28%, transparent); }
 
 /* Valves + Assist tables (share the room-table look) */
 .valves-table, .assist-table { width: 100%; border-collapse: collapse; font-size: 13px; }
