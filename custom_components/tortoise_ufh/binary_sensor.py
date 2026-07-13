@@ -9,9 +9,9 @@ coordinator's typed :class:`~.coordinator.CoordinatorData`:
 * ``s2_condensation_active`` (device class ``PROBLEM``) — the per-room S2
   dew-point protection fully throttled floor cooling to avoid condensation.
 * ``flow_fault`` (device class ``PROBLEM``) — the S6 hydraulic no-flow
-  watchdog latched ``loop_no_flow`` or ``loop_stuck_open`` on any of the
-  room's loops (2026-07-13, issue #4): the valve command and the loop's
-  physical water behaviour disagree.
+  watchdog latched ``loop_no_flow`` on any of the room's loops (2026-07-13,
+  issue #4): the valve was commanded open but the loop shows no hydraulic
+  response.
 
 The former ``live_control`` binary sensor was retired in v0.5.0 — it merely
 mirrored ``control_state == "live"`` and is fully covered by the per-room
@@ -59,10 +59,9 @@ _FLAG_S2_CONDENSATION = "s2_condensation"
 # 2026-07-12 (B7): the "condensation protection active" entity keeps firing
 # on EITHER layer, exactly like it did when both shared one flag string.
 _FLAG_S2_THROTTLE = "s2_throttle"
-# S6 hydraulic watchdog flags (2026-07-13, issue #4): the loop probes
-# contradict the valve command in either direction.
+# S6 hydraulic watchdog flag (2026-07-13, issue #4): the loop shows no
+# hydraulic response to an open valve command.
 _FLAG_LOOP_NO_FLOW = "loop_no_flow"
-_FLAG_LOOP_STUCK_OPEN = "loop_stuck_open"
 
 
 # ---------------------------------------------------------------------------
@@ -127,20 +126,17 @@ def _s2_condensation_active(runtime: RoomRuntime) -> bool:
 def _flow_fault(runtime: RoomRuntime) -> bool:
     """Return whether the S6 hydraulic watchdog latched a flow fault (S6).
 
-    Fires on EITHER detection (2026-07-13, issue #4): ``loop_no_flow`` (an
-    open command with no hydraulic response — the frozen-actuator incident)
-    or ``loop_stuck_open`` (a closed command with a persistent source-side
-    signature). Both mean the physical valve and the command disagree, so a
-    single PROBLEM entity per room is the automation hook for both.
+    Fires on ``loop_no_flow`` (2026-07-13, issue #4): the valve was commanded
+    open but the loop shows no hydraulic response — the frozen-actuator
+    incident. A single PROBLEM entity per room is the automation hook.
 
     Args:
         runtime: The room's runtime payload.
 
     Returns:
-        ``True`` when either S6 flag is present in the report flags.
+        ``True`` when the ``loop_no_flow`` flag is present in the report flags.
     """
-    flags = runtime.report.flags
-    return _FLAG_LOOP_NO_FLOW in flags or _FLAG_LOOP_STUCK_OPEN in flags
+    return _FLAG_LOOP_NO_FLOW in runtime.report.flags
 
 
 # Per-room binary-sensor descriptions.

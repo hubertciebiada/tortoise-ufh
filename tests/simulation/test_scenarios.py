@@ -165,7 +165,6 @@ valve, so the regression margin stays enormous.
 _S6_QUIET_FLAGS: frozenset[str] = frozenset(
     {
         "loop_no_flow",
-        "loop_stuck_open",
         "actuation_test_running",
         "actuation_test_failed",
     }
@@ -175,11 +174,11 @@ _S6_QUIET_FLAGS: frozenset[str] = frozenset(
 Acceptance criterion 4 of ``docs/NO_FLOW_WATCHDOG.md`` (2026-07-13): the
 hydraulic no-flow watchdog must be silent across every healthy library
 scenario. This is the permanent regression fence — before the twin's probes
-became actuation-aware, a loop commanded 0 for >= 45 min still "flowed" and
-raised false ``loop_stuck_open`` in night_setback / hot_july / solar runs.
+became actuation-aware, a loop commanded open with no hydraulic response
+banked false ``loop_no_flow`` windows in night_setback / hot_july / solar runs.
 """
 
-_S6_QUIET_LOOP_STATUSES: frozenset[str] = frozenset({"no_flow", "stuck_open"})
+_S6_QUIET_LOOP_STATUSES: frozenset[str] = frozenset({"no_flow"})
 """Per-loop ``loop_flow_status`` values that count as an S6 alarm."""
 
 

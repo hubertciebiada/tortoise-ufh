@@ -11,5 +11,5 @@
   "issue_tracker": "https://github.com/hubertciebiada/tortoise-ufh/issues",
   "loggers": ["tortoise_ufh"],
   "requirements": ["numpy>=1.26", "scipy>=1.12"],
-  "version": "0.10.3"
+  "version": "0.11.0"
 }

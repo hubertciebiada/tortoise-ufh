@@ -289,6 +289,15 @@ class RoomController:
         self._last_pid_setpoint_c: float | None = None
         self._last_valve_pct: float = config.valve_floor_pct
         self._seeded: bool = False
+        # Cooling boost-hold (2026-07-13): while the split is ENGAGED in
+        # cooling, the floor valve is held at ``_boost_hold_pct`` — the raw
+        # (pre-throttle, clamped) valve of the cycle the split engaged —
+        # instead of retreating to 0 as the split-cooled air drives the room
+        # error toward zero (anti measurement-path inversion; see
+        # :meth:`_active_result`). ``_last_raw_valve_pct`` carries the previous
+        # active cycle's raw clamped valve so the engage edge can snapshot it.
+        self._boost_hold_pct: float | None = None
+        self._last_raw_valve_pct: float = 0.0
         # Fast-source state machine (amendment 2026-07-09, C6): the DIRECTION
         # is part of the state — OFF / HEATING / COOLING, with the min ON/OFF
         # dwell clock and the S4 physical-feedback bookkeeping. Encapsulated in
@@ -495,12 +504,12 @@ class RoomController:
         feedback disagreed with the previous cycle's command, and records this
         cycle's commanded on-state for the next comparison.
 
-        S6 (2026-07-13): merges the ``loop_no_flow`` / ``loop_stuck_open`` /
-        ``actuation_test_*`` flags, stamps the per-loop flow statuses and the
-        self-test payload, advances a running self-test by ``dt_seconds``
-        (restarting the watchdog windows when the test just ended — the
-        excursion moved the loop temperatures), and records the FINAL emitted
-        valve position as the watchdog's next command reference.
+        S6 (2026-07-13): merges the ``loop_no_flow`` / ``actuation_test_*``
+        flags, stamps the per-loop flow statuses and the self-test payload,
+        advances a running self-test by ``dt_seconds`` (restarting the
+        watchdog windows when the test just ended — the excursion moved the
+        loop temperatures), and records the FINAL emitted valve position as
+        the watchdog's next command reference.
 
         Args:
             inputs: The room's raw inputs for this cycle (for the dew-reason
@@ -527,8 +536,6 @@ class RoomController:
         extra: list[str] = []
         if self._flow.no_flow_active:
             extra.append("loop_no_flow")
-        if self._flow.stuck_open_active:
-            extra.append("loop_stuck_open")
         if self._selftest.running:
             extra.append("actuation_test_running")
         if self._selftest.failed:
@@ -560,6 +567,8 @@ class RoomController:
         self._inactive_s = 0.0
         self._last_valve_pct = self._config.valve_floor_pct
         self._seeded = False
+        self._boost_hold_pct = None
+        self._last_raw_valve_pct = 0.0
         self._fast.reset()
         self._fast_entry_state = FastSourceMode.OFF
         self._safety.reset()
@@ -847,6 +856,11 @@ class RoomController:
         Args:
             dt_seconds: Elapsed time this cycle [s].
         """
+        # The cooling boost-hold snapshot is only meaningful while the PI
+        # cooling loop actively regulates an engaged-split room: any inactive
+        # cycle (OFF, TRANSITIONAL, cooling opt-out, sensor lost) voids it, so
+        # a return to cooling re-snapshots from a fresh engage edge.
+        self._boost_hold_pct = None
         self._inactive_s += dt_seconds
         if self._inactive_s >= _INTEGRATOR_DECAY_AFTER_S and (
             self._pid.integral != 0.0
@@ -1103,10 +1117,9 @@ class RoomController:
         if self._selftest.running and mode is Mode.COOLING and dew_factor < 1.0:
             self._abort_selftest()
         # S6 (2026-07-13): a latched no-flow alarm freezes the integrator —
-        # the incident's wind-up against a non-responding plant. stuck_open
-        # deliberately does NOT freeze (with a 0 command the integral
-        # discharges legitimately). A running self-test freezes too: the PI
-        # must not wind against the forced 100 % excursion for 25 min.
+        # the incident's wind-up against a non-responding plant. A running
+        # self-test freezes too: the PI must not wind against the forced
+        # 100 % excursion for 25 min.
         freeze = (
             inputs.hp_active_for_ufh is False
             or dew_factor < 1.0
@@ -1138,6 +1151,38 @@ class RoomController:
         if mode is Mode.HEATING and error_db > 0.0 and valve < cfg.valve_floor_pct:
             valve = cfg.valve_floor_pct
             valve_floor_applied = True
+
+        # -- Step 11b: cooling boost-hold floor (anti measurement-path ------
+        # inversion, 2026-07-13). While the split is ENGAGED in cooling the
+        # floor valve is never pulled BELOW the position it held the cycle the
+        # split engaged. The split cooling the air drives the room error (and
+        # the filtered trend) toward zero, which would otherwise retreat the
+        # floor to 0 — but the floor is the base source and, since the split
+        # only engaged because the floor alone could not cope, the floor must
+        # keep discharging the high-mass slab. ``max`` lets the PI push the
+        # valve HIGHER, never lower. The engagement witness is
+        # ``_fast_entry_state`` (the direction the unit was ALREADY running in
+        # at step entry): a one-cycle-delayed signal the slab's thermal mass
+        # absorbs, so the very first boost cycle runs unheld. The snapshot is
+        # the PREVIOUS active cycle's raw pre-throttle clamped valve, so the S2
+        # dew throttle below still scales the held value (a dew factor of 0
+        # still closes the valve) instead of being baked into the hold. Only
+        # a genuine cooling split can leave the machine in the COOLING state
+        # (NONE is forced OFF, a HEATER can never cool), so no explicit
+        # fast-source-kind guard is needed here.
+        boost_cooling_active = (
+            mode is Mode.COOLING and self._fast_entry_state is FastSourceMode.COOLING
+        )
+        if boost_cooling_active:
+            if self._boost_hold_pct is None:
+                self._boost_hold_pct = self._last_raw_valve_pct
+            valve = max(valve, self._boost_hold_pct)
+        else:
+            self._boost_hold_pct = None
+        # Persist THIS cycle's raw pre-throttle clamped valve for the next
+        # engage-edge snapshot (recorded BEFORE the S2 throttle so the dew
+        # factor is never folded into a future hold).
+        self._last_raw_valve_pct = max(0.0, min(100.0, raw_valve))
 
         # -- Step 12: cooling local dew-point throttle (S2) -----------------
         # Unconditional for any COOLING room whose valve can open (the factor
@@ -1559,12 +1604,7 @@ class BuildingController:
         gate is computed from the RAW inputs (see
         :meth:`_circulation_evident`) and injected into every room's inputs
         via ``dataclasses.replace`` — the ``step(inputs, *, dt_seconds)``
-        room contract stays verbatim. After the room steps, a COOLING room
-        whose report carries ``loop_stuck_open`` while it is excluded as
-        ``cooling_disabled`` is force-included into the global dew maximum
-        (its physically flowing cold floor is real; the pump's water floor
-        is the only defence an actuator that ignores commands cannot
-        bypass), and its ``dew_excluded_reason`` is re-stamped to ``None``.
+        room contract stays verbatim.
 
         Args:
             inputs: Per-room :class:`~tortoise_ufh.models.RoomInputs` keyed by
@@ -1606,14 +1646,6 @@ class BuildingController:
             dew = self._eligible_dew_point(room_inputs)
             if dew is not None:
                 dew_points.append(dew)
-            else:
-                stuck_dew = self._stuck_open_dew_point(room_inputs, rooms[name])
-                if stuck_dew is not None:
-                    dew_points.append(stuck_dew)
-                    rooms[name] = replace(
-                        rooms[name],
-                        report=replace(rooms[name].report, dew_excluded_reason=None),
-                    )
 
         # K4 (2026-07-12): one direction per shared outdoor unit — arbitrate
         # conflicting fast-source commands within each multisplit group.
@@ -1759,45 +1791,6 @@ class BuildingController:
                 ):
                     return True
         return False if judged else None
-
-    @staticmethod
-    def _stuck_open_dew_point(
-        room_inputs: RoomInputs, outputs: RoomOutputs
-    ) -> float | None:
-        """Dew point of a stuck-open COOLING room excluded as cooling_disabled.
-
-        S6 (2026-07-13): a room whose valve physically passes chilled water
-        DESPITE a 0 command (``loop_stuck_open``) has an actively cold floor
-        — but a ``cooling_disabled`` room is excluded from the global safe
-        dew point, so the heat pump's water floor (the ONLY protection an
-        actuator that ignores commands cannot bypass; the local S2 modulates
-        a command nobody executes) would ignore exactly the room that needs
-        it. Force its dew point (with the K7 staleness pad) into the global
-        maximum.
-
-        Args:
-            room_inputs: The room's raw inputs this cycle.
-            outputs: The room's finalised outputs this cycle.
-
-        Returns:
-            The padded dew point [degC], or ``None`` when the room does not
-            qualify (no stuck-open flag, not COOLING/cooling_disabled, or
-            unusable temperature/humidity).
-        """
-        if "loop_stuck_open" not in outputs.report.flags:
-            return None
-        if room_inputs.mode is not Mode.COOLING:
-            return None
-        if classify_dew_eligibility(room_inputs) != "cooling_disabled":
-            return None
-        t_room = room_inputs.room_temperature_c
-        rh = room_inputs.humidity_pct
-        if t_room is None or rh is None or rh <= 0.0:
-            return None
-        dew = dew_point(t_room, rh)
-        if room_inputs.humidity_stale_frac > 0.0:
-            dew += _STALE_RH_DEW_PAD_K * room_inputs.humidity_stale_frac
-        return dew
 
     def _arbitrate_fast_groups(
         self,

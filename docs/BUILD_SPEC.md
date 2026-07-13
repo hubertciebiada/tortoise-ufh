@@ -233,8 +233,9 @@ class RoomInputs:
     humidity_stale_frac: float = 0.0         # K7 2026-07-12 (linearised D5, R3): RH staleness 0..1 (age 60->120 min) -> frac * 1 K dew pad
     fast_source_allowed: bool = True         # ADDITIVE (2026-07-12, B1 quiet hours): adapter's per-room allowed-window verdict (crosses midnight); False = fast source may not engage
     # LoopInput additionally carries the S6 hydraulic no-flow watchdog probe reads
-    # (2026-07-13): supply/return already present; the watchdog reads them as an
+    # (2026-07-13): supply/return already present; loop_no_flow reads them as an
     # INDEPENDENT witness and never trusts valve_position_pct feedback (it can echo).
+    # (The stuck-open reverse detection was removed 2026-07-13 — see docs/DECISIONS.md §17.)
 
 @dataclass(frozen=True)
 class FastSourceCommand:
@@ -262,11 +263,11 @@ class RoomReport:
     room_temperature_c: float | None = None  # ADDITIVE: echoed measured room temp, None if sensor lost
     dew_excluded_reason: str | None = None   # ADDITIVE: None if eligible, else not_cooling_mode|cooling_disabled|no_temperature|no_humidity
     fast_dwell_remaining_s: float | None = None  # ADDITIVE: min ON/OFF dwell lock remaining [s], None if unlocked / no fast source
-    loop_flow_status: tuple[str, ...] = ()   # ADDITIVE (2026-07-13, S6): per-loop watchdog status "ok"|"no_flow"|"stuck_open"|"inactive"
+    loop_flow_status: tuple[str, ...] = ()   # ADDITIVE (2026-07-13, S6): per-loop watchdog status "ok"|"no_flow"|"inactive"
     actuation_test_status: str | None = None # ADDITIVE (2026-07-13, S6): self-test "running"|"passed"|"failed"|"aborted", None when idle/untested
     actuation_test_remaining_min: float | None = None  # ADDITIVE (2026-07-13): minutes left of a running self-test
     actuation_test_loops: tuple[str, ...] = ()  # ADDITIVE (2026-07-13): per-loop verdicts of the last completed self-test
-    # New flags: "loop_no_flow","loop_stuck_open","actuation_test_running","actuation_test_failed".
+    # New flags: "loop_no_flow","actuation_test_running","actuation_test_failed".
     # BuildingController.step gained an optional kw-only `global_supply_temperature_c: float | None = None`
     # (the manifold-bar probe feeding the S6 circulation gate); default None keeps old callers unchanged.
 

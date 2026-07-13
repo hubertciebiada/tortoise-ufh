@@ -874,10 +874,12 @@ physical witness of actuation; the watchdog **never trusts the `valve` entity fe
   integrator (stops the wind-up seen in the incident). Window starts on the second
   cycle (the first only establishes the reference), so the flag lands within one
   `response_window` + one cycle.
-- **`loop_stuck_open`:** valve commanded 0 for ≥ the window but the loop keeps a
-  persistent source-side signature — raises the flag and, in cooling, feeds the global
-  safe-dew logic (treated as "cold floor active" so the pump floor cannot drop under a
-  loop that is really flowing cold).
+- **`loop_stuck_open`:** valve commanded 0 for ≥ the window but the loop keeps passing
+  water — raises the flag and, in cooling, feeds the global safe-dew logic (treated as
+  "cold floor active" so the pump floor cannot drop under a loop that is really flowing
+  cold). **The witness for this flag was replaced 2026-07-13 (§16, issue #6):** it no
+  longer reads the loop water probes at all — see below. **SUPERSEDED by §17
+  (2026-07-13): `loop_stuck_open` was removed entirely — see §17.**
 - **False-positive gating (circulation evidence).** A loop is only judged when
   circulation is plausible: at least one OTHER loop in the system shows a healthy ΔT,
   or the optional `entity_global_supply` manifold probe reads source-side. Otherwise
@@ -925,3 +927,160 @@ gate scenarios (hot_july, night_setback, cold_snap, solar_overshoot).
 **New tuning knobs** (all in the "Flow watchdog (S6)" tuning group): `flow_epsilon_k`
 (0.3 K default), `flow_open_threshold_pct` (15 %), `flow_response_window_min` (45 min,
 UI floor 30, 1440 disables).
+
+## 16. Revision — `loop_stuck_open` becomes a room-air consequence, COOLING-only (2026-07-13, issue #6)
+
+> **SUPERSEDED by §17 (2026-07-13):** `loop_stuck_open` was removed entirely. The room-air
+> witness described below could not hard-verify actuation, so it produced only false
+> alarms. The content is retained as the decision record that led to the removal.
+
+> **Status: EXTENDS the frozen contract additively — no signature or output change.**
+> Only the INTERNAL witness of the `loop_stuck_open` flag is replaced; the flag name,
+> the per-loop `"stuck_open"` status, the panel chip and the stuck-open → global-dew feed
+> are all unchanged. `flow_epsilon_k`, `flow_open_threshold_pct` and
+> `flow_response_window_min` are untouched (the first two now serve `loop_no_flow` only).
+> Motivated by GitHub issue #6 ("S6 loop_stuck_open false positives") — the owner's
+> comment plus a later clarification are the binding ruling.
+
+**The problem.** The §15 `loop_stuck_open` witness read the loop supply/return water
+probes: a clear ΔT ≥ `flow_epsilon_k` refined by the return probe sitting on the source
+side of the room. In production this false-alarms: **there are two probes, on supply and
+return, and when the valve is closed the manifold bar still cools them by conduction.** A
+sub-Kelvin ΔT across a manifold-bar pair is below the noise floor, and a whole manifold of
+closed loops sitting uniformly cold raised spurious stuck-open flags for any
+`flow_epsilon_k`.
+
+**The ruling (owner comment + clarification).** Drop **all** water-probe temperature tests
+from `loop_stuck_open`. The manifold probes are considered unreliable for this decision,
+full stop — no hydraulic corroborator, no return-vs-room test, no supply/return ΔT. The
+ONLY witness is the **thermal consequence in the room**: a leaking closed valve keeps the
+room on the wrong side of setpoint. `loop_no_flow` keeps its small-ΔT / displacement test
+exactly as before; `flow_epsilon_k` remains the through-flow floor for `loop_no_flow` only.
+
+**What we implemented (`core/flow_watchdog.py::LoopFlowMonitor._update_stuck`).**
+- Reads **no water probes at all**. New per-monitor state `_ref_room_c` (the room temp
+  captured when the stuck window opened). Two fixed module constants (NOT knobs):
+  `_STUCK_ROOM_SETPOINT_MARGIN_K = 0.5` (how far below setpoint the room must sit — above
+  the 0.3 K deadband and the split's 0.5 K quanta) and `_STUCK_ROOM_RELAX_TOL_K = 0.2`
+  (tolerance for "not relaxing back up toward setpoint" vs `_ref_room_c`). The old
+  probe-based stuck-open test (a supply/return signature refined by a return-probe check
+  against the room) and its dedicated margin constant are **deleted**.
+- Fires only when a CLOSED-COMMANDED **cooling** room sits ≥ 0.5 K below setpoint and is
+  not relaxing back, AND no actively-cooling split (`fast_direction`, the direction the
+  split was actually running in at step entry) explains the cold room. The window still
+  requires `flow_response_window_min` of continuous signature; it is NOT gated by the
+  circulation evidence (the room-air consequence is its own proof).
+- **COOLING-only.** Heating is out of scope. The room-air witness cannot separate a
+  stuck-open **heating** valve from a room warmed by solar gain or held above a lowered
+  night-setback setpoint — both leave a healthy closed-valve room persistently ABOVE
+  setpoint for hours behind the high-mass slab. Empirically the heating mirror re-raised
+  false `loop_stuck_open` across `solar_overshoot` (rooms ~2.8 K over setpoint, valves
+  correctly closed, for thousands of cycles) and `night_setback` (a room held ~1.3 K over
+  the lowered setpoint, cooling at ~0.04 K/h) — the very false positives this issue exists
+  to remove, and both are named criterion-4 gate scenarios that must stay silent. A
+  stuck-open heating valve is a comfort issue, never the condensation safety concern that
+  motivates the flag, and the one safety consumer (the global safe dew-point floor) is
+  cooling-only anyway. **Trade-off:** a genuinely stuck-open heating valve is no longer
+  flagged by S6 (still surfaced indirectly by the room overheating).
+
+**Decoupling.** `flow_epsilon_k` and the loop water probes no longer influence
+`loop_stuck_open` at all; `_flow_evidence` and the `ActuationSelfTest` are untouched
+(still probe-based, for `loop_no_flow` and the manual self-test). The stuck-open →
+global-dew feed and the `_update_no_flow` path keep their §15 behaviour verbatim.
+
+## 17. `loop_stuck_open` detection removed (2026-07-13)
+
+> **Status: SUPERSEDES the stuck-open parts of §15 and §16.** Removes the `loop_stuck_open`
+> flag, its per-loop `"stuck_open"` status, the stuck-open → global-dew feed and the panel
+> chip. **`loop_no_flow`, the `ActuationSelfTest`, the `flow_response_window_min` /
+> `flow_epsilon_k` / `flow_open_threshold_pct` knobs and the `flow_fault` entity are
+> UNCHANGED** — this decision touches only the stuck-open reverse detection.
+
+**Why.** After §16 reduced the stuck-open witness to the ROOM-air consequence (a closed
+COOLING valve suspected of leaking because the room sits below setpoint and will not relax
+back), that witness proved to be the *wrong kind of evidence*: room air temperature versus
+setpoint cannot hard-verify whether the actuator physically passes water. Many benign states
+reproduce the same air signature — a cold room after a setpoint raise, a neighbouring cold
+mass, a slow-draining slab, sensor offsets — so the flag delivered false alarms without ever
+proving actuation. Unlike `loop_no_flow`, whose witness is the loop supply/return water
+probes (a direct hydraulic measurement), stuck-open had no independent physical corroborator
+once the manifold-conducted probes were (correctly, §16) declared unreliable for a closed
+loop. A detection that cannot distinguish its fault from ordinary operation is net-negative.
+
+**What replaces it.** Nothing, for now. Hard verification that a *closed-commanded* valve
+truly stops flow is a real need, but it requires a deliberate, actuation-level mechanism
+(e.g. a scheduled or on-demand close-and-measure probe test), NOT a passive room-temperature
+heuristic. That is deferred to a future, dedicated feature. In the meantime a genuinely
+leaking closed cooling valve surfaces indirectly (the room over-cools) and the global safe
+dew-point floor still protects every room that is *actually* cooling.
+
+**What was removed (`core/flow_watchdog.py`, `core/controller.py`).** The
+`LoopFlowMonitor` stuck-open window (state `_stuck_elapsed_s` / `_ref_room_c` /
+`_stuck_active`, the `stuck_open_active` property, `_reset_stuck` / `_update_stuck`), the
+module constants `_FLOW_CLOSED_CMD_PCT` / `_STUCK_ROOM_SETPOINT_MARGIN_K` /
+`_STUCK_ROOM_RELAX_TOL_K`, the `"stuck_open"` entry in `_LOOP_STATUSES` and
+`RoomReport._LOOP_FLOW_STATUSES`, `FlowWatchdog.stuck_open_active`, the
+`room_temperature_c` / `setpoint_c` / `fast_direction` parameters threaded into the
+watchdog `update`, `BuildingController._stuck_open_dew_point` and the `else` branch that
+re-included a stuck-open room in the global dew maximum, the `loop_stuck_open` flag merge in
+`_finalize`, and the `flow_fault` binary sensor's second trigger. A command below the open
+threshold now simply resets the no-flow window and reports `"ok"`. `_fast_entry_state`
+STAYS (it still feeds `fast_source_locked_on`); only its hand-off to the watchdog is gone.
+
+## 18. Cooling boost-hold — the split must not starve the floor on the measurement path (2026-07-13, P2)
+
+> **Status: additive.** New behaviour in `RoomController._active_result` (COOLING only). **No new
+> tuning knob, no new `RoomReport` field, no change to the frozen I/O contract, HEATING untouched.**
+
+**The failure loop.** The frozen anti priority-inversion invariant (ALGORITHM_SPEC §8.3) guarantees
+the split's *command* never lowers the floor valve, because the valve is computed independently of,
+and before, the fast-source decision. But the owner (11 cooling rooms LIVE) reported the floor valve
+collapsing to 0 during a split boost anyway. The leak is on the **measurement path**: in COOLING the
+engaged split cools the *air*, so the room error `t_room − setpoint` and the filtered trend fall
+toward zero → the cooling PI and the trend damper both retreat → the floor valve drops to 0. The
+split thus *indirectly* strangles the base floor source at the exact moment the high-mass slab most
+needs discharging. Two consequences: (a) the slab never discharges through the floor during the
+boost (wasted capacity), and (b) when the split releases, the air rebounds off the still-warm slab
+and re-engages the split — short-cycling the compressor.
+
+**Chosen fix (variant: "hold-not-close", #1 only).** While a room is in `Mode.COOLING` and its split
+was ENGAGED at step entry (`_fast_entry_state is FastSourceMode.COOLING`), hold the floor at a `max`
+floor of the raw (pre-throttle, clamped) valve it held the cycle the split engaged:
+`if boost: valve = max(valve, _boost_hold_pct)`. The guiding principle: *since the boost only
+engaged because the floor alone could not cope, the split cannot be the reason the floor retreats.*
+This is the §8.3 invariant extended from the command path to the measurement path. Ordering is
+load-bearing: hold (step 11b) → S2 dew throttle (step 12, still scales the held value; `dew_factor =
+0` still closes) → hard-safety override (sensor-loss still parks at 0). The **global safe dew point
+(§7.1) is never weakened** — the hold only ever raises *flow* at an already-safe supply, so it is
+condensation-neutral. The snapshot is per-engagement (cleared on release, mode change, and every
+inactive cycle via `_note_inactive`), one-cycle-delayed (the slab's mass absorbs the lag), and not
+persisted across a restart (a lost snapshot merely reverts one engagement to the old behaviour).
+
+**What was deliberately dropped as unnecessary.** The plan proposed three elements; only #1 shipped.
+#3 (zero the trend damper during boost) is redundant: `max(valve, hold)` already dominates the trend
+term regardless of its value, so suppressing it changes nothing on the emitted valve. #2 (freeze the
+integrator during boost) was evaluated on the digital twin and dropped: the concern was that
+split-cooled air (negative cooling error) would discharge the integrator and lag the floor after
+release, but the twin showed the integrator does **not** collapse (post-release `i_term` ≈ 23 %*h
+with or without the hold, post-release valve ≈ 2.5 % — correctly low, because the room is inside the
+band after a release) — so #2 addresses a problem that does not occur. Keeping the mechanism to its
+minimal `max()` floor honours the project's simplification mandate.
+
+**Rejected alternatives (from the plan).** A separate "slab-mass" control lane (needs a floor sensor
+/ mass estimator and touches the frozen I/O contract — too large a conceptual jump) and dwell/
+hysteresis alone (treats the symptom — cycling — not the cause — the un-discharged slab; the dwell
+machine already exists and stays as the second line of defence).
+
+**Evidence.** Digital-twin reproduction (`tests/simulation/test_boost_hold.py`, heavy-slab
+well-insulated room, hot day, 24 h, deterministic): pre-fix baseline collapsed the engaged-cycle
+valve to a **0.0 %** mean and cycled the split **24×**; with the hold the engaged valve mean is
+**35.9 %** (min 20.7 %) and the split cycles **22×**, the hot slab discharging 27 → 24.1 degC. Under
+78 % humidity the worst slab-vs-dew margin is identical with and without the hold (condensation-
+neutral). Unit coverage in `tests/unit/test_controller_boost_hold.py` (hold ≥ snapshot despite
+negative error; hold × throttle ordering; sensor-loss safety wins; HEATING byte-identical; snapshot
+lifecycle).
+
+**Open items for the owner (assumptions, non-blocking).** No diagnostic `"boost_hold"` flag in the
+report/panel (would be new i18n strings — a separate small PR if wanted). No on/off knob for the
+mechanism (it is always active in cooling); a `boost_hold_enabled` knob can be added later if the
+owner wants a switch.

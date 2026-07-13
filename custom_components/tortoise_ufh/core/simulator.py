@@ -126,11 +126,10 @@ _PROBE_STAGNATION_MAX_VALVE_PCT: float = 5.0
 A thermal/gear actuator has dead travel near fully-closed, so the sub-5 %
 closing tails the PI emits while parking a room do not establish a
 measurable through-flow — the probes must decay toward the slab exactly as
-they do at a hard 0 %. Numerically equal to the S6 watchdog's
-"commanded closed" bound (``flow_watchdog._FLOW_CLOSED_CMD_PCT``): a loop
-the watchdog treats as closed must not keep a synthetic source signature in
-the twin, or every healthy closing tail would fake a stuck-open valve
-(acceptance criterion 4)."""
+they do at a hard 0 %. Matches the actuator write threshold, so a loop
+commanded closed never keeps a synthetic source signature in the twin, and a
+healthy closing tail cannot fake a hydraulic response (acceptance
+criterion 4)."""
 
 # Mapping from the twin's heat-pump mode to the controller's room mode.  The
 # twin has no TRANSITIONAL state (that is a controller-only concept), so only

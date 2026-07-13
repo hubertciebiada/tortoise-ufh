@@ -399,7 +399,10 @@ code exactly):
 9. **Trend damping** (§5.6).
 10. **Optional feedforward** (§5.7).
 11. **Valve floor**, heating only (§5.8).
-12. **Cooling local dew throttle (S2)** (§7.2) — applies the factor computed in step 7.
+11b. **Cooling boost-hold** (§8.5) — while the split is ENGAGED in cooling, `valve = max(valve,
+    _boost_hold_pct)` (a floor, never a clamp); HEATING is untouched.
+12. **Cooling local dew throttle (S2)** (§7.2) — applies the factor computed in step 7 to the
+    (possibly held) valve.
 13. **Clamp + saturation** (§5.9). A zero produced solely by the S2 throttle does NOT set
     `saturated` (control-F8, 2026-07-09): `saturated` means "the PI hit a 0/100 bound";
     `dew_throttle_factor` carries the condensation story.
@@ -600,6 +603,44 @@ timers) still exists — the emptied group keeps it from voting in or dwell-pinn
 arbitration (belt and braces). Historically K1 guarded the since-removed `shadow` state,
 whose uncontrolled error used to strangle the LIVE rooms' split.
 
+### 8.5 Cooling boost-hold — anti priority-inversion on the MEASUREMENT path (P2, 2026-07-13)
+
+§8.3 guarantees the split's *command* never lowers the floor. But there is a subtler leak on the
+*measurement* path in COOLING: once the split engages it cools the air, so the room error (and the
+filtered trend) fall toward zero, the cooling PI + trend damper retreat, and the floor valve
+collapses to 0 — the split has *indirectly* strangled the base floor source, exactly when the
+slab most needs discharging. The consequences are wasted slab-discharge capacity during the boost
+and, when the split releases, an air that rebounds off the still-warm mass and short-cycles the
+compressor.
+
+The fix (step 11b) closes that leak with a **hold-not-close floor**: while a room is in
+`Mode.COOLING` **and its split was ENGAGED at step entry** (`_fast_entry_state is
+FastSourceMode.COOLING` — a one-cycle-delayed witness the slab's thermal mass absorbs), the floor
+valve is pinned at a snapshot of the raw (pre-throttle, clamped) valve it held the cycle the split
+engaged:
+
+```
+boost = (mode is COOLING) and (fast_entry_state is COOLING)
+if boost:
+    if _boost_hold_pct is None: _boost_hold_pct = _last_raw_valve_pct   # snapshot on the edge
+    valve = max(valve, _boost_hold_pct)                                 # a FLOOR, not a clamp
+```
+
+Rationale: *since the boost only engaged because the floor alone could not cope, the split cannot
+be the reason the floor retreats.* Ordering is load-bearing — the hold is applied **before** the S2
+dew throttle (step 12) and **below** the hard-safety layer (post step 15): the throttle still scales
+the held value (`dew_factor = 0` still closes the valve), sensor-loss still parks it at 0, and the
+**global safe dew point (§7.1) is never touched** — the hold only ever raises *flow* at an
+already-safe supply temperature, so it is condensation-neutral (verified on the twin: the worst
+slab-vs-dew margin is identical with and without the hold). `max()` lets the PI push HIGHER, never
+lower. The snapshot is per-engagement (`_boost_hold_pct` cleared on release, mode change and every
+inactive cycle) and not persisted across a restart — a lost snapshot merely reverts one engagement
+to the old behaviour until the next engage edge. No new tuning knob, no new report field, no change
+to HEATING (the `Mode.COOLING` guard is explicit). Deliberately minimal: freezing the integrator
+and suppressing the trend damper during boost were evaluated and dropped as redundant — the `max()`
+floor already dominates the PI/trend and the twin showed no post-release integrator collapse (see
+docs/DECISIONS.md §18).
+
 ---
 
 ## 9. Safe degradation
@@ -618,7 +659,6 @@ whose uncontrolled error used to strangle the LIVE rooms' split.
 | Room controller raised | HEATING: hold last valve; COOLING/TRANSITIONAL/OFF: valve 0 (K5, 2026-07-12 — a crashed controller computes neither condensation defence); split OFF | `controller_error` |
 | Per-room data age > 15 min (S5, 2026-07-09) | **neutral position**: `valve_floor_pct` in heating / 0 in cooling (defer to the HP curve), split OFF; clears below 5 min | `s5_watchdog` |
 | Loop commanded open but no hydraulic response (S6, 2026-07-13) | integrator **frozen**; `binary_sensor.flow_fault` on; no valve action | `loop_no_flow` |
-| Loop commanded closed but persistent source-side flow (S6, 2026-07-13) | flag + (cooling) treated as cold-floor-active for the global safe dew point | `loop_stuck_open` |
 
 ### 9.1 Hydraulic no-flow watchdog (S6, 2026-07-13)
 
@@ -636,8 +676,11 @@ circulation_evident = any OTHER loop shows a healthy ΔT
                       OR entity_global_supply reads source-side          # else HOLD (no accrual)
 loop_no_flow    : cmd ≥ flow_open_threshold_pct for ≥ flow_response_window_min,
                   circulation_evident, and NOT flow_signature            → freeze integrator
-loop_stuck_open : cmd == 0 for ≥ window with a persistent source-side signature
 ```
+
+(The former stuck-open reverse detection — a closed COOLING valve suspected of
+leaking because the room stayed below setpoint — was removed 2026-07-13; its room-air witness
+could not hard-verify actuation. See docs/DECISIONS.md §17.)
 
 The window starts on the SECOND cycle (the first sets the reference), so the flag lands
 within one window + one cycle. The RETURN probe is weighted over supply (supply may sit on
@@ -750,4 +793,6 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 | 2026-07-12 | Round-3 hardening (DECISIONS §12, v0.6.1): group arbiter grew the incumbent hysteresis (§8.4 — challenger wins only beyond +0.5 K over the incumbent; largest-excess tie-break documented) and the adapter stopped SHADOW rooms from voting (`fast_source_group` emptied for non-LIVE rooms); PID `shift_integral` banks the clamp-cut as a signed residual netted against opposite shifts, and the back-calculation is suppressed while an opposite-sign residual is outstanding — a setpoint wiggle at a small integral is idempotent (was: pumped to ~2·kp·ΔK); the RH staleness pad is linear (`humidity_stale_frac` 0 → 1 over 60-120 min, `frac * 1 K`; the unavailable-entity cache branch reads as fully stale). Adapter lifecycle: coordinator shutdown + Store flush BEFORE the unload farewell, `_parked` write gate, LOADED-entry filter in WS/services, non-finite setpoint guard, hub device registered before platforms. |
 | 2026-07-12 | Shadow removal (DECISIONS §13, v0.7.0): the per-room control state is a two-state `off` / `live`; `off` is the default for new/unknown rooms; migration v2→v3 maps `shadow` (and garbage) to `off` (v1→v3 chain in one call). Core untouched (it never knew shadow — only `Mode` + the farewell hook); K1 reduces to "an OFF room does not vote" with the emptied `fast_source_group` kept as belt-and-braces. |
 | 2026-07-12 | Quiet hours + heat-pump link (DECISIONS §14, v0.8.0): per-room fast-source allowed-window (`RoomInputs.fast_source_allowed`, adapter computes the bool from the HA clock, pure `window_allows` in the core; crosses midnight; S3/S4 emergency overrides silence); opt-in heat-pump link (`core/hp_link.py`: direction sync always preserving `+DHW`, `max(cooling_supply_base_c, safe dew)` cooling water, optional heating curve). |
-| 2026-07-13 | Hydraulic no-flow watchdog S6 + write-path fixes (DECISIONS §15, v0.9.0): loop supply/return probes as an independent witness of actuation (never trusts valve feedback — it can echo); `loop_no_flow` (freeze integrator) / `loop_stuck_open` (feeds cooling dew logic); circulation-evidence gating (other-loop ΔT or `entity_global_supply`); manual `test_actuation` service; valve re-assert (~45 min + feedback-divergence) at parity with the splits; simulator fault injection for the echoing/frozen actuator. New knobs `flow_epsilon_k` / `flow_open_threshold_pct` / `flow_response_window_min`. |
+| 2026-07-13 | Hydraulic no-flow watchdog S6 + write-path fixes (DECISIONS §15, v0.9.0): loop supply/return probes as an independent witness of actuation (never trusts valve feedback — it can echo); `loop_no_flow` (freeze integrator); circulation-evidence gating (other-loop ΔT or `entity_global_supply`); manual `test_actuation` service; valve re-assert (~45 min + feedback-divergence) at parity with the splits; simulator fault injection for the echoing/frozen actuator. New flow-watchdog knobs (see DECISIONS §15 body). |
+| 2026-07-13 | Stuck-open reverse detection removed (DECISIONS §17, supersedes §16, v0.11.0): the closed-valve-leaking flag (proposed §15, reworked to a room-air witness §16) is withdrawn — room temperature versus setpoint cannot hard-verify actuation, so it produced only false alarms. `loop_no_flow`, the actuation self-test and the flow-watchdog knobs are unchanged; hard close-and-measure verification is deferred to a future mechanism. |
+| 2026-07-14 | Cooling floor-valve boost hold (DECISIONS §18, v0.11.0): when the split is engaged in COOLING the floor valve holds its pre-boost position (`valve = max(valve, snapshot)`, snapshot taken before the S2 dew throttle) instead of collapsing to 0 as the split cools the air out from under the air-error PI — so the slab keeps discharging. Only mechanism #1 shipped; the integrator freeze (#2) and trend-damper suppression (#3) from the design were evaluated on the twin and dropped as redundant (the `max()` already dominates, and the integrator does not discharge). No new knob, no contract change; safety still wins over the hold (sensor-lost parks at 0, the dew throttle scales the held value, `dew_factor=0` closes). |

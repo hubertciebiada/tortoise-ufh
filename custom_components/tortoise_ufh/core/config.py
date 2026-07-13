@@ -124,8 +124,7 @@ class ControllerConfig:
             for no-flow.
         flow_response_window_min: Minutes of continuous missing flow
             signature (with an open command and plausible circulation)
-            before ``loop_no_flow`` is raised; the same window guards a
-            valve that never closes (``loop_stuck_open``) [min] (> 0;
+            before ``loop_no_flow`` is raised [min] (> 0;
             2026-07-13, S6). The slab is slow — the UI enforces a 30-min
             minimum (the core accepts any positive value so simulation
             tests can use short windows); the 1440-min maximum effectively

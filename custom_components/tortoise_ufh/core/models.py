@@ -279,9 +279,9 @@ class RoomReport:
         loop_flow_status: Per-loop S6 hydraulic flow-watchdog status
             (additive field 2026-07-13, S6), aligned index-by-index with the
             room's ``inputs.loops``. Each entry is one of ``"ok"``,
-            ``"no_flow"``, ``"stuck_open"`` or ``"inactive"`` (``inactive``
-            = missing probes, inactive mode, or a paused/unknown circulation
-            gate). Empty (the default) for callers without the watchdog.
+            ``"no_flow"`` or ``"inactive"`` (``inactive`` = missing probes,
+            inactive mode, or a paused/unknown circulation gate). Empty (the
+            default) for callers without the watchdog.
         actuation_test_status: Status of the manual actuation self-test
             (additive field 2026-07-13, S6): ``"running"``, ``"passed"``,
             ``"failed"``, ``"aborted"``, or ``None`` when no test ran since
@@ -322,7 +322,7 @@ class RoomReport:
     actuation_test_remaining_min: float | None = None  # self-test countdown
     actuation_test_loops: tuple[str, ...] = ()  # per-loop test verdicts
 
-    _LOOP_FLOW_STATUSES = frozenset({"ok", "no_flow", "stuck_open", "inactive"})
+    _LOOP_FLOW_STATUSES = frozenset({"ok", "no_flow", "inactive"})
     _TEST_STATUSES = frozenset({"running", "passed", "failed", "aborted"})
     _TEST_LOOP_RESULTS = frozenset({"passed", "failed", "untested"})
 

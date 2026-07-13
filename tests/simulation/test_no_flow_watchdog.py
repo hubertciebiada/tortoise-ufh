@@ -7,16 +7,14 @@ its actuator-fault injection (:meth:`SimulatedRoom.set_actuator_fault`):
 * **Criterion 1** — echo feedback + a frozen actuator in LIVE cooling raises
   ``loop_no_flow`` within one ``response_window``, freezes the integrator,
   and never moves the valve; a healthy sibling room stays clean.
-* **Criterion 2** — a valve commanded 0 with a persistent source-side loop
-  signature raises ``loop_stuck_open`` and re-enters the global safe
-  dew-point maximum despite being ``cooling_disabled``.
 * The manual actuation self-test graded on the twin's hydraulic response —
-  pass on a healthy actuator, fail on a frozen one — plus the manifold-bar
-  supply-probe placement variant that must NOT false-alarm.
+  pass on a healthy actuator, fail on a frozen one.
 
 (Criterion 3 — the write-path re-assert — is an adapter concern, covered by
 the ``tests/ha`` CommandWriter suite; criterion 4 lives in
-``test_scenarios.py::test_flow_watchdog_silent_on_healthy_loops``.)
+``test_scenarios.py::test_flow_watchdog_silent_on_healthy_loops``. The former
+criterion 2 stuck-open reverse detection was removed 2026-07-13 — see
+docs/DECISIONS.md §17.)
 
 Units: temperatures degC, valve percent 0..100, time minutes (simulation) /
 seconds (controller ``dt``). This module never imports ``homeassistant``.
@@ -31,7 +29,6 @@ import pytest
 from custom_components.tortoise_ufh.core.building_profiles import well_insulated
 from custom_components.tortoise_ufh.core.config import RoomConfig
 from custom_components.tortoise_ufh.core.controller import BuildingController
-from custom_components.tortoise_ufh.core.dew_point import dew_point
 from custom_components.tortoise_ufh.core.models import BuildingOutputs
 from custom_components.tortoise_ufh.core.rc_model import ModelOrder, RCModel
 from custom_components.tortoise_ufh.core.simulator import (
@@ -50,9 +47,6 @@ _WINDOW_MIN = 45.0
 
 _STEPS_PER_WINDOW = int(_WINDOW_MIN * 60.0 / _DT_S)
 """Control cycles per response window (9 at 300 s)."""
-
-_GLOBAL_DEW_MARGIN_K = 2.0
-"""Global safe dew point = max room dew point + this margin [K] (frozen)."""
 
 
 def _make_room(
@@ -214,7 +208,6 @@ class TestCriterion1NoFlow:
 
         healthy_report = outputs.rooms["healthy"].report
         assert "loop_no_flow" not in healthy_report.flags
-        assert "loop_stuck_open" not in healthy_report.flags
         assert set(healthy_report.loop_flow_status) <= {"ok", "inactive"}
 
     def test_recovered_actuator_clears_the_flag(self) -> None:
@@ -235,77 +228,17 @@ class TestCriterion1NoFlow:
 
 
 @pytest.mark.simulation
-class TestCriterion2StuckOpen:
-    """Persistent source signature on a 0-commanded valve (criterion 2)."""
-
-    def test_stuck_open_flags_and_feeds_the_global_dew_point(self) -> None:
-        """A cooling-disabled room with a physically open valve re-enters
-        the global safe dew-point maximum once ``loop_stuck_open`` latches.
-        """
-        bathroom, bathroom_cfg = _make_room(
-            "bathroom", t_ground=17.0, cooling_enabled=False, initial_c=27.0
-        )
-        healthy, healthy_cfg = _make_room("healthy", t_ground=17.0, initial_c=27.0)
-        weather = SyntheticWeather.constant(T_out=30.0, GHI=0.0, humidity=50.0)
-        simulator = BuildingSimulator(
-            [bathroom, healthy],
-            weather,
-            hp_mode=HeatPumpMode.COOLING,
-            hp_max_power_w=6000.0,
-        )
-        simulator.set_setpoints({"bathroom": 24.0, "healthy": 24.0})
-        controller = BuildingController(
-            {
-                "bathroom": bathroom_cfg.controller,
-                "healthy": healthy_cfg.controller,
-            }
-        )
-
-        # The physical valve sits open (e.g. a controller reset to its park
-        # position) and the actuator ignores all further targets.
-        bathroom.apply_actions(valve_position=60.0, fast_source_power_w=0.0)
-        bathroom.set_actuator_fault(frozen=True, echo_feedback=True)
-
-        early = _tick(simulator, controller, 2)
-        early_report = early.rooms["bathroom"].report
-        # Cooling-disabled: commanded 0, excluded from the dew maximum...
-        assert early.rooms["bathroom"].valve_position_pct == 0.0
-        assert early_report.dew_excluded_reason == "cooling_disabled"
-        assert "loop_stuck_open" not in early_report.flags
-
-        outputs = _tick(simulator, controller, _STEPS_PER_WINDOW + 4)
-        report = outputs.rooms["bathroom"].report
-        assert "loop_stuck_open" in report.flags, (
-            "a persistently flowing loop on a 0 command must latch stuck_open"
-        )
-        assert "stuck_open" in report.loop_flow_status
-        # ... but the physically cold floor is real: the room re-enters the
-        # global dew maximum (the heat pump's water floor is the only
-        # defence an actuator that ignores commands cannot bypass).
-        assert report.dew_excluded_reason is None
-        inputs = simulator.get_all_measurements()["bathroom"]
-        assert inputs.room_temperature_c is not None
-        assert inputs.humidity_pct is not None
-        room_dew = dew_point(inputs.room_temperature_c, inputs.humidity_pct)
-        assert outputs.global_safe_dew_point_c is not None
-        assert (
-            outputs.global_safe_dew_point_c >= room_dew + _GLOBAL_DEW_MARGIN_K - 0.2
-        ), "the stuck-open room's dew point must bound the global floor"
-
-
-@pytest.mark.simulation
 class TestActuationSelfTestOnTwin:
     """The manual self-test graded against the twin's hydraulics."""
 
     def _heating_single(
-        self, *, supply_probe_on_manifold: bool = False
+        self,
     ) -> tuple[BuildingSimulator, BuildingController, SimulatedRoom]:
         """One-room heating twin (T_out 0 degC, setpoint 21, start 20)."""
         room, cfg = _make_room(
             "main",
             t_ground=14.0,
             initial_c=20.0,
-            supply_probe_on_manifold=supply_probe_on_manifold,
         )
         weather = SyntheticWeather.constant(T_out=0.0, GHI=0.0, humidity=50.0)
         simulator = BuildingSimulator(
@@ -367,22 +300,3 @@ class TestActuationSelfTestOnTwin:
         report = outputs.rooms["main"].report
         assert report.actuation_test_status == "aborted"
         assert outputs.rooms["main"].valve_position_pct < 100.0
-
-    def test_manifold_supply_probe_placement_does_not_false_alarm(self) -> None:
-        """The bar-mounted supply probe variant never fakes stuck-open.
-
-        With the supply probe BEFORE the valve it keeps the source
-        temperature during stagnation (large delta-T), but the return probe
-        rests at the slab — the return-vs-room condition holds the alarm
-        down across several windows of a genuinely closed, healthy valve.
-        """
-        simulator, controller, room = self._heating_single(
-            supply_probe_on_manifold=True
-        )
-        # No heating demand: the valve is commanded (and physically) closed.
-        simulator.set_setpoint("main", 15.0)
-        outputs = _tick(simulator, controller, 3 * _STEPS_PER_WINDOW)
-        report = outputs.rooms["main"].report
-        assert room.valve_position == 0.0
-        assert "loop_stuck_open" not in report.flags
-        assert "stuck_open" not in report.loop_flow_status

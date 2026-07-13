@@ -50,18 +50,32 @@ independent witness of actuation:
   `|T_supply − T_return| < ε` (e.g. 0.3 K) **and** `T_supply` shows no approach toward
   the source side (no downward trend in cooling / upward in heating) — raise
   `loop_no_flow` for that room.
-- **Reverse check (frozen open / leaking):** valve commanded 0 % for ≥ window, but the
-  loop keeps a persistent source-side signature (`T_supply` pinned near the source
-  temperature, ΔT ≠ 0) — raise `loop_stuck_open`. In cooling this one should also feed
-  the condensation logic (treat the room as "cold floor active" for dew purposes).
+- **Reverse check (frozen open / leaking valve) — PROPOSED, then REMOVED 2026-07-13
+  (see docs/DECISIONS.md §17).** A closed-commanded valve that still leaks was to be caught
+  by the room sitting persistently below its cooling setpoint. In practice that room-air
+  witness could not hard-verify actuation (too many benign states reproduce the same
+  signature), so it produced only false alarms — see "Why there is no stuck-open detection"
+  below. Hard verification of a closed valve is deferred to a future, dedicated mechanism.
 - **False-positive gating** (pump state is out of scope for Tortoise, §6): only
   evaluate when circulation is plausible — at least one *other* loop in the system
   currently shows a healthy ΔT signature, or (optional new global input) a
   `entity_global_supply` manifold probe reads source-side. Multi-loop rooms: evaluate
   per loop, report the worst.
-- **Reaction:** flag + per-room binary sensor (so HA automations can notify), freeze
-  that room's integrator (prevent the wind-up observed in the incident), and in
-  cooling treat `loop_stuck_open` as S2-relevant. No automatic valve banging.
+- **Reaction:** flag + per-room binary sensor (so HA automations can notify) + freeze
+  that room's integrator (prevent the wind-up observed in the incident). No automatic
+  valve banging.
+
+### Why there is no stuck-open detection
+
+The reverse check above (a closed valve that still leaks, witnessed by the room over-cooling)
+was implemented and then removed on 2026-07-13 (docs/DECISIONS.md §17). Room air temperature
+versus setpoint cannot hard-verify whether an actuator physically passes water: too many
+benign states (a cold room after a setpoint raise, a neighbouring cold mass, a slow-draining
+slab, a sensor offset) reproduce the same signature, and — once the manifold-conducted probes
+of a closed loop are correctly declared unreliable — there is no independent physical
+corroborator. The detection produced only false positives. `loop_no_flow` keeps its water-probe
+witness and stays; a proper close-and-measure actuation verification is deferred to a future,
+dedicated mechanism.
 
 ### B. Valve command re-assert (parity with splits)
 
@@ -80,14 +94,16 @@ event — not scheduled.
 ### D. Panel
 
 The Valves tab already shows per-loop ΔT — add a flow-health chip
-(`ok / no-flow? / stuck-open?`) derived from A, and surface the new flags in the room
+(`ok / no-flow?`) derived from A, and surface the new flags in the room
 detail and the flags dictionary in `docs/INSTRUKCJA.md`.
 
 ## Notes / constraints
 
-- Probe placement caveat: supply probes sit on the manifold bar before the valves in
-  some installations — the *return* probe is the more reliable flow witness; the
-  detector should weight `T_return` movement accordingly (configurable?).
+- Probe placement caveat (`loop_no_flow` only): supply probes sit on the manifold bar
+  before the valves in some installations — the *return* probe is the more reliable flow
+  witness, so the no-flow detector weights `T_return` movement accordingly. (This same
+  bar-conduction of a closed loop's probes is why the removed stuck-open reverse check
+  could not use them — see "Why there is no stuck-open detection" above.)
 - Thresholds (`ε`, windows, open_threshold) should be tuning knobs with sane defaults;
   slab response is slow, so windows must be ≥ 30 min to avoid flapping.
 - Rooms without supply/return probes: watchdog silently inactive (availability-based),
@@ -100,8 +116,10 @@ detail and the flags dictionary in `docs/INSTRUKCJA.md`.
 1. Simulated echo-feedback + frozen actuator (constant loop temps) in LIVE cooling
    raises `loop_no_flow` within one `response_window`, freezes the integrator, and
    exposes a binary sensor — with zero writes beyond the normal command.
-2. Valve commanded 0 with a persistent source-side loop signature raises
-   `loop_stuck_open` and participates in condensation handling in cooling.
+2. *(Removed 2026-07-13, docs/DECISIONS.md §17.)* The stuck-open reverse detection —
+   a cooling-disabled room whose leaking closed valve held it below setpoint — was
+   implemented and then withdrawn: its room-air witness could not hard-verify actuation
+   and produced only false alarms. See "Why there is no stuck-open detection".
 3. A controller-side target reset (feedback jumps to park while the cached command is
    unchanged) is healed by the re-assert within its period.
 4. No flags on healthy loops across the existing simulation gate scenarios

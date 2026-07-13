@@ -327,7 +327,6 @@ const STR = {
     val_empty: "Brak skonfigurowanych pokoi.",
     flow_ok: "ok",
     flow_no_flow: "brak przepływu?",
-    flow_stuck: "nie domyka?",
     test_btn_start: "Testuj aktuację",
     test_btn_cancel: "Anuluj test",
     test_running_min: "~{m} min",
@@ -456,7 +455,7 @@ const STR = {
     tip_knob_flow_response_window_min:
       "Watchdog przepływu (S6): ile minut ciągłego braku sygnatury przepływu " +
       "(przy otwartej komendzie i wiarygodnej cyrkulacji) podnosi flagę „brak " +
-      "przepływu”; to samo okno pilnuje zaworu, który nie domyka. Płyta jest " +
+      "przepływu”. Płyta jest " +
       "wolna — minimum 30 min, żeby uniknąć trzepotania. Domyślnie 45 min; " +
       "1440 praktycznie wyłącza watchdoga.",
     // Tooltipy szczegółów pokoju (tip_dec_*) i nagłówków tabel (tip_val_* /
@@ -540,9 +539,8 @@ const STR = {
       "Zdrowie przepływu z sond wody pętli (watchdog S6) — niezależny, " +
       "fizyczny świadek aktuacji, który nie ufa feedbackowi encji zaworu " +
       "(ten kanał potrafi kłamać po restarcie kontrolera). „brak przepływu?” " +
-      "= otwarta komenda bez sygnatury hydraulicznej; „nie domyka?” = komenda " +
-      "0 z uporczywą sygnaturą źródła; „—” = brak sond lub watchdog " +
-      "wstrzymany (cyrkulacja niepewna).",
+      "= otwarta komenda bez sygnatury hydraulicznej; „—” = brak sond lub " +
+      "watchdog wstrzymany (cyrkulacja niepewna).",
     tip_actuation_test:
       "Ręczny self-test aktuacji: zawór jest celowo wysterowany na 100 % na " +
       "20–30 min, a o wyniku decyduje odpowiedź hydrauliczna sond pętli. " +
@@ -1083,7 +1081,7 @@ const STR = {
     tip_knob_flow_response_window_min:
       "Flow watchdog (S6): how many minutes of continuous missing flow " +
       "signature (with an open command and plausible circulation) raise the " +
-      "“no flow” flag; the same window guards a valve that never closes. The " +
+      "“no flow” flag. The " +
       "slab is slow — minimum 30 min to avoid flapping. Default 45 min; 1440 " +
       "effectively disables the watchdog.",
     tip_flow_chip:
@@ -1091,7 +1089,6 @@ const STR = {
       "independent, physical witness of actuation that does NOT trust the " +
       "valve entity's feedback (that channel can lie after a controller " +
       "reset). “no flow?” = an open command with no hydraulic signature; " +
-      "“stuck open?” = a 0 command with a persistent source-side signature; " +
       "“—” = no probes, or the watchdog is on hold (circulation uncertain).",
     tip_actuation_test:
       "Manual actuation self-test: the valve is deliberately driven to " +
@@ -1106,7 +1103,6 @@ const STR = {
     val_test_cap: "Test",
     flow_ok: "ok",
     flow_no_flow: "no flow?",
-    flow_stuck: "stuck open?",
     test_btn_start: "Test actuation",
     test_btn_cancel: "Cancel test",
     test_running_min: "~{m} min",
@@ -1123,7 +1119,7 @@ const STR = {
  * Codes mirror the exact strings the report carries: the safety-rule names
  * merged into the report (`s1_floor_overheat`, `s2_condensation`,
  * `s3_emergency_heat`, `s4_emergency_cool`, `s5_watchdog`) and the S6
- * watchdog (`loop_no_flow`, `loop_stuck_open`, `actuation_test_running`,
+ * watchdog (`loop_no_flow`, `actuation_test_running`,
  * `actuation_test_failed`); the room-controller flags (`s2_throttle` — the
  * graduated local dew throttle, split from the hard rule 2026-07-12 —
  * `rh_stale_gated`, `fast_source_*`, `cooling_disabled`, `unknown_room`,
@@ -1240,19 +1236,6 @@ const FLAG_LABELS = {
       "Valve open a long time but the loop probes see no water flow → the " +
       "integrator freezes and the flow-fault entity turns on. Check the valve " +
       "controller / actuator / manifold rotameters.",
-  },
-  loop_stuck_open: {
-    pl: "Pętla nie domyka",
-    en: "Loop stuck open",
-    sev: "alarm", sx: "S6", group: "safety",
-    descPl:
-      "Zawór zadany na 0, ale pętla dalej niesie wodę od strony źródła (nie " +
-      "domyka). W chłodzeniu ta pętla liczy się do bezpiecznego punktu rosy. " +
-      "Sprawdź, czy siłownik domyka.",
-    descEn:
-      "Valve commanded to 0 but the loop still carries source-side water (won't " +
-      "close). In cooling this loop counts toward the safe dew point. Check that " +
-      "the actuator fully closes.",
   },
   actuation_test_running: {
     pl: "Trwa test aktuacji",
@@ -6398,22 +6381,24 @@ const STYLE = `
 
 /* Buttons */
 button { font-family: inherit; cursor: pointer; }
+/* Family A — interactive hero controls: 32px-tall rectangles, radius 8, card bg. */
 .ghost-btn {
   display: inline-flex; align-items: center; gap: 6px;
-  background: transparent; color: var(--t-primary);
+  background: var(--t-card); color: var(--t-primary);
   border: 1px solid var(--t-line); border-radius: 8px;
-  padding: 6px 12px; font-size: 13px;
+  height: 32px; padding: 0 12px; font-size: 13px;
 }
 .ghost-btn:hover { border-color: var(--t-primary); }
 .ghost-btn.icon-only { padding: 0; width: 32px; height: 32px; justify-content: center; }
 .ghost-btn.icon-only .hicon { --mdc-icon-size: 20px; }
+/* Stepper is the only frame; the buttons live inside it borderless (no box-in-box). */
 .step-btn {
-  width: 30px; height: 30px; border-radius: 8px;
-  border: 1px solid var(--t-line); background: var(--t-card); color: var(--t-fg);
+  width: 28px; height: 28px; border-radius: 6px;
+  border: 0; background: transparent; color: var(--t-fg);
   font-size: 18px; line-height: 1; display: inline-flex;
   align-items: center; justify-content: center;
 }
-.step-btn:hover:not(:disabled) { border-color: var(--t-primary); color: var(--t-primary); }
+.step-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--t-fg) 8%, transparent); }
 .step-btn:disabled { opacity: .4; cursor: default; }
 
 /* Hero — single compact row (wraps on narrow) */
@@ -6425,9 +6410,10 @@ button { font-family: inherit; cursor: pointer; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
 .brand .hicon { --mdc-icon-size: 22px; color: var(--t-primary); }
 .brand .brand-img { width: 22px; height: 22px; object-fit: contain; display: block; }
+/* Family B — indicators: rounded pills, aligned padding, semantic tints kept. */
 .pill {
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 6px 12px; border-radius: 999px;
+  padding: 4px 12px; border-radius: 999px;
   background: var(--t-chip); font-size: 13px; font-weight: 500;
 }
 .pill-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--t-muted); }
@@ -6442,22 +6428,22 @@ button { font-family: inherit; cursor: pointer; }
 
 /* Inline stats: caption beside value (single-row hero). */
 .stat { display: inline-flex; align-items: baseline; gap: 5px; line-height: 1.15; }
-.stat-cap { font-size: 11px; color: var(--t-muted); letter-spacing: .02em; }
-.stat-val { font-size: 15px; font-weight: 600; }
+.hero .stat-cap { font-size: 11px; color: var(--t-muted); letter-spacing: .02em; }
+.hero .stat-val { font-size: 15px; font-weight: 600; }
 .stat.sev-ok .stat-val { color: var(--t-ok); }
 .stat.sev-warn .stat-val { color: var(--t-warn); }
 .stat.sev-problem .stat-val { color: var(--t-error); }
 .stat.sev-alarm .stat-val { color: var(--t-error); }
 /* Flags stat = shortcut to the Flags tab. */
 .flags-stat {
-  cursor: pointer; padding: 3px 8px; margin: -3px 0;
+  cursor: pointer; padding: 4px 12px;
   border-radius: 999px; border: 1px solid transparent;
 }
-.flags-stat:hover { background: var(--t-chip); }
+.flags-stat:hover { background: var(--t-chip); border-color: var(--t-line); }
 .flags-stat:focus-visible { outline: 2px solid var(--t-primary); outline-offset: 1px; }
 .chip-dew {
   display: inline-flex; align-items: baseline; gap: 6px;
-  padding: 5px 11px; border-radius: 999px;
+  padding: 4px 12px; border-radius: 999px;
   background: color-mix(in srgb, var(--t-info) 14%, transparent);
   border: 1px solid var(--t-info);
 }
@@ -6466,14 +6452,15 @@ button { font-family: inherit; cursor: pointer; }
 .ctl { display: inline-flex; align-items: center; gap: 8px; }
 .ctl-cap { font-size: 12px; color: var(--t-muted); letter-spacing: .02em; }
 .stepper {
-  display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid var(--t-line); border-radius: 8px; padding: 2px 6px; background: var(--t-card);
+  display: inline-flex; align-items: center; gap: 2px;
+  border: 1px solid var(--t-line); border-radius: 8px; height: 32px; padding: 0 4px; background: var(--t-card);
 }
 .step-val { min-width: 62px; text-align: center; font-size: 15px; font-weight: 600; }
-.seg { display: inline-flex; border: 1px solid var(--t-line); border-radius: 8px; overflow: hidden; }
+.seg { display: inline-flex; height: 32px; border: 1px solid var(--t-line); border-radius: 8px; overflow: hidden; }
 .seg-btn {
   border: 0; background: var(--t-card); color: var(--t-fg);
-  padding: 6px 12px; font-size: 13px; border-right: 1px solid var(--t-line);
+  padding: 0 14px; font-size: 13px; border-right: 1px solid var(--t-line);
+  display: inline-flex; align-items: center;
 }
 .seg-btn:last-child { border-right: 0; }
 .seg-btn:hover { background: var(--t-chip); }
@@ -6812,8 +6799,8 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
   padding: 10px 12px; border-radius: 12px;
   background: var(--t-bg); border: 1px solid var(--t-line);
 }
-.stat-cap { font-size: 11px; color: var(--t-muted); text-transform: uppercase; letter-spacing: .04em; }
-.stat-val { font-size: 23px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.stat-tile .stat-cap { font-size: 11px; color: var(--t-muted); text-transform: uppercase; letter-spacing: .04em; }
+.stat-tile .stat-val { font-size: 23px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; }
 .stat-sub { font-size: 12px; color: var(--t-muted); }
 .stat-tile .stepper { align-self: flex-start; background: var(--t-card); }
 .stat-tile .step-val { font-size: 17px; min-width: 68px; }

@@ -3,9 +3,8 @@
 Covers, against :mod:`tortoise_ufh.core.flow_watchdog` and its integration in
 :mod:`tortoise_ufh.core.controller` (2026-07-13, issue #4):
 
-* the :class:`LoopFlowMonitor` window machine — accumulation / evidence
-  resets / circulation-gate HOLD / the stuck-open return-vs-room condition
-  (including the manifold-bar probe variant that must NOT false-alarm);
+* the :class:`LoopFlowMonitor` window machine — no-flow accumulation /
+  evidence resets / circulation-gate HOLD;
 * the :class:`FlowWatchdog` per-room aggregation (multi-loop worst, pause,
   reset) and the new ``ControllerConfig`` / ``RoomReport`` validation;
 * the :class:`RoomController` wiring — integrator freeze on ``loop_no_flow``,
@@ -14,8 +13,7 @@ Covers, against :mod:`tortoise_ufh.core.flow_watchdog` and its integration in
   verdict / refusals / aborts);
 * the :class:`BuildingController` wiring — the injected
   ``circulation_evident`` gate (per-loop witnesses, the optional global
-  supply probe, its DHW/defrost suspension) and the stuck-open COOLING room
-  forced into the global safe dew point.
+  supply probe, its DHW/defrost suspension).
 
 Units: temperatures degC, valve percent 0..100, ``dt_seconds`` seconds,
 windows minutes. This module never imports ``homeassistant``.
@@ -30,7 +28,6 @@ from custom_components.tortoise_ufh.core.controller import (
     BuildingController,
     RoomController,
 )
-from custom_components.tortoise_ufh.core.dew_point import dew_point
 from custom_components.tortoise_ufh.core.flow_watchdog import (
     ActuationSelfTest,
     FlowWatchdog,
@@ -53,9 +50,6 @@ _WINDOW_S = 45.0 * 60.0
 _STEPS_PER_WINDOW = int(_WINDOW_S / _DT_S)
 """Cycles to accumulate one full response window (9 at 300 s)."""
 
-_GLOBAL_DEW_MARGIN_K = 2.0
-"""Global safe dew point = max room dew point + this margin [K] (frozen)."""
-
 
 def _update(
     monitor: LoopFlowMonitor,
@@ -64,7 +58,6 @@ def _update(
     commanded_pct: float | None = 50.0,
     supply_c: float | None = 25.0,
     return_c: float | None = 25.0,
-    room_temperature_c: float | None = 21.0,
     circulation_evident: bool | None = True,
     dt_seconds: float = _DT_S,
     epsilon_k: float = 0.3,
@@ -77,7 +70,6 @@ def _update(
         commanded_pct=commanded_pct,
         supply_c=supply_c,
         return_c=return_c,
-        room_temperature_c=room_temperature_c,
         circulation_evident=circulation_evident,
         dt_seconds=dt_seconds,
         epsilon_k=epsilon_k,
@@ -137,7 +129,7 @@ class TestLoopFlowMonitorNoFlow:
     def test_cooling_displacement_direction_is_inverted(self) -> None:
         """In COOLING the displacement toward the source is DOWNWARD."""
         monitor = LoopFlowMonitor()
-        _update(monitor, mode=Mode.COOLING, room_temperature_c=26.0)
+        _update(monitor, mode=Mode.COOLING)
         # Probes crept colder: evidence in cooling.
         assert (
             _update(
@@ -145,20 +137,18 @@ class TestLoopFlowMonitorNoFlow:
                 mode=Mode.COOLING,
                 supply_c=24.4,
                 return_c=24.4,
-                room_temperature_c=26.0,
             )
             == "ok"
         )
         # Probes crept WARMER in cooling: not evidence, window accumulates.
         monitor2 = LoopFlowMonitor()
-        _update(monitor2, mode=Mode.COOLING, room_temperature_c=26.0)
+        _update(monitor2, mode=Mode.COOLING)
         for _ in range(_STEPS_PER_WINDOW):
             status = _update(
                 monitor2,
                 mode=Mode.COOLING,
                 supply_c=25.6,
                 return_c=25.6,
-                room_temperature_c=26.0,
             )
         assert status == "no_flow"
 
@@ -223,114 +213,25 @@ class TestLoopFlowMonitorNoFlow:
             assert _update(monitor) == "ok"
         assert _update(monitor) == "no_flow"
 
-
-class TestLoopFlowMonitorStuckOpen:
-    """Stuck-open window: persistent source signature on a closed command."""
-
     @pytest.mark.unit
-    def test_persistent_cooling_signature_latches(self) -> None:
-        """Command 0 + cold delta-T + return on the source side latches."""
-        monitor = LoopFlowMonitor()
-        status = ""
-        for _ in range(_STEPS_PER_WINDOW):
-            status = _update(
-                monitor,
-                mode=Mode.COOLING,
-                commanded_pct=0.0,
-                supply_c=18.0,
-                return_c=20.0,
-                room_temperature_c=26.0,
-            )
-        assert status == "stuck_open"
-        assert monitor.stuck_open_active is True
+    def test_command_below_open_threshold_resets_and_reports_ok(self) -> None:
+        """A closing command (0 %) after an open no-flow window resets to ok.
 
-    @pytest.mark.unit
-    def test_sub_threshold_command_tail_is_still_guarded(self) -> None:
-        """A 0.8 % residue command counts as closed (the incident's tail)."""
-        monitor = LoopFlowMonitor()
-        status = ""
-        for _ in range(_STEPS_PER_WINDOW):
-            status = _update(
-                monitor,
-                mode=Mode.HEATING,
-                commanded_pct=0.8,
-                supply_c=32.0,
-                return_c=27.0,
-                room_temperature_c=21.0,
-            )
-        assert status == "stuck_open"
-
-    @pytest.mark.unit
-    def test_manifold_bar_supply_probe_does_not_false_alarm(self) -> None:
-        """A pre-valve supply probe alone (return at room) never latches.
-
-        The return-vs-room condition is the decisive witness: a manifold-bar
-        supply probe keeps a huge delta-T on a genuinely closed loop, but its
-        RETURN rests near the slab/room temperature — no alarm.
+        With the stuck-open reverse detection removed (docs/DECISIONS.md §17),
+        the closed branch simply resets the no-flow window and reports
+        ``"ok"``: no new status, no residual latch.
         """
         monitor = LoopFlowMonitor()
-        for _ in range(_STEPS_PER_WINDOW + 3):
-            status = _update(
-                monitor,
-                mode=Mode.HEATING,
-                commanded_pct=0.0,
-                supply_c=35.0,  # bar before the valve: stays at the source
-                return_c=21.3,  # post-valve: settled at the room/slab
-                room_temperature_c=21.0,
-            )
-            assert status == "ok"
-        assert monitor.stuck_open_active is False
-
-    @pytest.mark.unit
-    def test_missing_room_temperature_degrades_to_delta_t_only(self) -> None:
-        """Without a room temperature the delta-T alone drives the window."""
-        monitor = LoopFlowMonitor()
-        status = ""
-        for _ in range(_STEPS_PER_WINDOW):
-            status = _update(
-                monitor,
-                mode=Mode.HEATING,
-                commanded_pct=0.0,
-                supply_c=35.0,
-                return_c=21.3,
-                room_temperature_c=None,
-            )
-        assert status == "stuck_open"
-
-    @pytest.mark.unit
-    def test_signature_decay_resets_the_window(self) -> None:
-        """A closing loop whose signature decays below epsilon never latches."""
-        monitor = LoopFlowMonitor()
-        for i in range(_STEPS_PER_WINDOW + 3):
-            # The delta-T collapses after 4 cycles (healthy valve closing).
-            delta = 2.0 if i < 4 else 0.1
-            status = _update(
-                monitor,
-                mode=Mode.COOLING,
-                commanded_pct=0.0,
-                supply_c=18.0,
-                return_c=18.0 + delta,
-                room_temperature_c=26.0,
-            )
-        assert status == "ok"
-        assert monitor.stuck_open_active is False
-
-    @pytest.mark.unit
-    def test_stuck_window_is_not_gated_by_circulation(self) -> None:
-        """The stuck-open window accumulates even with the gate unknown."""
-        monitor = LoopFlowMonitor()
-        status = ""
-        for _ in range(_STEPS_PER_WINDOW):
-            status = _update(
-                monitor,
-                mode=Mode.COOLING,
-                commanded_pct=0.0,
-                supply_c=18.0,
-                return_c=20.0,
-                room_temperature_c=26.0,
-                circulation_evident=None,
-            )
-        assert status == "stuck_open"
+        # Accumulate most of a no-flow window on a dead open loop.
+        for _ in range(_STEPS_PER_WINDOW - 1):
+            assert _update(monitor) == "ok"
+        # The valve is commanded closed: window resets, status "ok".
+        assert _update(monitor, commanded_pct=0.0) == "ok"
+        assert monitor.no_flow_active is False
+        # Re-opening needs a FULL window again — the closed cycle reset it.
+        for _ in range(_STEPS_PER_WINDOW - 1):
+            assert _update(monitor) == "ok"
+        assert _update(monitor) == "no_flow"
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +271,6 @@ class TestFlowWatchdog:
             watchdog.update(inputs, commanded_pct=50.0, dt_seconds=_DT_S)
         assert watchdog.loop_statuses == ("no_flow", "ok")
         assert watchdog.no_flow_active is True
-        assert watchdog.stuck_open_active is False
 
     @pytest.mark.unit
     def test_no_probes_room_is_silently_inactive(self) -> None:
@@ -600,7 +500,7 @@ class TestS6ContractValidation:
     def test_report_accepts_valid_s6_payload(self) -> None:
         """Valid statuses/verdicts construct and serialise to lists."""
         report = self._report(
-            loop_flow_status=("ok", "no_flow", "stuck_open", "inactive"),
+            loop_flow_status=("ok", "no_flow", "inactive"),
             actuation_test_status="running",
             actuation_test_remaining_min=12.5,
             actuation_test_loops=("passed", "failed", "untested"),
@@ -609,7 +509,6 @@ class TestS6ContractValidation:
         assert payload["loop_flow_status"] == [
             "ok",
             "no_flow",
-            "stuck_open",
             "inactive",
         ]
         assert payload["actuation_test_status"] == "running"
@@ -693,8 +592,9 @@ class TestRoomControllerNoFlow:
         """The S6 command reference is the FINAL emitted valve position.
 
         An S2 hard stop forces the valve to 0 after the PI computed an open
-        command; the watchdog must see 0 (a stuck-open candidate), not the
-        pre-safety PI value (a no-flow candidate).
+        command; the watchdog must see the emitted 0 (a closed command, so no
+        no-flow accrual), not the pre-safety open PI value (a no-flow
+        candidate).
         """
         controller = RoomController(ControllerConfig(), name="lazienka")
         # Cooling with the supply BELOW the room dew point: S2 hard rule.
@@ -840,7 +740,7 @@ class TestRoomControllerSelfTest:
 
 
 # ---------------------------------------------------------------------------
-# BuildingController wiring — circulation gate + stuck-open dew inclusion
+# BuildingController wiring — circulation gate
 # ---------------------------------------------------------------------------
 
 
@@ -915,45 +815,3 @@ class TestBuildingCirculationGate:
         assert out is not None
         assert "loop_no_flow" not in out.rooms["dead"].report.flags
         assert out.rooms["dead"].report.loop_flow_status == ("inactive",)
-
-
-class TestStuckOpenDewInclusion:
-    """A stuck-open COOLING room is forced into the global safe dew point."""
-
-    def _bathroom_inputs(self) -> RoomInputs:
-        """Cooling-disabled room whose loop keeps a cold source signature."""
-        return make_inputs(
-            mode=Mode.COOLING,
-            setpoint_c=24.0,
-            room_temperature_c=26.0,
-            humidity_pct=55.0,
-            cooling_enabled=False,
-            loops=(
-                LoopInput(
-                    valve_position_pct=None,
-                    supply_temperature_c=18.0,
-                    return_temperature_c=20.0,
-                ),
-            ),
-        )
-
-    @pytest.mark.unit
-    def test_stuck_open_room_feeds_the_global_dew_point(self) -> None:
-        """The excluded room re-enters the dew maximum once stuck-open latches."""
-        building = BuildingController({"lazienka": ControllerConfig()})
-        inputs = {"lazienka": self._bathroom_inputs()}
-
-        early = building.step(inputs, dt_seconds=_DT_S)
-        assert early.rooms["lazienka"].report.dew_excluded_reason == (
-            "cooling_disabled"
-        )
-        assert early.global_safe_dew_point_c is None
-
-        out = early
-        for _ in range(_STEPS_PER_WINDOW + 2):
-            out = building.step(inputs, dt_seconds=_DT_S)
-        report = out.rooms["lazienka"].report
-        assert "loop_stuck_open" in report.flags
-        assert report.dew_excluded_reason is None
-        expected = dew_point(26.0, 55.0) + _GLOBAL_DEW_MARGIN_K
-        assert out.global_safe_dew_point_c == pytest.approx(expected)

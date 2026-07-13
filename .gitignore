@@ -13,6 +13,9 @@ venv/
 .mypy_cache/
 .ruff_cache/
 htmlcov/
+
+# Local scratch / working notes (never shipped)
+scratchpad/
 .coverage
 .coverage.*
 

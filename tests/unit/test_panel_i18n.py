@@ -176,7 +176,7 @@ def test_flag_labels_are_a_complete_registry() -> None:
     source = _PANEL_JS.read_text(encoding="utf-8")
     block = _extract_block(source, "const FLAG_LABELS = {")
     entries = _FLAG_ENTRY.findall(block)
-    assert len(entries) >= 21, f"expected >=21 flags, parsed {len(entries)}"
+    assert len(entries) >= 20, f"expected >=20 flags, parsed {len(entries)}"
     for code, body in entries:
         for field in ("pl:", "en:", "sev:", "sx:", "group:", "descPl:", "descEn:"):
             assert field in body, f"FLAG_LABELS.{code} is missing {field[:-1]!r}"
@@ -337,7 +337,6 @@ _REQUIRED_V090_KEYS = (
     "val_th_test",
     "flow_ok",
     "flow_no_flow",
-    "flow_stuck",
     "test_btn_start",
     "test_btn_cancel",
     "test_running_min",

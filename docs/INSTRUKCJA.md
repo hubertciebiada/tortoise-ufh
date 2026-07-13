@@ -1,6 +1,6 @@
 # Tortoise-UFH — instrukcja użytkownika
 
-> Dotyczy wersji **0.10.3**. Instrukcja opisuje integrację po polsku; interfejs
+> Dotyczy wersji **0.11.0**. Instrukcja opisuje integrację po polsku; interfejs
 > (panel, encje, kreator konfiguracji, usługi) jest dostępny po polsku i po
 > angielsku i podąża za językiem ustawionym w Twoim profilu Home Assistant.
 
@@ -357,6 +357,17 @@ udziału w chłodzeniu (kreator to wymusza).
   to zawsze „włącz + kierunek + temperatura zadana" — split reguluje się sam;
   nigdy nie zastępuje podłogi, a jego decyzja nigdy nie przymyka zaworu.
 - **Kiedy puszcza:** wewnątrz pasma komfortu (strefy nieczułości).
+- **Co się dzieje z podłogą podczas dogrzewu (chłodzenie):** gdy split chłodzi,
+  schładza **powietrze**, więc zmierzony uchyb szybko maleje i sam regulator PI
+  chciałby przymknąć zawór podłogi do zera — czyli split pośrednio zagłodziłby
+  podłogę dokładnie wtedy, gdy trzeba rozładować ciepły beton. Dlatego w chłodzeniu,
+  **dopóki split jest włączony, zawór podłogi jest trzymany** na poziomie z chwili
+  załączenia splita (a jeśli pokój dalej się grzeje, PI może go otworzyć **jeszcze
+  bardziej** — trzymanie to dolna granica, nie sufit). Dzięki temu podłoga dalej
+  rozładowuje beton, a split rzadziej taktuje. Trzymanie **nie osłabia ochrony przed
+  kondensacją**: dławienie punktu rosy (§9) nadal przymyka trzymany zawór, a utrata
+  czujnika pokoju nadal zamyka go do 0. W grzaniu nic się nie zmienia. Nowych
+  parametrów do ustawienia nie ma — działa automatycznie.
 - **Dlaczego nastawa splita różni się od zadanej:** nastawa splita jest celowo
   podbijana o parametr **podbicie nastawy wspomagania** (§8; domyślnie 1 K —
   grzanie: +1 K, chłodzenie: −1 K). Czujnik splita wisi pod sufitem i czyta
@@ -496,7 +507,6 @@ automatycznie. Pełny słownik poniżej:
 | `unknown_room` | Pokój bez konfiguracji regulatora (stan przejściowy po zmianach konfiguracji). | Przeładuj integrację; jeśli trwa — usuń i dodaj pokój. |
 | `controller_error` | Wyjątek w regulatorze pokoju — bezpieczna degradacja (w grzaniu zawór trzyma pozycję, w chłodzeniu 0; split OFF). | Zajrzyj do logów HA i zgłoś problem (patrz §13). |
 | `loop_no_flow` | Watchdog przepływu (S6): zawór jest otwarty od dłuższego czasu, ale sondy pętli nie widzą przepływu wody — integrator zamrożony, encja „usterka przepływu" włączona. | Sprawdź kontroler zaworów/siłownik i przepływ na rozdzielaczu (rotametry). Watchdog nie ufa feedbackowi zaworu — patrz §8, „Watchdog przepływu". |
-| `loop_stuck_open` | Watchdog przepływu (S6): zawór jest komendowany na 0, ale pętla wciąż niesie wodę od strony źródła (nie domyka). W chłodzeniu pętla liczy się do bezpiecznego punktu rosy. | Sprawdź, czy siłownik faktycznie domyka; ryzyko wychłodzenia/skroplin na tej pętli. |
 | `actuation_test_running` | Trwa ręczny test aktuacji tego pokoju (zawór celowo na 100 %). | Informacyjne. Zaczekaj do końca albo anuluj w panelu. |
 | `actuation_test_failed` | Test aktuacji zakończony niepowodzeniem — pętla nie odpowiedziała hydraulicznie na otwarcie. | Sprawdź kontroler/siłownik/przepływ tej pętli. |
 
@@ -552,6 +562,18 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **0.11.0 (2026-07-14)** — trzy zmiany. **(1) Chłodzenie — podłoga trzyma pozycję podczas
+  dogrzewu splitem:** gdy split wspomaga chłodzenie, schłodzone przez niego powietrze nie
+  zamyka już zaworu podłogi do zera — podłoga utrzymuje ostatnią pozycję i dalej rozładowuje
+  chłód z betonu (płyta zdąża się wychłodzić, splitowi jest łatwiej, mniej krótkich cykli).
+  Działa tylko w chłodzeniu, **nie dokłada żadnego parametru** i nie osłabia zabezpieczeń przed
+  skroplinami (throttle punktu rosy S2 oraz utrata czujnika nadal domykają zawór).
+  **(2) Usunięte wykrywanie „zawór nie domyka" (`loop_stuck_open`):** dawało fałszywe alarmy,
+  bo z samej temperatury powietrza nie da się twardo potwierdzić, czy siłownik przepuszcza wodę.
+  Wykrywanie **braku przepływu** (`loop_no_flow`) i ręczny **test aktuacji** działają bez zmian.
+  **(3) Panel — ujednolicony wygląd kontrolek w hero** (spójna wysokość, obramowanie i tło;
+  naprawiony błąd, przez który metryki renderowały się zbyt dużą czcionką). Bez migracji
+  konfiguracji; kontrakt I/O nietknięty.
 - **0.10.3 (2026-07-13)** — panel: **hero w jednym wierszu** (był w trzech — zajmował dużo
   miejsca; wysokość spada ~2×, na wąskim ekranie zawija się czytelnie), metryki jako inline
   „podpis + wartość", ujednolicone kontrolki, metryka **Flagi klikalna** → przenosi do zakładki
@@ -579,8 +601,8 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
   najgroźniejszej. Naprawia „martwą" wagę `alarm` (flagi S6 świecą teraz czerwono, nie szaro).
   Zmiana wyłącznie w panelu — bez migracji konfiguracji, kontrakt sterownika nietknięty.
 - **0.9.0 (2026-07-13)** — **watchdog przepływu (S6)**: niezależny, fizyczny świadek
-  pracy zaworów z sond wody pętli, który nie ufa feedbackowi encji zaworu (flagi
-  `loop_no_flow` / `loop_stuck_open`, encja „usterka przepływu", zamrożenie
+  pracy zaworów z sond wody pętli, który nie ufa feedbackowi encji zaworu (flaga
+  `loop_no_flow`, encja „usterka przepływu", zamrożenie
   integratora); **ręczny test aktuacji** (usługa `tortoise_ufh.test_actuation`), chip
   zdrowia przepływu w zakładce Zawory, trzy nowe parametry strojenia (§8). Poprawki
   ścieżki zapisu zaworów: ponowne wymuszanie komendy (~45 min) i zapis przy rozjeździe
