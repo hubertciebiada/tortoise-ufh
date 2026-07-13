@@ -1,6 +1,6 @@
 # Tortoise-UFH — instrukcja użytkownika
 
-> Dotyczy wersji **0.9.0**. Instrukcja opisuje integrację po polsku; interfejs
+> Dotyczy wersji **0.10.0**. Instrukcja opisuje integrację po polsku; interfejs
 > (panel, encje, kreator konfiguracji, usługi) jest dostępny po polsku i po
 > angielsku i podąża za językiem ustawionym w Twoim profilu Home Assistant.
 
@@ -126,8 +126,9 @@ ustawienia sterowania i strojenia oraz opcjonalna sekcja **Pompa ciepła** (§11
 
 U góry panelu **hero**: status algorytmu (Działa / Nieaktualne / Błąd) z wiekiem
 ostatniego cyklu, licznik **Steruje x/y** (ile pokoi pisze do sprzętu), liczba
-aktywnych **flag**, w chłodzeniu **bezpieczny punkt rosy** (§9), stepper
-**temperatury domu** i przełącznik **trybu**.
+aktywnych **flag** (barwa wg najgroźniejszej — pełny rozkład w annunciatorze niżej),
+w chłodzeniu **bezpieczny punkt rosy** (§9), stepper **temperatury domu**
+i przełącznik **trybu**.
 
 Przełączenie stanu pokoju (Wyłączony↔Steruje) oraz trybu domu wymaga od v0.8.0
 **lekkiego potwierdzenia**: przy klikniętym przycisku pojawia się dymek „na pewno?"
@@ -136,7 +137,12 @@ przełączniki były zbyt łatwe do trafienia przypadkiem.
 
 Zakładki:
 
-- **Pokoje** — tabela: przełącznik stanu **Wyłączony/Steruje** (pierwsza kolumna),
+- **Pokoje** — u góry **annunciator flag** (od v0.10.0): wszystkie znane flagi jako
+  kafelki pogrupowane w **Bezpieczeństwo (S1–S6) / Wspomaganie / Konfiguracja** —
+  **wyszarzone**, gdy nieaktywne, i **zapalone w kolorze** (z licznikiem `×N` pokoi
+  i listą pokoi w dymku), gdy zadziałają; zabezpieczenia noszą kod **S1–S6** na
+  plakietce, a pod ikoną **„i"** przy każdej fladze jest pełne objaśnienie (§12).
+  Pod annunciatorem tabela: przełącznik stanu **Wyłączony/Steruje** (pierwsza kolumna),
   pomiar z trendem, zadana (z korektą), uchyb, zawór %, zasilanie/powrót pierwszej
   pętli oraz — pod wspólnym nagłówkiem **Wspomaganie** — tryb i temperatura zadana
   splita/grzałki („—" = pokój bez wspomagania, „wył." = wspomaganie stoi; ikona „i"
@@ -451,6 +457,12 @@ pokoju / usunięcie integracji) **nie dotyka pompy**.
 
 <!-- Słownik zgodny z FLAG_LABELS w frontend/tortoise-ufh-panel.js — zmieniaj razem. -->
 
+Od v0.10.0 wszystkie te flagi widzisz też jako **annunciator na górze zakładki Pokoje**:
+każda flaga to kafelek — **wyszarzony**, gdy nieaktywna, i **zapalony w kolorze** (z licznikiem
+`×N` pokoi), gdy zadziała. Kafelki są pogrupowane, zabezpieczenia noszą kod **S1–S6**, a pod
+ikoną **„i"** przy każdej fladze jest jej pełne objaśnienie. Legenda renderuje się z jednego
+rejestru — nowa flaga pojawia się w niej automatycznie. Pełny słownik poniżej:
+
 | Flaga | Znaczenie | Co zrobić |
 |---|---|---|
 | `sensor_lost` | Utrata czujnika temperatury (brak odczytu, odczyt nieprawdopodobny albo starszy niż 45 min). Zawór: w grzaniu trzyma ostatnią zdrową pozycję, w chłodzeniu parkuje na 0; split OFF. | Sprawdź czujnik/baterię/sieć. Pokój wróci sam po świeżym, wiarygodnym odczycie. |
@@ -527,6 +539,13 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **0.10.0 (2026-07-13)** — **annunciator flag** na górze zakładki Pokoje: wszystkie znane
+  flagi jako kafelki (wyszarzone, gdy nieaktywne; zapalone w kolorze z licznikiem `×N`, gdy
+  zadziałają), pogrupowane w Bezpieczeństwo (S1–S6) / Wspomaganie / Konfiguracja, każda z „i"
+  i pełnym objaśnieniem. Renderuje się z **jednego rejestru flag** (nowa flaga pojawia się
+  automatycznie). Metryka „Flagi" w hero pokazuje teraz liczbę aktywnych flag w barwie wg
+  najgroźniejszej. Naprawia „martwą" wagę `alarm` (flagi S6 świecą teraz czerwono, nie szaro).
+  Zmiana wyłącznie w panelu — bez migracji konfiguracji, kontrakt sterownika nietknięty.
 - **0.9.0 (2026-07-13)** — **watchdog przepływu (S6)**: niezależny, fizyczny świadek
   pracy zaworów z sond wody pętli, który nie ufa feedbackowi encji zaworu (flagi
   `loop_no_flow` / `loop_stuck_open`, encja „usterka przepływu", zamrożenie

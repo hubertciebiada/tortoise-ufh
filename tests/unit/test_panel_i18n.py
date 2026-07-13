@@ -6,7 +6,9 @@ English fallback; adding a language = adding one dictionary. These tests keep
 that architecture honest without a JS runtime:
 
 * ``STR.pl`` and ``STR.en`` carry the exact same key set;
-* every ``FLAG_LABELS`` entry carries ``pl``, ``en`` and ``sev``;
+* every ``FLAG_LABELS`` entry is a complete registry row — ``pl``/``en`` label,
+  ``sev``, ``sx`` (``"S#"`` or ``null``), ``group`` and ``descPl``/``descEn`` —
+  since the flag annunciator renders entirely from that one map;
 * every controller knob exposed in ``const.CONTROLLER_NUMBER_KNOBS`` (plus the
   boolean knob) has both a ``tune_<name>`` label and a ``tip_knob_<name>``
   tooltip in BOTH languages;
@@ -159,6 +161,37 @@ def test_flag_labels_have_pl_en_and_severity() -> None:
     for code, body in entries:
         for field in ("pl:", "en:", "sev:"):
             assert field in body, f"FLAG_LABELS.{code} is missing {field[:-1]!r}"
+
+
+# The flag annunciator (Rooms tab) renders ENTIRELY from FLAG_LABELS, so each
+# entry must be a full registry row: adding a flag = one complete entry, and it
+# appears everywhere. These are the vocabularies the panel/annunciator knows.
+_VALID_FLAG_SEV = {"ok", "warn", "problem", "alarm"}
+_VALID_FLAG_GROUP = {"safety", "assist", "config"}
+
+
+@pytest.mark.unit
+def test_flag_labels_are_a_complete_registry() -> None:
+    """Every FLAG_LABELS entry is a full row: label+sev+sx+group+desc, valid."""
+    source = _PANEL_JS.read_text(encoding="utf-8")
+    block = _extract_block(source, "const FLAG_LABELS = {")
+    entries = _FLAG_ENTRY.findall(block)
+    assert len(entries) >= 21, f"expected >=21 flags, parsed {len(entries)}"
+    for code, body in entries:
+        for field in ("pl:", "en:", "sev:", "sx:", "group:", "descPl:", "descEn:"):
+            assert field in body, f"FLAG_LABELS.{code} is missing {field[:-1]!r}"
+        sev = re.search(r'sev:\s*"(\w+)"', body)
+        assert sev and sev.group(1) in _VALID_FLAG_SEV, (
+            f"FLAG_LABELS.{code} has an unknown sev"
+        )
+        group = re.search(r'group:\s*"(\w+)"', body)
+        assert group and group.group(1) in _VALID_FLAG_GROUP, (
+            f"FLAG_LABELS.{code} has an unknown group"
+        )
+        # sx is a safety-rule code "S#" or explicit null (assist/config flags).
+        assert re.search(r'sx:\s*(?:"S\d+"|null)', body), (
+            f'FLAG_LABELS.{code} sx must be "S#" or null'
+        )
 
 
 @pytest.mark.unit
@@ -322,6 +355,35 @@ def test_v090_surfaces_have_their_str_keys() -> None:
     missing = [
         f"{lang}:{key}"
         for key in _REQUIRED_V090_KEYS
+        for lang in ("pl", "en")
+        if key not in sections[lang]
+    ]
+    assert not missing, f"missing STR keys: {missing}"
+
+
+# New v0.10.0 surface: the flag annunciator (Rooms tab) — its title, the
+# collective info bubble, the four group headers and the summary/fallback
+# strings. Pinned so a rename cannot silently drop the annunciator.
+_REQUIRED_V0100_KEYS = (
+    "flag_legend_title",
+    "flag_legend_info",
+    "flag_grp_safety",
+    "flag_grp_assist",
+    "flag_grp_config",
+    "flag_grp_other",
+    "flag_active_in",
+    "flag_none_active",
+    "flag_desc_unknown",
+)
+
+
+@pytest.mark.unit
+def test_v0100_surfaces_have_their_str_keys() -> None:
+    """The v0.10.0 flag-annunciator STR keys exist in both languages."""
+    sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
+    missing = [
+        f"{lang}:{key}"
+        for key in _REQUIRED_V0100_KEYS
         for lang in ("pl", "en")
         if key not in sections[lang]
     ]

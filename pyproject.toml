@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tortoise-ufh"
-version = "0.9.0"
+version = "0.10.0"
 description = "Per-room PID climate controller for high-thermal-mass underfloor heating (Home Assistant integration + offline simulator)"
 readme = "README.md"
 license = "MIT"

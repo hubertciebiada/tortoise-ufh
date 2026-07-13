@@ -152,6 +152,18 @@ const STR = {
     age_unknown: "brak znacznika czasu",
     rooms_live_cap: "Steruje",
     flags_cap: "Flagi",
+    flag_legend_title: "Flagi — stan zabezpieczeń",
+    flag_legend_info:
+      "Wszystkie flagi diagnostyczne. Wyszarzone są nieaktywne; zapalone (w kolorze) " +
+      "zadziałały w co najmniej jednym pokoju. Kliknij ikonę „i” przy fladze po pełne " +
+      "objaśnienie. Pełny słownik jest też w instrukcji (docs/INSTRUKCJA.md §12).",
+    flag_grp_safety: "Bezpieczeństwo (S1–S6)",
+    flag_grp_assist: "Wspomaganie (split)",
+    flag_grp_config: "Konfiguracja / stan",
+    flag_grp_other: "Pozostałe",
+    flag_active_in: "Aktywna w: ",
+    flag_none_active: "Brak aktywnych flag",
+    flag_desc_unknown: "Nowa lub nieopisana flaga — patrz instrukcja (docs/INSTRUKCJA.md §12).",
     dew_cap: "Bezpieczny punkt rosy",
     home_cap: "Temperatura domu",
     mode_cap: "Tryb",
@@ -623,6 +635,18 @@ const STR = {
     age_unknown: "no timestamp",
     rooms_live_cap: "Live",
     flags_cap: "Flags",
+    flag_legend_title: "Flags — protection status",
+    flag_legend_info:
+      "Every diagnostic flag. Dimmed ones are inactive; lit (coloured) ones have fired in " +
+      "at least one room. Click the info icon next to a flag for the full explanation. The " +
+      "full dictionary is also in the manual (docs/INSTRUKCJA.md §12).",
+    flag_grp_safety: "Safety (S1–S6)",
+    flag_grp_assist: "Assist (split)",
+    flag_grp_config: "Configuration / state",
+    flag_grp_other: "Other",
+    flag_active_in: "Active in: ",
+    flag_none_active: "No active flags",
+    flag_desc_unknown: "New or undocumented flag — see the manual (docs/INSTRUKCJA.md §12).",
     dew_cap: "Safe dew point",
     home_cap: "Home temperature",
     mode_cap: "Mode",
@@ -1089,99 +1113,289 @@ const STR = {
 };
 
 /**
- * Localised, severity-tagged labels for controller flag codes.
+ * The single flag registry — one source of truth for every diagnostic flag.
  *
- * Codes mirror the exact strings the report carries: the room-controller
- * flags (`sensor_lost`, `s2_throttle` — the graduated local dew throttle,
- * split from the hard rule 2026-07-12 — `rh_stale_gated`,
- * `fast_source_cannot_cool`, `fast_source_min_runtime`,
- * `fast_source_group_conflict`, `cooling_disabled`, `unknown_room`,
- * `controller_error`, `fast_source_mismatch`), the adapter-stamped
- * `valve_mismatch` (persistent command-vs-feedback divergence), plus the
- * safety-rule names merged into the report
- * (`s1_floor_overheat`, `s2_condensation`, `s3_emergency_heat`,
- * `s4_emergency_cool`, `s5_watchdog`). The report booleans `saturated` /
- * `valve_floor_applied` are rendered from their own STR keys in the decision
- * view, never through this map. Unknown codes fall back to the raw string at
- * `warn` severity. `sev` drives the room status dot.
+ * Codes mirror the exact strings the report carries: the safety-rule names
+ * merged into the report (`s1_floor_overheat`, `s2_condensation`,
+ * `s3_emergency_heat`, `s4_emergency_cool`, `s5_watchdog`) and the S6
+ * watchdog (`loop_no_flow`, `loop_stuck_open`, `actuation_test_running`,
+ * `actuation_test_failed`); the room-controller flags (`s2_throttle` — the
+ * graduated local dew throttle, split from the hard rule 2026-07-12 —
+ * `rh_stale_gated`, `fast_source_*`, `cooling_disabled`, `unknown_room`,
+ * `controller_error`, `sensor_lost`); and the adapter-stamped `valve_mismatch`
+ * (persistent command-vs-feedback divergence).
+ *
+ * Each entry carries: `pl`/`en` (short label), `sev` (drives the room status
+ * dot + chip colour), `sx` (safety-rule code `"S1".."S6"` or `null`), `group`
+ * (`"safety"|"assist"|"config"` — the annunciator bucket), and `descPl`/`descEn`
+ * (the full "i"-tooltip explanation). The flag annunciator, the severity
+ * roll-up and the detail chips all render FROM this map, so **adding a flag is
+ * one entry here** and it appears everywhere; a live code missing from the map
+ * still renders (raw label, `warn`, group "other") via the fallbacks below.
+ *
+ * The report booleans `saturated` / `valve_floor_applied` are rendered from
+ * their own STR keys in the decision view, never through this map.
+ *
+ * Order is logical (S1→S6, then assist, then config) so the annunciator can
+ * iterate `Object.entries()` without a separate sort table.
  */
 const FLAG_LABELS = {
-  sensor_lost: { pl: "Utrata czujnika", en: "Sensor lost", sev: "problem" },
-  s2_condensation: { pl: "Ryzyko kondensacji", en: "Condensation risk", sev: "problem" },
+  s1_floor_overheat: {
+    pl: "Przegrzanie podłogi",
+    en: "Floor overheat",
+    sev: "problem", sx: "S1", group: "safety",
+    descPl:
+      "Zabezpieczenie przed przegrzaniem podłogi: woda zasilająca za gorąca " +
+      "(>40 °C) → zawór zamknięty aż ostygnie. Sprawdź krzywą grzania pompy / " +
+      "temperaturę zasilania.",
+    descEn:
+      "Floor-overheat protection: supply water too hot (>40 °C) → valve closed " +
+      "until it cools. Check the heat-pump heating curve / supply temperature.",
+  },
+  s2_condensation: {
+    pl: "Ryzyko kondensacji",
+    en: "Condensation risk",
+    sev: "problem", sx: "S2", group: "safety",
+    descPl:
+      "Twardy bezpiecznik kondensacji: zasilanie osiągnęło punkt rosy pokoju → " +
+      "zawór chłodzenia zamknięty. Sprawdź wilgotność i temperaturę wody " +
+      "chłodniczej / globalny bezpieczny punkt rosy.",
+    descEn:
+      "Condensation backstop: supply reached the room dew point → cooling valve " +
+      "closed. Check humidity and the chilled-water temperature / global safe " +
+      "dew point.",
+  },
   s2_throttle: {
     pl: "Dławienie przy punkcie rosy",
     en: "Dew-point throttling",
-    sev: "warn",
+    sev: "warn", sx: "S2", group: "safety",
+    descPl:
+      "Dławienie chłodzenia — zasilanie zbliża się do punktu rosy, przepływ " +
+      "<100 %. Normalne w wilgotne dni; jeśli się utrzymuje, podnieś limit wody " +
+      "chłodniczej lub osusz powietrze.",
+    descEn:
+      "Cooling throttled — supply approaching the dew point, flow <100 %. Normal " +
+      "on humid days; if persistent, raise the chilled-water limit or dehumidify.",
   },
   rh_stale_gated: {
     pl: "Nieświeża wilgotność (+1 K marginesu)",
     en: "Stale humidity (+1 K margin)",
-    sev: "warn",
+    sev: "warn", sx: "S2", group: "safety",
+    descPl:
+      "Odczyt wilgotności nieświeży (60–120 min) → punkt rosy zawyżony o max " +
+      "+1 K (ostrożnie). Sprawdź czujnik wilgotności; po 120 min pokój wypada z " +
+      "ochron przeciwrosowych.",
+    descEn:
+      "Humidity reading stale (60–120 min) → dew point padded by up to +1 K " +
+      "(conservative). Check the humidity sensor; after 120 min the room drops " +
+      "out of the dew-point protections.",
   },
-  fast_source_group_conflict: {
-    pl: "Konflikt kierunków na wspólnym agregacie",
-    en: "Direction conflict on shared outdoor unit",
-    sev: "warn",
+  s3_emergency_heat: {
+    pl: "Awaryjne grzanie",
+    en: "Emergency heat",
+    sev: "problem", sx: "S3", group: "safety",
+    descPl:
+      "Awaryjne grzanie: pokój mocno wychłodzony (<5 °C) → wymuszone grzanie " +
+      "wszystkimi źródłami. Sprawdź przyczynę (otwarte okno? awaria?).",
+    descEn:
+      "Emergency heat: room badly under-heated (<5 °C) → forced heating from " +
+      "every source. Investigate the cause (open window? fault?).",
   },
-  s1_floor_overheat: { pl: "Przegrzanie podłogi", en: "Floor overheat", sev: "problem" },
-  s3_emergency_heat: { pl: "Awaryjne grzanie", en: "Emergency heat", sev: "problem" },
-  s4_emergency_cool: { pl: "Awaryjne chłodzenie", en: "Emergency cooling", sev: "problem" },
-  s5_watchdog: { pl: "Watchdog", en: "Watchdog", sev: "problem" },
-  unknown_room: { pl: "Brak konfiguracji", en: "Unknown room", sev: "problem" },
-  controller_error: { pl: "Błąd regulatora", en: "Controller error", sev: "problem" },
-  valve_mismatch: {
-    pl: "Zawór nie wykonuje komend",
-    en: "Valve not following commands",
-    sev: "problem",
+  s4_emergency_cool: {
+    pl: "Awaryjne chłodzenie",
+    en: "Emergency cooling",
+    sev: "problem", sx: "S4", group: "safety",
+    descPl:
+      "Awaryjne chłodzenie: pokój mocno przegrzany (>35 °C) → wymuszone " +
+      "chłodzenie. Sprawdź źródło ciepła (słońce? awaria?).",
+    descEn:
+      "Emergency cool: room badly overheated (>35 °C) → forced cooling. " +
+      "Investigate the heat source (sun? fault?).",
   },
-  fast_source_mismatch: {
-    pl: "Wspomaganie w innym stanie niż komenda",
-    en: "Assist state differs from command",
-    sev: "warn",
-  },
-  fast_source_cannot_cool: {
-    pl: "Wspomaganie nie chłodzi",
-    en: "Assist can't cool",
-    sev: "warn",
-  },
-  fast_source_min_runtime: {
-    pl: "Wspomaganie: blokada min. czasu pracy",
-    en: "Assist: min-runtime lock",
-    sev: "warn",
-  },
-  fast_source_quiet_hours: {
-    pl: "Ciche godziny wspomagania",
-    en: "Assist quiet hours",
-    sev: "ok",
-  },
-  cooling_disabled: {
-    pl: "Chłodzenie wyłączone w tym pokoju",
-    en: "Cooling disabled in this room",
-    sev: "warn",
+  s5_watchdog: {
+    pl: "Watchdog",
+    en: "Watchdog",
+    sev: "problem", sx: "S5", group: "safety",
+    descPl:
+      "Brak świeżych danych z pokoju >15 min → neutralna pozycja zaworu + alarm. " +
+      "Znika po 5 min ciągłych świeżych danych.",
+    descEn:
+      "No fresh room data for >15 min → neutral valve position + alarm. Clears " +
+      "after 5 min of continuous fresh data.",
   },
   loop_no_flow: {
-    pl: "Brak przepływu w pętli (S6)",
-    en: "Loop no flow (S6)",
-    sev: "alarm",
+    pl: "Brak przepływu w pętli",
+    en: "Loop no flow",
+    sev: "alarm", sx: "S6", group: "safety",
+    descPl:
+      "Zawór długo otwarty, a sondy pętli nie widzą przepływu wody → integrator " +
+      "zamrożony, zapala się encja „usterka przepływu”. Sprawdź sterownik " +
+      "zaworu / siłownik / rotametry rozdzielacza.",
+    descEn:
+      "Valve open a long time but the loop probes see no water flow → the " +
+      "integrator freezes and the flow-fault entity turns on. Check the valve " +
+      "controller / actuator / manifold rotameters.",
   },
   loop_stuck_open: {
-    pl: "Pętla nie domyka (S6)",
-    en: "Loop stuck open (S6)",
-    sev: "alarm",
+    pl: "Pętla nie domyka",
+    en: "Loop stuck open",
+    sev: "alarm", sx: "S6", group: "safety",
+    descPl:
+      "Zawór zadany na 0, ale pętla dalej niesie wodę od strony źródła (nie " +
+      "domyka). W chłodzeniu ta pętla liczy się do bezpiecznego punktu rosy. " +
+      "Sprawdź, czy siłownik domyka.",
+    descEn:
+      "Valve commanded to 0 but the loop still carries source-side water (won't " +
+      "close). In cooling this loop counts toward the safe dew point. Check that " +
+      "the actuator fully closes.",
   },
   actuation_test_running: {
     pl: "Trwa test aktuacji",
     en: "Actuation test running",
-    sev: "ok",
+    sev: "ok", sx: "S6", group: "safety",
+    descPl:
+      "Trwa ręczny test aktuacji (zawór celowo na 100 %). Informacyjnie — " +
+      "poczekaj lub anuluj.",
+    descEn:
+      "A manual actuation self-test is running (valve deliberately at 100 %). " +
+      "Informational — wait or cancel.",
   },
   actuation_test_failed: {
     pl: "Test aktuacji niezaliczony",
     en: "Actuation test failed",
-    sev: "alarm",
+    sev: "alarm", sx: "S6", group: "safety",
+    descPl:
+      "Test aktuacji nie przeszedł — pętla nie odpowiedziała hydraulicznie na " +
+      "pełne otwarcie. Sprawdź sterownik / siłownik / przepływ tej pętli.",
+    descEn:
+      "Actuation self-test failed — the loop did not respond hydraulically to " +
+      "full open. Check the controller / actuator / flow of that loop.",
+  },
+  fast_source_mismatch: {
+    pl: "Wspomaganie w innym stanie niż komenda",
+    en: "Assist state differs from command",
+    sev: "warn", sx: null, group: "assist",
+    descPl:
+      "Split jest w innym stanie niż zadany (np. zmieniony pilotem). Nadpisany " +
+      "przy najbliższym re-assert (~45 min); dla trwałej ręcznej kontroli ustaw " +
+      "pokój na WYŁ.",
+    descEn:
+      "The split is in a different state than commanded (e.g. changed by remote). " +
+      "Overwritten on the next re-assert (~45 min); for permanent manual control " +
+      "set the room to OFF.",
+  },
+  fast_source_min_runtime: {
+    pl: "Wspomaganie: blokada min. czasu pracy",
+    en: "Assist: min-runtime lock",
+    sev: "warn", sx: null, group: "assist",
+    descPl:
+      "Blokada minimalnego czasu pracy/postoju — wspomaganie nie może jeszcze " +
+      "zmienić stanu (ochrona sprężarki). Nic nie trzeba robić; licznik w " +
+      "zakładce Wspomaganie.",
+    descEn:
+      "Min ON/OFF dwell lock — assist can't change state yet (compressor " +
+      "protection). Nothing to do; the timer is shown in the Assist tab.",
+  },
+  fast_source_quiet_hours: {
+    pl: "Ciche godziny wspomagania",
+    en: "Assist quiet hours",
+    sev: "ok", sx: null, group: "assist",
+    descPl:
+      "Pokój poza dozwolonym oknem wspomagania; split się nie załączy (już " +
+      "pracujący dokończy min. czas). Informacyjnie; okno zmienisz w " +
+      "konfiguracji pokoju.",
+    descEn:
+      "Room is outside its allowed assist window; the split won't engage (a " +
+      "running one finishes its min-ON). Informational; edit the window in the " +
+      "room config.",
+  },
+  fast_source_group_conflict: {
+    pl: "Konflikt kierunków na wspólnym agregacie",
+    en: "Direction conflict on shared outdoor unit",
+    sev: "warn", sx: null, group: "assist",
+    descPl:
+      "Pokój przegrał arbitraż kierunku na wspólnym agregacie multisplit → split " +
+      "wymuszony OFF. Wróci, gdy kierunek grupy się zmieni.",
+    descEn:
+      "The room lost the direction arbitration on a shared multisplit outdoor " +
+      "unit → the split is forced OFF. Returns when the group's direction changes.",
+  },
+  fast_source_cannot_cool: {
+    pl: "Wspomaganie nie chłodzi",
+    en: "Assist can't cool",
+    sev: "warn", sx: null, group: "assist",
+    descPl:
+      "Pokój chce chłodzić, ale jego szybkie źródło to grzejnik (nie chłodzi). " +
+      "Informacyjnie.",
+    descEn:
+      "The room wants cooling but its fast source is a heater (cannot cool). " +
+      "Informational.",
+  },
+  sensor_lost: {
+    pl: "Utrata czujnika",
+    en: "Sensor lost",
+    sev: "problem", sx: null, group: "config",
+    descPl:
+      "Utrata czujnika temperatury (brak / niewiarygodny / starszy niż limit). " +
+      "Grzanie trzyma ostatnią zdrową pozycję zaworu, chłodzenie parkuje na 0, " +
+      "split OFF. Wraca po świeżym poprawnym odczycie.",
+    descEn:
+      "Temperature sensor lost (missing / implausible / older than the staleness " +
+      "limit). Heating holds the last healthy valve, cooling parks at 0, split " +
+      "OFF. Recovers on a fresh valid reading.",
+  },
+  cooling_disabled: {
+    pl: "Chłodzenie wyłączone w tym pokoju",
+    en: "Cooling disabled in this room",
+    sev: "warn", sx: null, group: "config",
+    descPl:
+      "Chłodzenie wyłączone dla tego pokoju w konfiguracji — pomijany w trybie " +
+      "chłodzenia. Celowe; zmień w opcjach pokoju, by dopuścić chłodzenie.",
+    descEn:
+      "Cooling is disabled for this room in the config — it is skipped in cooling " +
+      "mode. Intentional; change it in the room options to allow cooling.",
+  },
+  unknown_room: {
+    pl: "Brak konfiguracji",
+    en: "Unknown room",
+    sev: "problem", sx: null, group: "config",
+    descPl:
+      "Pokój bez konfiguracji regulatora (przejściowo po zmianach konfiguracji). " +
+      "Przeładuj integrację; jeśli się utrzymuje, usuń i dodaj pokój ponownie.",
+    descEn:
+      "Room has no controller config (transient after config changes). Reload the " +
+      "integration; if it persists, remove and re-add the room.",
+  },
+  controller_error: {
+    pl: "Błąd regulatora",
+    en: "Controller error",
+    sev: "problem", sx: null, group: "config",
+    descPl:
+      "Wyjątek w regulatorze pokoju → bezpieczne wyhamowanie (grzanie trzyma " +
+      "zawór, inaczej 0; split OFF). Sprawdź logi HA i zgłoś.",
+    descEn:
+      "Exception inside the room controller → safe degrade (heating holds the " +
+      "valve, else 0; split OFF). Check the HA logs and report.",
+  },
+  valve_mismatch: {
+    pl: "Zawór nie wykonuje komend",
+    en: "Valve not following commands",
+    sev: "problem", sx: null, group: "config",
+    descPl:
+      "Siłownik od ≥3 cykli raportuje pozycję inną niż komenda. Sprawdź siłownik " +
+      "/ przekaźnik / encję; porównaj Komenda vs Sprzężenie w zakładce Zawory.",
+    descEn:
+      "The actuator has reported a position different from the command for ≥3 " +
+      "cycles. Check the actuator / relay / entity; compare Command vs Feedback " +
+      "in the Valves tab.",
   },
 };
 
-const SEV_RANK = { ok: 0, warn: 1, problem: 2 };
+/** Group display order + fallback bucket for codes missing a `group`. */
+const FLAG_GROUP_ORDER = ["safety", "assist", "config"];
+const FLAG_GROUP_FALLBACK = "other";
+
+const SEV_RANK = { ok: 0, warn: 1, problem: 2, alarm: 3 };
 
 /**
  * Tuning-tab knob groups (A4, 2026-07-12): the Tuning tab renders a vertical
@@ -1768,6 +1982,27 @@ class TortoiseUfhPanel extends HTMLElement {
   _flagSev(code) {
     const meta = FLAG_LABELS[code];
     return meta ? meta.sev : "warn";
+  }
+
+  /** Full "i"-tooltip explanation for a flag (localised); generic fallback. */
+  _flagDesc(code) {
+    const meta = FLAG_LABELS[code];
+    if (meta) {
+      return (this._lang === "pl" ? meta.descPl : meta.descEn) || meta.descEn || "";
+    }
+    return this._t("flag_desc_unknown");
+  }
+
+  /** Safety-rule code (`"S1".."S6"`) for a flag, or `null`. */
+  _flagSx(code) {
+    const meta = FLAG_LABELS[code];
+    return meta && meta.sx ? meta.sx : null;
+  }
+
+  /** Annunciator bucket for a flag; unknown codes fall into the "other" group. */
+  _flagGroup(code) {
+    const meta = FLAG_LABELS[code];
+    return meta && meta.group ? meta.group : FLAG_GROUP_FALLBACK;
   }
 
   _modeLabel(mode) {
@@ -2410,7 +2645,12 @@ class TortoiseUfhPanel extends HTMLElement {
     for (const f of flags) {
       rank = Math.max(rank, SEV_RANK[this._flagSev(f)] || 0);
     }
-    return rank >= 2 ? "problem" : rank === 1 ? "warn" : "ok";
+    return this._sevName(rank);
+  }
+
+  /** Map a SEV_RANK integer back to its severity name. */
+  _sevName(rank) {
+    return rank >= 3 ? "alarm" : rank === 2 ? "problem" : rank === 1 ? "warn" : "ok";
   }
 
   /** Coerce any control-state value to one of `ROOM_STATES` (default off). */
@@ -2766,6 +3006,7 @@ class TortoiseUfhPanel extends HTMLElement {
       tbody: roomsSection.tbody,
       empty: roomsSection.empty,
       tableWrap: roomsSection.wrapEl,
+      legend: roomsSection.legend,
       detail,
       layout,
     };
@@ -3016,6 +3257,7 @@ class TortoiseUfhPanel extends HTMLElement {
     }
 
     this._updateHero();
+    this._updateFlagLegend();
     this._syncTabs();
     this._syncDetail();
   }
@@ -3076,9 +3318,19 @@ class TortoiseUfhPanel extends HTMLElement {
     const liveN = this._view.filter((r) => r.state === STATE_LIVE).length;
     H.liveVal.textContent = total ? `${liveN}/${total}` : "—";
 
-    const flagN = this._view.reduce((s, r) => s + r.flags.length, 0);
-    H.flagsVal.textContent = String(flagN);
-    H.flagsMetric.classList.toggle("has", flagN > 0);
+    // Compact, severity-aware summary: how many DISTINCT flags are active and
+    // the worst severity among them (the annunciator below breaks them down).
+    const activeFlags = new Set();
+    let flagRank = 0;
+    for (const r of this._view) {
+      for (const code of r.flags) {
+        activeFlags.add(code);
+        flagRank = Math.max(flagRank, SEV_RANK[this._flagSev(code)] || 0);
+      }
+    }
+    H.flagsVal.textContent = String(activeFlags.size);
+    H.flagsMetric.className =
+      "metric" + (activeFlags.size ? " sev-" + this._sevName(flagRank) : "");
 
     // Prefer live.mode: it is refreshed on every poll, whereas config.mode is
     // only re-fetched on writes / initial load (so it can lag an external
@@ -3187,9 +3439,172 @@ class TortoiseUfhPanel extends HTMLElement {
       role: "tabpanel",
       dataset: { tab: "rooms" },
     });
+    // The flag annunciator sits above the table: it explains everything the
+    // rows can flag, always visible so the whole flag vocabulary is legible.
+    const legend = this._buildFlagLegend();
+    el.appendChild(legend.el);
     el.appendChild(empty);
     el.appendChild(wrapEl);
-    return { el, tbody, empty, wrapEl };
+    return { el, tbody, empty, wrapEl, legend };
+  }
+
+  /**
+   * Build the flag annunciator once, driven ENTIRELY by `FLAG_LABELS`: every
+   * registered flag becomes a dimmed tile (grouped, SX-badged, with an "i"
+   * explanation) that lights up in `_updateFlagLegend` when a room raises it.
+   * Adding a flag to the registry is enough — no edit is needed here. Live
+   * codes missing from the registry are materialised on the fly into the
+   * "other" group at update time, so nothing is ever invisible.
+   */
+  _buildFlagLegend() {
+    const L = { tiles: {}, otherTiles: {}, groupEls: {} };
+
+    L.summary = h("span", { class: "flag-legend-summary" });
+    const head = h("div", { class: "flag-legend-head" }, [
+      h("span", { class: "flag-legend-title", text: this._t("flag_legend_title") }),
+      this._infoIcon("flag_legend_info"),
+      L.summary,
+    ]);
+
+    // Bucket the registry by group, preserving registry (logical) order.
+    const buckets = {};
+    for (const code of Object.keys(FLAG_LABELS)) {
+      const g = this._flagGroup(code);
+      (buckets[g] = buckets[g] || []).push(code);
+    }
+    const groups = [
+      ...FLAG_GROUP_ORDER,
+      ...Object.keys(buckets).filter((g) => !FLAG_GROUP_ORDER.includes(g)),
+    ];
+    if (!groups.includes(FLAG_GROUP_FALLBACK)) {
+      groups.push(FLAG_GROUP_FALLBACK);
+    }
+
+    const groupsWrap = h("div", { class: "flag-legend-groups" });
+    for (const g of groups) {
+      const tilesEl = h("div", { class: "flag-tiles" });
+      for (const code of buckets[g] || []) {
+        const tile = this._buildFlagTile(code);
+        L.tiles[code] = tile;
+        tilesEl.appendChild(tile.el);
+      }
+      const grpEl = h("div", { class: "flag-grp", dataset: { group: g } }, [
+        h("div", {
+          class: "flag-grp-title",
+          text: this._t("flag_grp_" + g) || g,
+        }),
+        tilesEl,
+      ]);
+      // The "other" group holds only runtime-materialised tiles; hide it until
+      // an unknown flag actually fires.
+      if (g === FLAG_GROUP_FALLBACK && !(buckets[g] || []).length) {
+        grpEl.style.display = "none";
+      }
+      L.groupEls[g] = { el: grpEl, tilesEl };
+      groupsWrap.appendChild(grpEl);
+    }
+
+    L.el = h("section", { class: "flag-legend", "aria-label": this._t("flag_legend_title") }, [
+      head,
+      groupsWrap,
+    ]);
+    this._legend = L;
+    return L;
+  }
+
+  /** A single annunciator tile (works for registry AND unknown codes). */
+  _buildFlagTile(code) {
+    const sx = this._flagSx(code);
+    const children = [];
+    if (sx) {
+      children.push(h("span", { class: "flag-sx", text: sx }));
+    }
+    children.push(h("span", { class: "flag-tile-label", text: this._flagLabel(code) }));
+    const countEl = h("span", { class: "flag-count" });
+    children.push(countEl);
+    // Live getter so the bubble tracks the current language.
+    children.push(this._infoBtn(() => this._flagDesc(code), this._t("tooltip_show")));
+    const el = h(
+      "span",
+      { class: "flag-tile is-off", dataset: { code } },
+      children,
+    );
+    return { el, countEl };
+  }
+
+  /** Light up the tiles for flags active in any room; dim the rest. */
+  _updateFlagLegend() {
+    const L = this._legend;
+    if (!L) {
+      return;
+    }
+    // code -> [room names], in stable (sorted) view order.
+    const active = new Map();
+    for (const r of this._view) {
+      for (const code of r.flags) {
+        if (!active.has(code)) {
+          active.set(code, []);
+        }
+        active.get(code).push(r.name);
+      }
+    }
+
+    const applyTile = (code, tile) => {
+      const rooms = active.get(code);
+      const on = !!rooms;
+      tile.el.classList.toggle("is-on", on);
+      tile.el.classList.toggle("is-off", !on);
+      tile.el.classList.remove("sev-ok", "sev-warn", "sev-problem", "sev-alarm");
+      if (on) {
+        tile.el.classList.add("sev-" + this._flagSev(code));
+        tile.countEl.textContent = rooms.length > 1 ? "×" + rooms.length : "";
+        tile.el.title = this._t("flag_active_in") + rooms.join(", ");
+      } else {
+        tile.countEl.textContent = "";
+        tile.el.title = "";
+      }
+    };
+
+    for (const code of Object.keys(L.tiles)) {
+      applyTile(code, L.tiles[code]);
+    }
+
+    // Unknown (unregistered) active codes → materialise/refresh in "other".
+    const otherGroup = L.groupEls[FLAG_GROUP_FALLBACK];
+    let otherCount = 0;
+    for (const [code, rooms] of active) {
+      if (code in FLAG_LABELS) {
+        continue;
+      }
+      let tile = L.otherTiles[code];
+      if (!tile) {
+        tile = this._buildFlagTile(code);
+        L.otherTiles[code] = tile;
+        otherGroup.tilesEl.appendChild(tile.el);
+      }
+      applyTile(code, tile);
+      otherCount += 1;
+      void rooms;
+    }
+    // Drop stale unknown tiles that no longer fire (keep the group tidy).
+    for (const code of Object.keys(L.otherTiles)) {
+      if (!active.has(code)) {
+        L.otherTiles[code].el.remove();
+        delete L.otherTiles[code];
+      }
+    }
+    if (otherGroup) {
+      otherGroup.el.style.display = otherCount ? "" : "none";
+    }
+
+    // Head summary: worst severity + active count (mirrors the hero metric).
+    const activeCount = active.size;
+    let rank = 0;
+    for (const code of active.keys()) {
+      rank = Math.max(rank, SEV_RANK[this._flagSev(code)] || 0);
+    }
+    L.summary.textContent = activeCount ? String(activeCount) : this._t("flag_none_active");
+    L.summary.className = "flag-legend-summary" + (activeCount ? " sev-" + this._sevName(rank) : "");
   }
 
   _reconcileTable() {
@@ -3411,6 +3826,7 @@ class TortoiseUfhPanel extends HTMLElement {
     return h("span", {
       class: "chip chip-" + this._flagSev(code),
       text: this._flagLabel(code),
+      title: this._flagDesc(code),
     });
   }
 
@@ -5973,13 +6389,18 @@ button { font-family: inherit; cursor: pointer; }
 .pill-ok .pill-dot { background: var(--t-ok); }
 .pill-warn .pill-dot { background: var(--t-warn); }
 .pill-problem .pill-dot { background: var(--t-error); }
+.pill-alarm .pill-dot { background: var(--t-error); }
 .pill-ok { color: var(--t-ok); }
 .pill-warn { color: var(--t-warn); }
 .pill-problem { color: var(--t-error); }
+.pill-alarm { color: var(--t-error); }
 .metric { display: flex; flex-direction: column; line-height: 1.15; }
 .metric-val { font-size: 18px; font-weight: 600; }
-.metric-cap { font-size: 11px; color: var(--t-muted); text-transform: uppercase; letter-spacing: .04em; }
-.metric.has .metric-val { color: var(--t-warn); }
+.metric-cap { font-size: 11px; color: var(--t-muted); letter-spacing: .02em; }
+.metric.sev-ok .metric-val { color: var(--t-ok); }
+.metric.sev-warn .metric-val { color: var(--t-warn); }
+.metric.sev-problem .metric-val { color: var(--t-error); }
+.metric.sev-alarm .metric-val { color: var(--t-error); }
 .chip-dew {
   display: inline-flex; flex-direction: column; line-height: 1.15;
   padding: 4px 12px; border-radius: 8px;
@@ -5990,7 +6411,7 @@ button { font-family: inherit; cursor: pointer; }
 .chip-dew .metric-val { font-size: 15px; color: var(--t-info); }
 
 .ctl { display: flex; flex-direction: column; gap: 4px; }
-.ctl-cap { font-size: 11px; color: var(--t-muted); text-transform: uppercase; letter-spacing: .04em; }
+.ctl-cap { font-size: 11px; color: var(--t-muted); letter-spacing: .02em; }
 .stepper {
   display: inline-flex; align-items: center; gap: 8px;
   border: 1px solid var(--t-line); border-radius: 8px; padding: 2px 6px; background: var(--t-card);
@@ -6167,6 +6588,7 @@ button { font-family: inherit; cursor: pointer; }
 .dot.sev-ok { background: var(--t-ok); }
 .dot.sev-warn { background: var(--t-warn); }
 .dot.sev-problem { background: var(--t-error); }
+.dot.sev-alarm { background: var(--t-error); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t-error) 30%, transparent); }
 .name-cell { display: flex; align-items: center; gap: 8px; }
 .card-name { font-weight: 600; font-size: 14px; }
 .cell-sub { font-size: 11px; color: var(--t-muted); }
@@ -6188,6 +6610,56 @@ button { font-family: inherit; cursor: pointer; }
 .chip { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: var(--t-chip); color: var(--t-fg); }
 .chip-warn { background: color-mix(in srgb, var(--t-warn) 20%, transparent); color: var(--t-warn); }
 .chip-problem { background: color-mix(in srgb, var(--t-error) 18%, transparent); color: var(--t-error); }
+.chip-alarm { background: color-mix(in srgb, var(--t-error) 30%, transparent); color: var(--t-error); font-weight: 600; }
+
+/* Flag annunciator (Rooms tab): every flag, dimmed until a room raises it. */
+.flag-legend {
+  border: 1px solid var(--t-line); border-radius: var(--t-radius);
+  background: var(--t-card); padding: 12px 14px; margin-bottom: 14px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.flag-legend-head { display: flex; align-items: center; gap: 6px; }
+.flag-legend-title { font-size: 13px; font-weight: 700; }
+.flag-legend-summary {
+  margin-left: auto; font-size: 12px; font-weight: 600; color: var(--t-muted);
+  padding: 2px 10px; border-radius: 999px; background: var(--t-chip); white-space: nowrap;
+}
+.flag-legend-summary.sev-ok { color: var(--t-ok); background: color-mix(in srgb, var(--t-ok) 16%, transparent); }
+.flag-legend-summary.sev-warn { color: var(--t-warn); background: color-mix(in srgb, var(--t-warn) 16%, transparent); }
+.flag-legend-summary.sev-problem { color: var(--t-error); background: color-mix(in srgb, var(--t-error) 16%, transparent); }
+.flag-legend-summary.sev-alarm { color: var(--t-error); background: color-mix(in srgb, var(--t-error) 26%, transparent); }
+.flag-legend-groups { display: flex; flex-direction: column; gap: 10px; }
+.flag-grp { display: flex; flex-direction: column; gap: 6px; }
+.flag-grp-title { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--t-muted); }
+.flag-tiles { display: flex; flex-wrap: wrap; gap: 8px; }
+.flag-tile {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px 4px 6px; border-radius: 8px;
+  border: 1px solid var(--t-line); background: var(--t-bg);
+  font-size: 12px; line-height: 1.2;
+  transition: opacity .15s ease, border-color .15s ease, background .15s ease;
+}
+.flag-tile.is-off { opacity: .45; }
+.flag-tile-label { color: var(--t-fg); }
+.flag-sx {
+  font-size: 10px; font-weight: 700; letter-spacing: .02em;
+  padding: 1px 5px; border-radius: 5px; background: var(--t-chip); color: var(--t-muted);
+}
+.flag-count { font-size: 11px; font-weight: 700; color: inherit; }
+.flag-tile .info-btn { margin-left: 0; }
+.flag-tile.is-on { opacity: 1; }
+.flag-tile.is-on.sev-ok { border-color: var(--t-ok); background: color-mix(in srgb, var(--t-ok) 12%, transparent); }
+.flag-tile.is-on.sev-ok .flag-sx { background: var(--t-ok); color: var(--t-on-primary); }
+.flag-tile.is-on.sev-ok .flag-tile-label, .flag-tile.is-on.sev-ok .flag-count { color: var(--t-ok); }
+.flag-tile.is-on.sev-warn { border-color: var(--t-warn); background: color-mix(in srgb, var(--t-warn) 14%, transparent); }
+.flag-tile.is-on.sev-warn .flag-sx { background: var(--t-warn); color: var(--t-on-primary); }
+.flag-tile.is-on.sev-warn .flag-tile-label, .flag-tile.is-on.sev-warn .flag-count { color: var(--t-warn); }
+.flag-tile.is-on.sev-problem { border-color: var(--t-error); background: color-mix(in srgb, var(--t-error) 14%, transparent); }
+.flag-tile.is-on.sev-problem .flag-sx { background: var(--t-error); color: var(--t-on-primary); }
+.flag-tile.is-on.sev-problem .flag-tile-label, .flag-tile.is-on.sev-problem .flag-count { color: var(--t-error); }
+.flag-tile.is-on.sev-alarm { border-color: var(--t-error); background: color-mix(in srgb, var(--t-error) 22%, transparent); box-shadow: 0 0 0 1px var(--t-error); }
+.flag-tile.is-on.sev-alarm .flag-sx { background: var(--t-error); color: var(--t-on-primary); }
+.flag-tile.is-on.sev-alarm .flag-tile-label, .flag-tile.is-on.sev-alarm .flag-count { color: var(--t-error); font-weight: 700; }
 
 /* Valves + Assist tables (share the room-table look) */
 .valves-table, .assist-table { width: 100%; border-collapse: collapse; font-size: 13px; }
