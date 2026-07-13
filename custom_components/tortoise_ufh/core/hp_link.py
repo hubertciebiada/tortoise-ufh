@@ -38,6 +38,8 @@ Units: temperatures in degrees Celsius (``_c``); curve slope in K/K.
 
 from __future__ import annotations
 
+import math
+
 from .config import ControllerConfig
 from .models import Mode
 from .weather_comp import WeatherCompCurve
@@ -50,6 +52,7 @@ __all__ = [
     "dhw_option",
     "direction_option",
     "heating_curve",
+    "round_to_step_c",
 ]
 
 HEISHAMON_MODE_OPTIONS: tuple[str, ...] = (
@@ -190,6 +193,44 @@ def cooling_setpoint_c(base_c: float, safe_dew_c: float | None) -> float:
     if safe_dew_c is None:
         return base_c
     return max(base_c, safe_dew_c)
+
+
+def round_to_step_c(value_c: float, step_c: float) -> float:
+    """Quantize a water setpoint to the pump number entity's step grid.
+
+    Rounds to the NEAREST grid point (half rounds up), so the value written to
+    the pump lands exactly on its own resolution and its UI never shows a
+    curve/dew artefact like 27.35, and the entity does not silently re-quantize
+    it on the way in.
+
+    Owner decision (issue #5, 2026-07-13): plain round-to-nearest, deliberately
+    NOT ``ceil``/``floor``. The cooling setpoint is a dew-safety floor
+    (``max(base, safe_dew_c)``), and an earlier idea was to ``ceil`` it so
+    quantization could never dip below the floor. That was rejected: the floor
+    already carries the full ``dew_margin_k`` (2 K default) condensation buffer,
+    so ceiling would sacrifice cooling capacity to defend a margin that is
+    already generous. Round-to-nearest may surrender at most half a step of that
+    2 K buffer — an accepted trade. The heating setpoint (an upper comfort/
+    energy target, no condensation floor) uses the SAME single rule.
+
+    Quantizing to the entity's REAL ``step`` (not a hard-coded 0.5 K grid) is
+    the crux of the fix: with a 1 degC-step pump, rounding to 0.5 K first
+    produced 16.5, which the pump then floored to 16 — below the 16.56 floor.
+
+    A ``step_c`` of zero or below means "no grid" and ``value_c`` is returned
+    unchanged.
+
+    Args:
+        value_c: The raw water setpoint [degC].
+        step_c: The number entity's ``step`` attribute [degC / K].
+
+    Returns:
+        ``value_c`` snapped to the nearest multiple of ``step_c`` [degC], or
+        ``value_c`` unchanged when ``step_c <= 0``.
+    """
+    if step_c <= 0.0:
+        return value_c
+    return math.floor(value_c / step_c + 0.5) * step_c
 
 
 def heating_curve(config: ControllerConfig) -> WeatherCompCurve:

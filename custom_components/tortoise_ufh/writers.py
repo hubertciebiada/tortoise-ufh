@@ -21,6 +21,7 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from .core.hp_link import round_to_step_c
 from .core.models import FastSourceMode, Mode
 from .readers import is_valve_domain
 
@@ -69,6 +70,15 @@ period. Numerically equal to the coordinator's S8
 ``_VALVE_MISMATCH_TOLERANCE_PCT`` so the write path heals exactly the
 divergences S8 would flag. An ECHOING (lying) feedback channel never trips
 this trigger — that failure mode is the S6 hydraulic watchdog's job.
+"""
+
+_DEFAULT_HP_STEP_C: float = 1.0
+"""Fallback grid step for a heat-pump setpoint number entity [degC / K].
+
+Used only when the entity's own ``step`` attribute cannot be read (entity
+unavailable). Matches Home Assistant's own default number step and the common
+A2W pump resolution, so a rare missing-attribute read still lands the value on
+a plausible grid instead of writing a raw curve/dew artefact.
 """
 
 # FastSourceMode -> Home Assistant climate HVAC mode string.
@@ -352,14 +362,28 @@ class CommandWriter:
         pump is a slow device and Tortoise stays the owner without spamming
         it, self-healing after a manual change.
 
+        The value is quantized to the entity's OWN ``step`` (read live from its
+        attributes, falling back to :data:`_DEFAULT_HP_STEP_C`) with
+        round-to-nearest via :func:`~tortoise_ufh.core.hp_link.round_to_step_c`,
+        so it lands exactly on the pump's grid and the pump does not silently
+        re-quantize it downward (issue #5, 2026-07-13 — a 16.56 degC dew-safe
+        cooling target on a 1 degC-step pump used to be written as 16.5 and then
+        floored by the pump to 16, below the safe-dew floor). Round-to-nearest,
+        not ceil/floor: the 2 K dew margin already absorbs a half-step of play.
+
         Args:
             entity_id: The setpoint ``number`` entity id.
-            value_c: The setpoint to write [degC]. Rounded to the 0.5 K grid
-                pump number entities typically use, so the pump UI never
-                shows a curve/dew artefact like 27.35.
+            value_c: The setpoint to write [degC].
             threshold_k: Minimum change that triggers a fresh write [K].
         """
-        value_c = round(value_c * 2.0) / 2.0
+        step_c = _DEFAULT_HP_STEP_C
+        state = self._hass.states.get(entity_id)
+        if state is not None:
+            try:
+                step_c = float(state.attributes.get("step", _DEFAULT_HP_STEP_C))
+            except (TypeError, ValueError):
+                step_c = _DEFAULT_HP_STEP_C
+        value_c = round_to_step_c(value_c, step_c)
         cached = self._last_written_hp_setpoint.get(entity_id)
         now_monotonic = time.monotonic()
         if (

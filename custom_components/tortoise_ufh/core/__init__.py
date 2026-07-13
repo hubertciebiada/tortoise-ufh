@@ -64,6 +64,7 @@ from .hp_link import (
     dhw_option,
     direction_option,
     heating_curve,
+    round_to_step_c,
 )
 from .metrics import (
     SimMetrics,
@@ -121,7 +122,7 @@ from .weather import (
 )
 from .weather_comp import CoolingCompCurve, WeatherCompCurve
 
-__version__ = "0.10.1"
+__version__ = "0.10.2"
 
 __all__ = [
     "BUILDING_PROFILES",
@@ -205,6 +206,7 @@ __all__ = [
     "loop_power_with_valve",
     "modern_bungalow",
     "night_setback",
+    "round_to_step_c",
     "sensor_dropout",
     "solar_overshoot",
     "split_boost",

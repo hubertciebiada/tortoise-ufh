@@ -26,6 +26,7 @@ from custom_components.tortoise_ufh.core.hp_link import (
     dhw_option,
     direction_option,
     heating_curve,
+    round_to_step_c,
 )
 from custom_components.tortoise_ufh.core.models import Mode
 
@@ -159,6 +160,44 @@ class TestCoolingSetpoint:
     def test_dew_below_base_keeps_base(self) -> None:
         """A safe dew point below the base leaves the base in charge."""
         assert cooling_setpoint_c(18.0, 15.4) == pytest.approx(18.0)
+
+
+class TestRoundToStepC:
+    """round_to_step_c: quantize a water setpoint to the entity's step grid."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("value_c", "step_c", "expected"),
+        [
+            # Issue #5 reported case: 16.56 dew-safe target, 1 degC pump step.
+            # Round-to-nearest lands it at 17, above the 16.56 floor (NOT 16).
+            (16.56, 1.0, 17.0),
+            (16.5, 1.0, 17.0),  # exact half rounds UP
+            (16.4, 1.0, 16.0),  # nearest is 16 (accepted: dips into the 2 K margin)
+            (16.0, 1.0, 16.0),  # already on the grid -> unchanged
+            (16.01, 1.0, 16.0),  # nearest is still 16 (round, not ceil)
+            (27.35, 0.5, 27.5),  # 0.5 K grid: nearest is 27.5
+            (27.0, 0.5, 27.0),  # on grid -> unchanged
+            (27.24, 0.5, 27.0),  # below the half-way point of the 0.5 grid
+        ],
+    )
+    def test_round_to_nearest_grid_point(
+        self, value_c: float, step_c: float, expected: float
+    ) -> None:
+        """The value snaps to the nearest multiple of the step (half up)."""
+        assert round_to_step_c(value_c, step_c) == pytest.approx(expected)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("step_c", [0.0, -1.0])
+    def test_non_positive_step_returns_value_unchanged(self, step_c: float) -> None:
+        """A zero/negative step means 'no grid' and the value passes through."""
+        assert round_to_step_c(16.56, step_c) == pytest.approx(16.56)
+
+    @pytest.mark.unit
+    def test_reported_chain_lands_above_the_dew_floor(self) -> None:
+        """End-to-end issue #5: max(base, dew) then quantize stays >= the floor."""
+        target = cooling_setpoint_c(16.0, 16.56)  # -> 16.56
+        assert round_to_step_c(target, 1.0) == pytest.approx(17.0)
 
 
 class TestHeatingCurve:
