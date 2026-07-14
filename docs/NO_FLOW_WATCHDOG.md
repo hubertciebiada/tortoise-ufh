@@ -95,7 +95,7 @@ event — not scheduled.
 
 The Valves tab already shows per-loop ΔT — add a flow-health chip
 (`ok / no-flow?`) derived from A, and surface the new flags in the room
-detail and the flags dictionary in `docs/INSTRUKCJA.md`.
+detail and the flags dictionary in `docs/manual/pl.md`.
 
 ## Notes / constraints
 

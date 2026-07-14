@@ -1124,3 +1124,41 @@ flags (e.g. `fast_source_cannot_cool`) can migrate to it later without new machi
 vocabulary; `info` was added to `_VALID_FLAG_SEV` so the registry-completeness test admits the new
 tier. The class-reset list in `applyRow` gained `sev-info` so a row cannot retain a stale severity
 class. `-m unit` green.
+
+## 20. German (de) localization + pre-publication doc audit (2026-07-14, v0.12.0)
+
+> **Status: additive (i18n + docs).** No core change, no `RoomReport` field, no I/O-contract
+> change, no new tuning knob, no config migration. Prompted by a public-release readiness pass
+> (three read-only reviewers: privacy, i18n, docs-vs-code).
+
+**Readiness pass.** Before promoting the public repo, three auditors ran read-only. Privacy: clean —
+the real coordinates / email / user-paths / secrets are absent from the tree AND the full git
+history (no history rewrite needed); only the owner's own commit-author metadata and intentional
+attribution remain. i18n: EN/PL at parity, and — critically — the EN fallback is correct on every
+surface, so a non-`pl` locale already renders 100% English (no blanks / raw keys / Polish leak).
+Docs-vs-code: one real value drift (`valve_write_threshold_pct` documented `2.0` while the code and
+the doc's own changelog say `5.0`) plus three completeness gaps; the code itself was clean and THE
+ONE HARD RULE holds.
+
+**German added.** German (`de`) is now a third first-class language with English as the guaranteed
+fallback: `translations/de.json` (mirror of `en.json`), a `STR.de` block in the panel, `de`/`descDe`
+on every `FLAG_LABELS` entry, and — the load-bearing edit — `_resolveLang` maps a `de*` locale to
+`"de"` (without it `STR.de` is dead code and a German user still gets English). `_flagDesc` gained a
+`de` branch. `tests/unit/test_panel_i18n.py` now ENFORCES DE (STR.de ≡ STR.en; `de.json` in the
+JSON-parity quad; every knob/surface loop and the flag-registry completeness check include `de`), so
+DE can never silently drift out of parity. `strings.json` needs no DE variant (it is the English
+source; HA derives per-locale from `translations/*.json`).
+
+**Docs restructured.** The single top-level Polish-named `docs/INSTRUKCJA.md` was confusing for a
+multilingual project. The manual now lives in `docs/manual/` as per-language files (`pl.md`, `de.md`,
+plus an index `README.md`), section numbering kept consistent across languages so a "§N" reference
+resolves the same everywhere; every reference (panel strings, `NO_FLOW_WATCHDOG.md`) was repointed.
+The root `README.md` gained a language switcher (English page · Polish manual · German `README.de.md`);
+`README.de.md` is a full German landing page. English has no standalone manual yet — the README is
+its overview (a deliberate, revisitable choice; there is likewise no Polish README, so the switcher
+points each language at its best existing entry point).
+
+**Doc-currency fixes.** `ALGORITHM_SPEC.md` write-threshold `2.0`→`5.0`; README panel tabs `4`→`6`
+(Flags + Heat pump) plus a heat-pump-link / quiet-hours feature line; `INSTRUKCJA`/`pl.md` §6 gained
+the `flow_fault` binary sensor; `CLAUDE.md` "Four tabs"→"Six tabs". Merge gate green (unit,
+`mypy` core 22, ruff, format, `node --check`).

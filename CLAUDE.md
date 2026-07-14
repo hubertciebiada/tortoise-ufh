@@ -50,9 +50,9 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   specs (`CONTROLLER_NUMBER_KNOBS`) and `CONF_CONTROLLER` live in `const.py`. Imports the
   core via `.core`; is imported by nothing.
 - **Panel** — `custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js`. Self-contained
-  vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Four tabs — Rooms (table
-  with the per-room two-state control), Tuning, Valves, Assist — rendering the black-box
-  report.
+  vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Six tabs — Rooms (table
+  with the per-room two-state control), Flags, Tuning, Valves, Assist, Heat pump — rendering
+  the black-box report.
 - **Simulator** — `custom_components/tortoise_ufh/core/simulator.py` (`BuildingSimulator` +
   `SimulatedRoom`). Digital twin for offline tests. Crucially, `get_all_measurements()`
   produces the SAME `RoomInputs` the

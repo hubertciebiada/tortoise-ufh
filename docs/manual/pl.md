@@ -1,6 +1,8 @@
 # Tortoise-UFH — instrukcja użytkownika
 
-> Dotyczy wersji **0.11.1**. Instrukcja opisuje integrację po polsku; interfejs
+> **Język / Language / Sprache:** **Polski** · [Deutsch](de.md) · [English (README)](../../README.md)
+
+> Dotyczy wersji **0.12.0**. Instrukcja opisuje integrację po polsku; interfejs
 > (panel, encje, kreator konfiguracji, usługi) jest dostępny po polsku i po
 > angielsku i podąża za językiem ustawionym w Twoim profilu Home Assistant.
 
@@ -196,7 +198,8 @@ Encje per pokój (każdy pokój jest urządzeniem, można przypisać do obszaru 
 - `number.<pokój>_setpoint_offset` — korekta nastawy (−5…+5 K),
 - sensory diagnostyczne: zalecane otwarcie zaworu, uchyb, trend, punkt rosy,
   człon całkujący, człon trendu, tryb szybkiego źródła, wyjaśnienie decyzji,
-- binarne: utrata czujnika, nasycenie wyjścia, aktywna ochrona przed kondensacją.
+- binarne: utrata czujnika, nasycenie wyjścia, aktywna ochrona przed kondensacją,
+  usterka przepływu (`flow_fault`, watchdog S6 — §8/§12).
 
 Usługi (domena `tortoise_ufh`):
 
@@ -562,6 +565,12 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **0.12.0 (2026-07-14)** — **niemiecki (DE) interfejs i dokumentacja** + porządki w
+  dokumentach. Aplikacja (panel, encje, kreator konfiguracji, usługi) ma teraz pełne
+  tłumaczenie niemieckie, z fallbackiem do angielskiego dla pozostałych języków. Manual
+  wyszedł z mylącej nazwy `INSTRUKCJA.md` do folderu **`docs/manual/`** (`pl.md`, `de.md`);
+  README ma przełącznik języka. Bez zmian w rdzeniu ani w kontrakcie I/O; bez migracji
+  konfiguracji.
 - **0.11.1 (2026-07-14)** — panel: flaga **„Chłodzenie wyłączone w tym pokoju"**
   (`cooling_disabled`) przestała świecić na żółto. To zamierzony, stały stan (pokój celowo
   wypisany z chłodzenia), więc przez cały sezon chłodniczy fałszywie wyglądał jak usterka.

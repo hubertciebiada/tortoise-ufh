@@ -5,15 +5,17 @@ The sidebar panel keeps every user-facing string in ONE table per language
 English fallback; adding a language = adding one dictionary. These tests keep
 that architecture honest without a JS runtime:
 
-* ``STR.pl`` and ``STR.en`` carry the exact same key set;
-* every ``FLAG_LABELS`` entry is a complete registry row — ``pl``/``en`` label,
-  ``sev``, ``sx`` (``"S#"`` or ``null``), ``group`` and ``descPl``/``descEn`` —
-  since the flag annunciator renders entirely from that one map;
+* ``STR.pl``, ``STR.en`` and ``STR.de`` carry the exact same key set;
+* every ``FLAG_LABELS`` entry is a complete registry row — ``pl``/``en``/``de``
+  label, ``sev``, ``sx`` (``"S#"`` or ``null``), ``group`` and
+  ``descPl``/``descEn``/``descDe`` — since the flag annunciator renders entirely
+  from that one map;
 * every controller knob exposed in ``const.CONTROLLER_NUMBER_KNOBS`` (plus the
   boolean knob) has both a ``tune_<name>`` label and a ``tip_knob_<name>``
-  tooltip in BOTH languages;
-* ``strings.json``, ``translations/en.json`` and ``translations/pl.json`` carry
-  identical key sets (the triple must always change together).
+  tooltip in ALL languages;
+* ``strings.json``, ``translations/en.json``, ``translations/pl.json`` and
+  ``translations/de.json`` carry identical key sets (they must always change
+  together).
 
 Everything is parsed TEXTUALLY from the files on disk — this module imports
 neither ``homeassistant`` nor the adapter, so it runs in the pure-core
@@ -131,13 +133,20 @@ def _flatten_keys(node: Any, prefix: str = "") -> set[str]:
 
 @pytest.mark.unit
 def test_str_languages_have_identical_key_sets() -> None:
-    """STR.pl and STR.en carry exactly the same keys (PL/EN always in pairs)."""
+    """STR.pl, STR.en and STR.de carry exactly the same keys (langs in lockstep)."""
     sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
-    assert set(sections) >= {"pl", "en"}, f"missing STR languages: {sections.keys()}"
+    assert set(sections) >= {"pl", "en", "de"}, (
+        f"missing STR languages: {sections.keys()}"
+    )
     only_pl = sorted(sections["pl"] - sections["en"])
     only_en = sorted(sections["en"] - sections["pl"])
     assert not only_pl and not only_en, (
         f"STR key mismatch — only in pl: {only_pl}; only in en: {only_en}"
+    )
+    only_de = sorted(sections["de"] - sections["en"])
+    en_not_de = sorted(sections["en"] - sections["de"])
+    assert not only_de and not en_not_de, (
+        f"STR key mismatch — only in de: {only_de}; only in en (not de): {en_not_de}"
     )
     # Sanity: the parser actually saw a meaningful table.
     assert len(sections["pl"]) > 50
@@ -177,8 +186,19 @@ def test_flag_labels_are_a_complete_registry() -> None:
     block = _extract_block(source, "const FLAG_LABELS = {")
     entries = _FLAG_ENTRY.findall(block)
     assert len(entries) >= 20, f"expected >=20 flags, parsed {len(entries)}"
+    fields = (
+        "pl:",
+        "en:",
+        "de:",
+        "sev:",
+        "sx:",
+        "group:",
+        "descPl:",
+        "descEn:",
+        "descDe:",
+    )
     for code, body in entries:
-        for field in ("pl:", "en:", "sev:", "sx:", "group:", "descPl:", "descEn:"):
+        for field in fields:
             assert field in body, f"FLAG_LABELS.{code} is missing {field[:-1]!r}"
         sev = re.search(r'sev:\s*"(\w+)"', body)
         assert sev and sev.group(1) in _VALID_FLAG_SEV, (
@@ -203,7 +223,7 @@ def test_every_knob_has_label_and_tooltip_in_both_languages() -> None:
     missing: list[str] = []
     for knob in knobs:
         for key in (f"tune_{knob}", f"tip_knob_{knob}"):
-            for lang in ("pl", "en"):
+            for lang in ("pl", "en", "de"):
                 if key not in sections[lang]:
                     missing.append(f"{lang}:{key}")
     assert not missing, f"missing STR keys: {missing}"
@@ -258,7 +278,7 @@ def test_knob_group_labels_exist_in_both_languages() -> None:
     source = _PANEL_JS.read_text(encoding="utf-8")
     sections = _str_language_keys(source)
     for label_key, _knobs in _knob_groups(source):
-        for lang in ("pl", "en"):
+        for lang in ("pl", "en", "de"):
             assert label_key in sections[lang], f"missing STR.{lang}.{label_key}"
 
 
@@ -320,7 +340,7 @@ def test_v080_surfaces_have_their_str_keys() -> None:
     missing = [
         f"{lang}:{key}"
         for key in _REQUIRED_V080_KEYS
-        for lang in ("pl", "en")
+        for lang in ("pl", "en", "de")
         if key not in sections[lang]
     ]
     assert not missing, f"missing STR keys: {missing}"
@@ -354,7 +374,7 @@ def test_v090_surfaces_have_their_str_keys() -> None:
     missing = [
         f"{lang}:{key}"
         for key in _REQUIRED_V090_KEYS
-        for lang in ("pl", "en")
+        for lang in ("pl", "en", "de")
         if key not in sections[lang]
     ]
     assert not missing, f"missing STR keys: {missing}"
@@ -384,7 +404,7 @@ def test_v0100_surfaces_have_their_str_keys() -> None:
     missing = [
         f"{lang}:{key}"
         for key in _REQUIRED_V0100_KEYS
-        for lang in ("pl", "en")
+        for lang in ("pl", "en", "de")
         if key not in sections[lang]
     ]
     assert not missing, f"missing STR keys: {missing}"
@@ -392,13 +412,16 @@ def test_v0100_surfaces_have_their_str_keys() -> None:
 
 @pytest.mark.unit
 def test_translation_jsons_have_identical_key_sets() -> None:
-    """strings.json ≡ translations/en.json ≡ translations/pl.json (key sets)."""
+    """strings.json ≡ translations/en.json ≡ pl.json ≡ de.json (key sets)."""
     strings = _flatten_keys(json.loads(_STRINGS.read_text(encoding="utf-8")))
     en = _flatten_keys(
         json.loads((_TRANSLATIONS / "en.json").read_text(encoding="utf-8"))
     )
     pl = _flatten_keys(
         json.loads((_TRANSLATIONS / "pl.json").read_text(encoding="utf-8"))
+    )
+    de = _flatten_keys(
+        json.loads((_TRANSLATIONS / "de.json").read_text(encoding="utf-8"))
     )
     assert strings == en, (
         f"strings.json vs en.json: only-strings={sorted(strings - en)}, "
@@ -407,4 +430,8 @@ def test_translation_jsons_have_identical_key_sets() -> None:
     assert strings == pl, (
         f"strings.json vs pl.json: only-strings={sorted(strings - pl)}, "
         f"only-pl={sorted(pl - strings)}"
+    )
+    assert strings == de, (
+        f"strings.json vs de.json: only-strings={sorted(strings - de)}, "
+        f"only-de={sorted(de - strings)}"
     )

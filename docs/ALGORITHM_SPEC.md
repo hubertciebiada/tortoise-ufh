@@ -209,7 +209,7 @@ knobs come from `tortoise_ufh.config.ControllerConfig` (a frozen dataclass, `__p
 | `dew_margin_k` | 2.0 | K | local S2 dew margin |
 | `dew_ramp_k` | 2.0 | K | S2 graduated ramp width |
 | `cycle_seconds` | 300.0 | s | control cycle (= PID `dt`) |
-| `valve_write_threshold_pct` | 2.0 | % | HA write dead-zone |
+| `valve_write_threshold_pct` | 5.0 | % | HA write dead-zone |
 
 > **Why the 2026-07-09 retune (C1, DECISIONS §8):** the original `ki = 0.02` meant
 > Ti ≈ 7 min against a τ = 3–6 h slab — the integrator saturated during every approach and the

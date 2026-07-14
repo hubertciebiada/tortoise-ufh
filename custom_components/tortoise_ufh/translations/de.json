@@ -1,0 +1,373 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Standort",
+        "description": "Geben Sie den Standort des Gebäudes ein. Tortoise-UFH nutzt Breiten- und Längengrad für die Wetterkompensation und die Vorsteuerung solarer Gewinne.",
+        "data": {
+          "latitude": "Breitengrad",
+          "longitude": "Längengrad"
+        }
+      },
+      "rooms": {
+        "title": "Räume definieren",
+        "description": "Fügen Sie die Räume (Zonen) hinzu, die Tortoise-UFH regeln soll. Jeder Raum hat seinen eigenen, unabhängigen Regelkreis. Fügen Sie mindestens einen Raum hinzu.",
+        "data": {
+          "room_name": "Raumname",
+          "room_area": "Bodenfläche (m²)",
+          "fast_source_kind": "Zusatzquelle (Split / Heizgerät)",
+          "fast_source_group": "Gruppe gemeinsames Außengerät (Multisplit, optional)",
+          "fast_source_window_start": "Zusatzquelle erlaubt ab (optional)",
+          "fast_source_window_end": "Zusatzquelle erlaubt bis (optional)",
+          "has_fast_source": "Dieser Raum hat eine schnelle Zusatzquelle",
+          "cooling_enabled": "Nimmt an der Flächenkühlung teil",
+          "add_another": "Weiteren Raum hinzufügen"
+        },
+        "data_description": {
+          "fast_source_window_start": "Außerhalb dieses Zeitfensters schaltet sich der Split/das Heizgerät des Raums nicht ein (Ruhezeiten); eine laufende Einheit stoppt erst nach ihrer Mindestlaufzeit. Das Fenster darf über Mitternacht reichen (z. B. 07:00–22:00 oder 22:00–07:00). Lassen Sie beide Felder leer, um es immer zu erlauben. Gilt nur für Räume mit einer Zusatzquelle.",
+          "fast_source_window_end": "Außerhalb dieses Zeitfensters schaltet sich der Split/das Heizgerät des Raums nicht ein (Ruhezeiten); eine laufende Einheit stoppt erst nach ihrer Mindestlaufzeit. Das Fenster darf über Mitternacht reichen (z. B. 07:00–22:00 oder 22:00–07:00). Lassen Sie beide Felder leer, um es immer zu erlauben. Gilt nur für Räume mit einer Zusatzquelle."
+        }
+      },
+      "entities": {
+        "title": "Entitätszuordnung: {room_name}",
+        "description": "Wählen Sie die Home-Assistant-Entitäten für {room_name}. Tortoise-UFH prüft ausschließlich die Einheiten (°C, %, W) und bleibt hardwareunabhängig. Ein Raum kann mehrere Heizkreise der Fußbodenheizung haben, daher akzeptieren Ventil, Vorlauf und Rücklauf mehrere Entitäten. Globale Entitäten werden nur einmal, beim ersten Raum, angezeigt.",
+        "data": {
+          "entity_temp_room": "Raumtemperatursensor",
+          "entity_humidity": "Luftfeuchtigkeitssensor (für gekühlte Räume erforderlich)",
+          "entity_temp_outdoor": "Außentemperatursensor (optional)",
+          "entity_valves": "Ventilantriebe der Fußbodenheizung — number- oder valve-Entitäten (eine pro Heizkreis)",
+          "entity_supply": "Vorlauftemperatursensoren (einer pro Heizkreis)",
+          "entity_return": "Rücklauftemperatursensoren (einer pro Heizkreis)",
+          "entity_fast_source": "Climate-Entität der Zusatzquelle (Split / Heizgerät)",
+          "room_offset": "Raum-Offset gegenüber dem Haus-Sollwert (K)",
+          "entity_mode": "Globale Modus-Entität (Heizung / Übergang / Kühlung / Aus)"
+        }
+      },
+      "algorithm": {
+        "title": "Algorithmus-Parameter",
+        "description": "Konfigurieren Sie den Sollwert für das gesamte Haus sowie die Verstärkungen des PI-+-Trend-Reglers. Die Standardwerte sind für ein Fußbodenheizungshaus mit hoher thermischer Masse sinnvoll; belassen Sie sie, sofern Sie nicht genau wissen, was Sie abstimmen.",
+        "data": {
+          "kp": "Proportionalverstärkung kp (%/K)",
+          "ki": "Integralverstärkung ki (%/(K·s))",
+          "kt": "Trenddämpfungs-Verstärkung kt (%/(K/h))",
+          "deadband_c": "Totband (K)",
+          "valve_floor_pct": "Ventil-Mindestöffnung beim Heizen (%)",
+          "boost_offset_c": "Boost-Offset der Zusatzquelle (K)",
+          "fast_min_on_minutes": "Mindestlaufzeit der Zusatzquelle (min)",
+          "fast_min_off_minutes": "Mindeststillstandszeit der Zusatzquelle (min)",
+          "fast_target_offset_k": "Sollwert-Überhöhung der Zusatzquelle (K, 0 = aus)",
+          "dew_margin_k": "Taupunkt-Marge (K)",
+          "dew_ramp_k": "Taupunkt-Rampenband (K)",
+          "cooling_supply_base_c": "Basistemperatur Kühlwasser (°C, global)",
+          "heating_supply_base_c": "Basistemperatur Heizwasser (°C, global)",
+          "heating_supply_slope": "Kurvensteigung Heizwasser (K/K, global)",
+          "ff_neutral_c": "Neutrale Außentemperatur der Vorsteuerung (°C)",
+          "ff_gain_pct_per_k": "Verstärkung der Vorsteuerung (%/K)",
+          "ff_max_pct": "Obergrenze der Vorsteuerung (%)",
+          "flow_epsilon_k": "Durchfluss-Watchdog: minimale ΔT, die als Durchfluss gilt (K)",
+          "flow_open_threshold_pct": "Durchfluss-Watchdog: Schwelle des Öffnungsbefehls (%)",
+          "flow_response_window_min": "Durchfluss-Watchdog: Antwortfenster (min)",
+          "outdoor_ff_enabled": "Außen-Vorsteuerung aktiviert"
+        }
+      },
+      "confirm": {
+        "title": "Einrichtung bestätigen",
+        "description": "Tortoise-UFH wird mit {num_rooms} Raum/Räumen am Standort ({latitude}, {longitude}) und einem Haus-Sollwert von {home_setpoint} °C eingerichtet. Räume starten im Zustand Aus — es wird nichts an Ihre Hardware geschrieben, bis Sie einen Raum auf Aktiv schalten. Bestätigen Sie, um die Einrichtung abzuschließen."
+      }
+    },
+    "error": {
+      "invalid_location": "Ungültiger Haus-Standort — der Breitengrad muss zwischen -90 und 90 und der Längengrad zwischen -180 und 180 liegen",
+      "empty_room_name": "Der Raumname darf nicht leer sein",
+      "duplicate_room_name": "Ein Raum mit diesem Namen existiert bereits",
+      "duplicate_room_slug": "Es existiert bereits ein Raum, dessen Name sich nur in Groß-/Kleinschreibung oder Leerzeichen unterscheidet (sie würden in der Registry kollidieren)",
+      "invalid_room": "Ungültige Raumdefinition",
+      "valve_required": "Es muss mindestens ein Ventilantrieb ausgewählt werden",
+      "humidity_required": "Für Räume, die an der Flächenkühlung teilnehmen, ist ein Luftfeuchtigkeitssensor erforderlich",
+      "invalid_controller": "Ungültige Reglerabstimmung",
+      "entity_not_found": "Entität in Home Assistant nicht gefunden",
+      "invalid_unit": "Die Entität hat eine falsche Maßeinheit",
+      "invalid_device_class": "Die Entität hat eine falsche Geräteklasse",
+      "entity_unavailable": "Die Entität ist derzeit nicht verfügbar — sie kann später online gehen",
+      "valve_no_set_position": "Diese valve-Entität unterstützt das Setzen einer Position (SET_POSITION) nicht. Wählen Sie ein positionsfähiges Ventil oder eine number-Entität.",
+      "quiet_window_invalid": "Legen Sie beide Fensterzeiten fest (Anfang und Ende, voneinander verschieden) oder keine."
+    },
+    "abort": {
+      "already_configured": "Tortoise-UFH ist für diesen Standort bereits konfiguriert"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tortoise-UFH",
+        "description": "Räume verwalten oder Regelungs- und Abstimmungseinstellungen anpassen.",
+        "menu_options": {
+          "add_room": "Raum hinzufügen",
+          "edit_room": "Raum bearbeiten",
+          "remove_room": "Raum entfernen",
+          "settings": "Regelungs- und Abstimmungseinstellungen",
+          "heat_pump": "Wärmepumpe"
+        }
+      },
+      "settings": {
+        "title": "Regelung & Abstimmung",
+        "description": "Legen Sie den Regelungszustand jedes Raums fest — Aus (von der Regelung ausgenommen, es wird nichts an die Hardware geschrieben) oder Aktiv (steuert seine Ventile und die Zusatzquelle) — und passen Sie die erweiterten Reglerverstärkungen an. Das Panel und die Regelungszustands-Select-Entitäten je Raum sind die primäre Oberfläche; dieses Formular ist ein Notfall-/automatisierungsfreier Rückfall.",
+        "data": {
+          "kp": "Proportionalverstärkung kp (%/K)",
+          "ki": "Integralverstärkung ki (%/(K·s))",
+          "kt": "Trenddämpfungs-Verstärkung kt (%/(K/h))",
+          "deadband_c": "Totband (K)",
+          "valve_floor_pct": "Ventil-Mindestöffnung beim Heizen (%)",
+          "boost_offset_c": "Boost-Offset der Zusatzquelle (K)",
+          "fast_min_on_minutes": "Mindestlaufzeit der Zusatzquelle (min)",
+          "fast_min_off_minutes": "Mindeststillstandszeit der Zusatzquelle (min)",
+          "fast_target_offset_k": "Sollwert-Überhöhung der Zusatzquelle (K, 0 = aus)",
+          "dew_margin_k": "Taupunkt-Marge (K)",
+          "dew_ramp_k": "Taupunkt-Rampenband (K)",
+          "cooling_supply_base_c": "Basistemperatur Kühlwasser (°C, global)",
+          "heating_supply_base_c": "Basistemperatur Heizwasser (°C, global)",
+          "heating_supply_slope": "Kurvensteigung Heizwasser (K/K, global)",
+          "ff_neutral_c": "Neutrale Außentemperatur der Vorsteuerung (°C)",
+          "ff_gain_pct_per_k": "Verstärkung der Vorsteuerung (%/K)",
+          "ff_max_pct": "Obergrenze der Vorsteuerung (%)",
+          "flow_epsilon_k": "Durchfluss-Watchdog: minimale ΔT, die als Durchfluss gilt (K)",
+          "flow_open_threshold_pct": "Durchfluss-Watchdog: Schwelle des Öffnungsbefehls (%)",
+          "flow_response_window_min": "Durchfluss-Watchdog: Antwortfenster (min)",
+          "outdoor_ff_enabled": "Außen-Vorsteuerung aktiviert",
+          "entity_global_supply": "Globaler Vorlauftemperatursensor am Verteiler (optional)"
+        },
+        "data_description": {
+          "entity_global_supply": "Optionale Sonde am Vorlaufbalken des Verteilers, vor den Heizkreisventilen. Sie speist das Zirkulations-Gate des hydraulischen Durchfluss-Watchdogs: Wenn sie klar quellseitig gegenüber der mittleren Raumtemperatur misst, gilt die Zirkulation als nachgewiesen, selbst wenn jede Heizkreis-Sonde hinter dem Ventil sitzt. Hinweis: Während WW-Bereitung/Abtauung (Entität „Pumpe verfügbar“ aus) ignoriert das Gate diese Sonde."
+        }
+      },
+      "add_room": {
+        "title": "Raum hinzufügen",
+        "description": "Definieren Sie einen neuen Raum. Nach seinen Attributen ordnen Sie seine Home-Assistant-Quellentitäten zu. Jeder Raum hat seinen eigenen, unabhängigen Regelkreis.",
+        "data": {
+          "room_name": "Raumname",
+          "room_area": "Bodenfläche (m²)",
+          "room_offset": "Raum-Offset gegenüber dem Haus-Sollwert (K)",
+          "has_fast_source": "Dieser Raum hat eine schnelle Zusatzquelle",
+          "fast_source_kind": "Zusatzquelle (Split / Heizgerät)",
+          "fast_source_group": "Gruppe gemeinsames Außengerät (Multisplit, optional)",
+          "fast_source_window_start": "Zusatzquelle erlaubt ab (optional)",
+          "fast_source_window_end": "Zusatzquelle erlaubt bis (optional)",
+          "cooling_enabled": "Nimmt an der Flächenkühlung teil"
+        },
+        "data_description": {
+          "fast_source_window_start": "Außerhalb dieses Zeitfensters schaltet sich der Split/das Heizgerät des Raums nicht ein (Ruhezeiten); eine laufende Einheit stoppt erst nach ihrer Mindestlaufzeit. Das Fenster darf über Mitternacht reichen (z. B. 07:00–22:00 oder 22:00–07:00). Lassen Sie beide Felder leer, um es immer zu erlauben. Gilt nur für Räume mit einer Zusatzquelle.",
+          "fast_source_window_end": "Außerhalb dieses Zeitfensters schaltet sich der Split/das Heizgerät des Raums nicht ein (Ruhezeiten); eine laufende Einheit stoppt erst nach ihrer Mindestlaufzeit. Das Fenster darf über Mitternacht reichen (z. B. 07:00–22:00 oder 22:00–07:00). Lassen Sie beide Felder leer, um es immer zu erlauben. Gilt nur für Räume mit einer Zusatzquelle."
+        }
+      },
+      "edit_room": {
+        "title": "Raum bearbeiten",
+        "description": "Wählen Sie den zu bearbeitenden Raum. Sein Name kann nicht geändert werden (Umbenennen = Entfernen + Hinzufügen).",
+        "data": {
+          "selected_room": "Raum"
+        }
+      },
+      "edit_room_attrs": {
+        "title": "Raum bearbeiten: {room_name}",
+        "description": "Aktualisieren Sie die Attribute für {room_name}, anschließend die Entitätszuordnung. Der Raumname ist unveränderlich.",
+        "data": {
+          "room_area": "Bodenfläche (m²)",
+          "room_offset": "Raum-Offset gegenüber dem Haus-Sollwert (K)",
+          "has_fast_source": "Dieser Raum hat eine schnelle Zusatzquelle",
+          "fast_source_kind": "Zusatzquelle (Split / Heizgerät)",
+          "fast_source_group": "Gruppe gemeinsames Außengerät (Multisplit, optional)",
+          "fast_source_window_start": "Zusatzquelle erlaubt ab (optional)",
+          "fast_source_window_end": "Zusatzquelle erlaubt bis (optional)",
+          "cooling_enabled": "Nimmt an der Flächenkühlung teil"
+        },
+        "data_description": {
+          "fast_source_window_start": "Außerhalb dieses Zeitfensters schaltet sich der Split/das Heizgerät des Raums nicht ein (Ruhezeiten); eine laufende Einheit stoppt erst nach ihrer Mindestlaufzeit. Das Fenster darf über Mitternacht reichen (z. B. 07:00–22:00 oder 22:00–07:00). Lassen Sie beide Felder leer, um es immer zu erlauben. Gilt nur für Räume mit einer Zusatzquelle.",
+          "fast_source_window_end": "Außerhalb dieses Zeitfensters schaltet sich der Split/das Heizgerät des Raums nicht ein (Ruhezeiten); eine laufende Einheit stoppt erst nach ihrer Mindestlaufzeit. Das Fenster darf über Mitternacht reichen (z. B. 07:00–22:00 oder 22:00–07:00). Lassen Sie beide Felder leer, um es immer zu erlauben. Gilt nur für Räume mit einer Zusatzquelle."
+        }
+      },
+      "remove_room": {
+        "title": "Raum entfernen",
+        "description": "Wählen Sie den zu entfernenden Raum. Seine Diagnose-Entitäten werden gelöscht und seine raumbezogenen Einstellungen entfernt. Dies kann nicht rückgängig gemacht werden.",
+        "data": {
+          "selected_room": "Raum"
+        }
+      },
+      "room_entities": {
+        "title": "Entitätszuordnung: {room_name}",
+        "description": "Wählen Sie die Home-Assistant-Entitäten für {room_name}. Tortoise-UFH prüft ausschließlich die Einheiten (°C, %, W) und bleibt hardwareunabhängig. Ein Raum kann mehrere Heizkreise der Fußbodenheizung haben, daher akzeptieren Ventil, Vorlauf und Rücklauf mehrere Entitäten.",
+        "data": {
+          "entity_temp_room": "Raumtemperatursensor",
+          "entity_humidity": "Luftfeuchtigkeitssensor (für gekühlte Räume erforderlich)",
+          "entity_valves": "Ventilantriebe der Fußbodenheizung — number- oder valve-Entitäten (eine pro Heizkreis)",
+          "entity_supply": "Vorlauftemperatursensoren (einer pro Heizkreis)",
+          "entity_return": "Rücklauftemperatursensoren (einer pro Heizkreis)",
+          "entity_fast_source": "Climate-Entität der Zusatzquelle (Split / Heizgerät)"
+        }
+      },
+      "heat_pump": {
+        "title": "Wärmepumpe (optionale Anbindung)",
+        "description": "Alle Felder sind optional — lassen Sie alles leer, damit Tortoise die Pumpe nicht berührt. Die Richtungssynchronisierung erhält stets das „+DHW“-Flag der Pumpe; Eigentümer bleibt die externe WW-Automatik. Beispielhafte Entitäten im HeishaMon-Stil: select.heat_pump_mode, number.z1_cool_request_temp.",
+        "data": {
+          "entity_hp_mode": "Modus-Entität der Pumpe (select)",
+          "entity_hp_heating_setpoint": "Entität für Heizwasser-Sollwert (number, optional)",
+          "entity_hp_cooling_setpoint": "Entität für Kühlwasser-Sollwert (number, optional)",
+          "entity_hp_active": "Entität „Pumpe für Fußbodenheizung verfügbar“ (optional)"
+        },
+        "data_description": {
+          "entity_hp_mode": "Select im HeishaMon-Stil mit Optionen wie „Heat only“ / „Cool only“ / „Heat+DHW“. Tortoise schreibt nur die Richtung und entfernt niemals das WW-Flag.",
+          "entity_hp_active": "Aus, während die Pumpe WW-Bereitung/Abtauung durchführt — die Raumregler frieren dann ihre Integratoren ein."
+        }
+      }
+    },
+    "error": {
+      "empty_room_name": "Der Raumname darf nicht leer sein",
+      "duplicate_room_name": "Ein Raum mit diesem Namen existiert bereits",
+      "duplicate_room_slug": "Es existiert bereits ein Raum, dessen Name sich nur in Groß-/Kleinschreibung oder Leerzeichen unterscheidet (sie würden in der Registry kollidieren)",
+      "invalid_room": "Ungültige Raumdefinition",
+      "valve_required": "Es muss mindestens ein Ventilantrieb ausgewählt werden",
+      "humidity_required": "Für Räume, die an der Flächenkühlung teilnehmen, ist ein Luftfeuchtigkeitssensor erforderlich",
+      "invalid_controller": "Ungültige Reglerabstimmung",
+      "entity_not_found": "Entität in Home Assistant nicht gefunden",
+      "invalid_unit": "Die Entität hat eine falsche Maßeinheit",
+      "invalid_device_class": "Die Entität hat eine falsche Geräteklasse",
+      "entity_unavailable": "Die Entität ist derzeit nicht verfügbar — sie kann später online gehen",
+      "valve_no_set_position": "Diese valve-Entität unterstützt das Setzen einer Position (SET_POSITION) nicht. Wählen Sie ein positionsfähiges Ventil oder eine number-Entität.",
+      "quiet_window_invalid": "Legen Sie beide Fensterzeiten fest (Anfang und Ende, voneinander verschieden) oder keine."
+    },
+    "abort": {
+      "no_rooms": "Es gibt keine Räume zum Verwalten",
+      "cannot_remove_last_room": "Der letzte Raum kann nicht entfernt werden — mindestens ein Raum ist erforderlich"
+    }
+  },
+  "entity": {
+    "select": {
+      "control_state": {
+        "name": "Regelungszustand",
+        "state": {
+          "off": "Aus",
+          "live": "Aktiv"
+        }
+      }
+    },
+    "number": {
+      "home_temperature": {
+        "name": "Haustemperatur"
+      },
+      "offset": {
+        "name": "Sollwert-Offset"
+      }
+    },
+    "sensor": {
+      "recommended_valve": {
+        "name": "Empfohlene Ventilstellung"
+      },
+      "error_c": {
+        "name": "Regelabweichung"
+      },
+      "trend_c_per_h": {
+        "name": "Temperaturtrend"
+      },
+      "i_term": {
+        "name": "Integralanteil (Ventil-%)"
+      },
+      "trend_term": {
+        "name": "Trenddämpfungsanteil (Ventil-%)"
+      },
+      "room_dew_point": {
+        "name": "Taupunkt"
+      },
+      "fast_source_mode": {
+        "name": "Modus der Zusatzquelle"
+      },
+      "explanation": {
+        "name": "Erläuterung"
+      },
+      "global_safe_dew_point": {
+        "name": "Globaler sicherer Taupunkt"
+      },
+      "algorithm_status": {
+        "name": "Algorithmus-Status"
+      },
+      "last_update": {
+        "name": "Letzte Aktualisierung"
+      },
+      "watchdog_status": {
+        "name": "Watchdog-Status"
+      }
+    },
+    "binary_sensor": {
+      "sensor_lost": {
+        "name": "Sensor verloren"
+      },
+      "output_saturated": {
+        "name": "Ausgang gesättigt"
+      },
+      "s2_condensation_active": {
+        "name": "Kondensationsschutz aktiv"
+      },
+      "flow_fault": {
+        "name": "Durchflussstörung im Heizkreis"
+      }
+    }
+  },
+  "selector": {
+    "control_state": {
+      "options": {
+        "off": "Aus",
+        "live": "Aktiv"
+      }
+    }
+  },
+  "services": {
+    "set_home_temperature": {
+      "name": "Haustemperatur einstellen",
+      "description": "Legt die globale Ziel-Haustemperatur in Grad Celsius fest. Die Sollwerte je Raum ergeben sich aus der Haustemperatur plus dem Offset des jeweiligen Raums.",
+      "fields": {
+        "temperature": {
+          "name": "Temperatur",
+          "description": "Globale Ziel-Haustemperatur in Grad Celsius."
+        }
+      }
+    },
+    "set_room_offset": {
+      "name": "Raum-Offset einstellen",
+      "description": "Legt den Temperatur-Offset für einen einzelnen Raum in Kelvin fest. Der Raum-Sollwert entspricht der globalen Haustemperatur plus diesem Offset.",
+      "fields": {
+        "room": {
+          "name": "Raum",
+          "description": "Bezeichner des anzupassenden Raums."
+        },
+        "offset": {
+          "name": "Offset",
+          "description": "Temperatur-Offset für den Raum in Kelvin (relativ zur Haustemperatur)."
+        }
+      }
+    },
+    "set_mode": {
+      "name": "Modus einstellen",
+      "description": "Legt den globalen Betriebsmodus des Tortoise-UFH-Systems fest.",
+      "fields": {
+        "mode": {
+          "name": "Modus",
+          "description": "Betriebsmodus des Systems (Heizung / Übergang / Kühlung / Aus)."
+        }
+      }
+    },
+    "test_actuation": {
+      "name": "Aktuierung testen",
+      "description": "Führt einen manuellen Aktuator-Selbsttest für einen Raum aus: Das Ventil wird für die angegebene Dauer bewusst auf 100 % gefahren, und die hydraulische Antwort des Heizkreises (Vorlauf-/Rücklaufsonden) entscheidet über Bestehen oder Nichtbestehen. Gedacht zur Ausführung nach Wartung oder einem Stromereignis — niemals geplant. Erfordert, dass der Raum AKTIV ist und Wassersonden konfiguriert sind; Sicherheitsregeln (Überhitzung, Kondensation) brechen den Test ab.",
+      "fields": {
+        "room": {
+          "name": "Raum",
+          "description": "Bezeichner des zu testenden Raums."
+        },
+        "duration_minutes": {
+          "name": "Dauer",
+          "description": "Testdauer in Minuten (20-30; Standard 25)."
+        },
+        "cancel": {
+          "name": "Abbrechen",
+          "description": "Bricht den laufenden Selbsttest des Raums ab, anstatt einen zu starten."
+        }
+      }
+    }
+  }
+}

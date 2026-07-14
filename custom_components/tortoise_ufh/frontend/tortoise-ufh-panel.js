@@ -157,7 +157,7 @@ const STR = {
     flag_legend_info:
       "Wszystkie flagi diagnostyczne. Wyszarzone są nieaktywne; zapalone (w kolorze) " +
       "zadziałały w co najmniej jednym pokoju. Kliknij ikonę „i” przy fladze po pełne " +
-      "objaśnienie. Pełny słownik jest też w instrukcji (docs/INSTRUKCJA.md §12).",
+      "objaśnienie. Pełny słownik jest też w instrukcji (docs/manual/pl.md §12).",
     flag_grp_safety: "Bezpieczeństwo (S1–S6)",
     flag_grp_assist: "Wspomaganie (split)",
     flag_grp_config: "Konfiguracja / stan",
@@ -165,7 +165,7 @@ const STR = {
     flag_active_in: "Aktywna w: ",
     flag_active: "aktywna",
     flag_none_active: "Brak aktywnych flag",
-    flag_desc_unknown: "Nowa lub nieopisana flaga — patrz instrukcja (docs/INSTRUKCJA.md §12).",
+    flag_desc_unknown: "Nowa lub nieopisana flaga — patrz instrukcja (docs/manual/pl.md §12).",
     dew_cap: "Bezpieczny punkt rosy",
     home_cap: "Temperatura domu",
     mode_cap: "Tryb",
@@ -361,7 +361,7 @@ const STR = {
     tooltip_show: "Pokaż objaśnienie",
     tooltip_hide: "Ukryj objaśnienie",
     // Tooltipy knobów strojenia (tip_knob_*) — treść wspólna z
-    // docs/INSTRUKCJA.md §8: zmieniaj OBA miejsca razem.
+    // docs/manual/pl.md §8: zmieniaj OBA miejsca razem.
     tip_knob_kp:
       "Wzmocnienie proporcjonalne: ile procent otwarcia zaworu dodaje każdy " +
       "1 K uchybu (zadana − zmierzona). Wyższe = szybsza reakcja, ale większe " +
@@ -459,7 +459,7 @@ const STR = {
       "wolna — minimum 30 min, żeby uniknąć trzepotania. Domyślnie 45 min; " +
       "1440 praktycznie wyłącza watchdoga.",
     // Tooltipy szczegółów pokoju (tip_dec_*) i nagłówków tabel (tip_val_* /
-    // tip_ast_* / tip_th_*) — treść wspólna z docs/INSTRUKCJA.md: zmieniaj razem.
+    // tip_ast_* / tip_th_*) — treść wspólna z docs/manual/pl.md: zmieniaj razem.
     tip_th_assist:
       "Komenda dla szybkiego źródła pokoju (split/grzałka): kierunek pracy " +
       "i temperatura zadana dla urządzenia. „—” = pokój nie ma wspomagania; " +
@@ -517,7 +517,7 @@ const STR = {
     tip_dec_flags:
       "Flagi diagnostyczne tego cyklu — każda mówi, które zabezpieczenie lub " +
       "ograniczenie zadziałało. Pełny słownik flag znajdziesz w instrukcji " +
-      "(docs/INSTRUKCJA.md §12).",
+      "(docs/manual/pl.md §12).",
     tip_val_raw:
       "Otwarcie policzone przez regulator przed limitami (minimalne otwarcie, " +
       "obcięcie 0–100 %, reguły bezpieczeństwa). Najedź na wartość, by " +
@@ -562,7 +562,7 @@ const STR = {
       "dopiero po minimalnym czasie pracy — ochrona sprężarki jest " +
       "ważniejsza niż punktualność. Awaryjne grzanie/chłodzenie (S3/S4) ma " +
       "prawo złamać ciszę. Puste = zawsze wolno.",
-    // Zakładka Pompa ciepła (B2) — treść wspólna z docs/INSTRUKCJA.md §11.
+    // Zakładka Pompa ciepła (B2) — treść wspólna z docs/manual/pl.md §11.
     hp_empty:
       "Sprzężenie z pompą ciepła nie jest skonfigurowane. Wskaż encje pompy " +
       "w opcjach integracji: Ustawienia → Urządzenia i usługi → Tortoise-UFH " +
@@ -640,7 +640,7 @@ const STR = {
     flag_legend_info:
       "Every diagnostic flag. Dimmed ones are inactive; lit (coloured) ones have fired in " +
       "at least one room. Click the info icon next to a flag for the full explanation. The " +
-      "full dictionary is also in the manual (docs/INSTRUKCJA.md §12).",
+      "full dictionary is also in the manual (docs/manual/pl.md §12).",
     flag_grp_safety: "Safety (S1–S6)",
     flag_grp_assist: "Assist (split)",
     flag_grp_config: "Configuration / state",
@@ -648,7 +648,7 @@ const STR = {
     flag_active_in: "Active in: ",
     flag_active: "active",
     flag_none_active: "No active flags",
-    flag_desc_unknown: "New or undocumented flag — see the manual (docs/INSTRUKCJA.md §12).",
+    flag_desc_unknown: "New or undocumented flag — see the manual (docs/manual/pl.md §12).",
     dew_cap: "Safe dew point",
     home_cap: "Home temperature",
     mode_cap: "Mode",
@@ -827,7 +827,7 @@ const STR = {
     tooltip_show: "Show explanation",
     tooltip_hide: "Hide explanation",
     // Tuning-knob tooltips (tip_knob_*) — content shared with
-    // docs/INSTRUKCJA.md §8: change BOTH places together.
+    // docs/manual/pl.md §8: change BOTH places together.
     tip_knob_kp:
       "Proportional gain: how many percent of valve opening each 1 K of error " +
       "(setpoint − measured) adds. Higher reacts faster but risks overshoot " +
@@ -909,7 +909,7 @@ const STR = {
       "temperature below the neutral point. Default 0.5 K/K; typically " +
       "0.3–0.8 for a well-insulated UFH house.",
     // Room-detail tooltips (tip_dec_*) and table-header tooltips (tip_val_* /
-    // tip_ast_* / tip_th_*) — content shared with docs/INSTRUKCJA.md: change
+    // tip_ast_* / tip_th_*) — content shared with docs/manual/pl.md: change
     // together.
     tip_th_assist:
       "The command for the room's fast source (split/heater): running " +
@@ -969,7 +969,7 @@ const STR = {
     tip_dec_flags:
       "This cycle's diagnostic flags — each names the protection or limit " +
       "that acted. The full flag dictionary is in the manual " +
-      "(docs/INSTRUKCJA.md §12).",
+      "(docs/manual/pl.md §12).",
     tip_val_raw:
       "Opening computed by the controller before limits (valve floor, 0–100 % " +
       "clamp, safety rules). Hover the value to see the P/I/Trend/FF term " +
@@ -1001,7 +1001,7 @@ const STR = {
       "its minimum run time — compressor protection outranks punctuality. " +
       "Emergency heat/cool (S3/S4) may break the quiet hours. Empty = " +
       "always allowed.",
-    // Heat-pump tab (B2) — content shared with docs/INSTRUKCJA.md §11.
+    // Heat-pump tab (B2) — content shared with docs/manual/pl.md §11.
     hp_empty:
       "The heat-pump link is not configured. Point the integration at the " +
       "pump's entities in Settings → Devices & services → Tortoise-UFH → " +
@@ -1111,6 +1111,499 @@ const STR = {
     test_aborted: "aborted",
     test_untested: "untested",
   },
+  de: {
+    status_running: "Läuft · Zyklus {age}",
+    status_stale: "Veraltet",
+    status_error: "Algorithmusfehler",
+    status_nodata: "Keine Daten",
+    age_sec: "vor {s} s",
+    age_min_sec: "vor {m} min {s} s",
+    age_min: "vor {m} min",
+    age_hour_min: "vor {h} h {m} min",
+    age_unknown: "kein Zeitstempel",
+    rooms_live_cap: "Aktiv",
+    flags_cap: "Meldungen",
+    flag_legend_title: "Meldungen — Schutzstatus",
+    flag_legend_info:
+      "Alle Diagnosemeldungen. Abgeblendete sind inaktiv; leuchtende (farbige) haben in " +
+      "mindestens einem Raum ausgelöst. Klicken Sie auf das Info-Symbol neben einer Meldung " +
+      "für die vollständige Erklärung. Das vollständige Verzeichnis steht auch im Handbuch " +
+      "(docs/manual/de.md §12).",
+    flag_grp_safety: "Sicherheit (S1–S6)",
+    flag_grp_assist: "Zusatzquelle (Split)",
+    flag_grp_config: "Konfiguration / Zustand",
+    flag_grp_other: "Sonstige",
+    flag_active_in: "Aktiv in: ",
+    flag_active: "aktiv",
+    flag_none_active: "Keine aktiven Meldungen",
+    flag_desc_unknown: "Neue oder undokumentierte Meldung — siehe Handbuch (docs/manual/de.md §12).",
+    dew_cap: "Sicherer Taupunkt",
+    home_cap: "Haustemperatur",
+    mode_cap: "Modus",
+    mode_heating: "Heizung",
+    mode_transitional: "Übergang",
+    mode_cooling: "Kühlung",
+    mode_off: "Aus",
+    tab_rooms: "Räume",
+    tab_flags: "Meldungen",
+    tab_tuning: "Abstimmung",
+    tab_valves: "Ventile",
+    tab_assist: "Zusatzquelle",
+    tab_hp: "Wärmepumpe",
+    manage_rooms: "Räume verwalten",
+    loading: "Wird geladen…",
+    no_rooms: "Keine Räume konfiguriert.",
+    th_room: "Raum",
+    th_measured: "Gemessen",
+    th_setpoint: "Sollwert",
+    th_error: "Abweichung",
+    th_valve: "Ventil",
+    th_supply: "Vorlauf",
+    th_return: "Rücklauf",
+    th_assist_mode: "Modus",
+    th_assist_temp: "Temp.",
+    th_assist_group: "Zusatzquelle",
+    th_state: "Regelung",
+    card_setpoint: "Sollwert",
+    card_offset: "Offset {v}",
+    state_off: "Aus",
+    state_live: "Aktiv",
+    confirm_state_live:
+      "Regelung von „{room}“ aktivieren? Tortoise beginnt, Befehle an die " +
+      "Ventile und die Zusatzquelle zu schreiben.",
+    confirm_state_off:
+      "Regelung von „{room}“ deaktivieren? Die Aktoren werden sicher geparkt " +
+      "und es wird nichts mehr geschrieben.",
+    confirm_mode: "Den Hausmodus auf „{mode}“ ändern? Dies betrifft jeden Raum.",
+    confirm_yes: "Ja, ändern",
+    confirm_cancel: "Abbrechen",
+    assist_split: "Split",
+    assist_heater: "Heizgerät",
+    assist_none: "—",
+    assist_no_source: "keine Zusatzquelle",
+    assist_state_off: "aus",
+    assist_state_heating: "heizt",
+    assist_state_cooling: "kühlt",
+    kind_split: "Klimagerät (Split)",
+    kind_heater: "Elektroheizung",
+    detail_close: "Schließen",
+    sec_wiring: "Sensoren & Signale",
+    wire_source_tip: "Quelle anzeigen (Entität)",
+    sec_decision: "Reglerentscheidung",
+    sec_history: "Verlauf",
+    sec_diagnostics: "Diagnose-Entitäten",
+    chart_temp: "Temperatur",
+    chart_setpoint: "Sollwert",
+    chart_valve: "Ventil",
+    chart_error: "Abweichung",
+    chart_loading: "Verlauf wird geladen…",
+    chart_nodata: "Keine Verlaufsdaten",
+    chart_unavailable: "Keine darstellbaren Entitäten",
+    win_6h: "6 Std.",
+    win_24h: "24 Std.",
+    win_7d: "7 Tage",
+    role_entity_temp_room: "Raumtemperatur",
+    role_entity_humidity: "Luftfeuchtigkeit",
+    role_entity_temp_outdoor: "Außentemperatur",
+    role_entity_valves: "Ventile",
+    role_entity_supply: "Vorlauf",
+    role_entity_return: "Rücklauf",
+    role_entity_fast_source: "Zusatzquelle",
+    wire_missing: "fehlt",
+    wire_unset: "— nicht zugewiesen —",
+    wire_unavailable: "nicht verfügbar",
+    dec_error: "Regelabweichung",
+    dec_dew: "Taupunkt des Raums",
+    dec_terms: "Anteile der Glieder an der Ventilstellung",
+    term_p: "P — Proportional",
+    term_i: "I — Integral",
+    term_trend: "Trend — Dämpfung",
+    term_ff: "FF — Wetter",
+    dec_raw_valve: "Rohwert Ventil (vor Begrenzung)",
+    dec_final_valve: "Endgültige Ventilstellung",
+    dec_throttle: "Kühl-Durchfluss",
+    dec_integrator: "Integrator",
+    integ_frozen: "eingefroren",
+    integ_active: "aktiv",
+    dec_saturated: "Ventilsättigung",
+    dec_floor: "Ventil-Mindestöffnung (Minimum)",
+    dec_fast: "Zusatzquelle",
+    dec_explanation: "Erläuterung",
+    yes: "ja",
+    no: "nein",
+    raw_show: "Rohdaten anzeigen",
+    no_live_room: "Noch keine Live-Daten für diesen Raum.",
+    tune_intro:
+      "Globale Reglerabstimmung plus vereinzelte Übersteuerungen je Raum. " +
+      "Das Speichern lädt den Regler neu (der PID-Integrator wird zurückgesetzt).",
+    tune_scope_global: "Global",
+    tune_save: "Speichern",
+    tune_saving: "Wird gespeichert…",
+    tune_saved: "Gespeichert",
+    tune_overridden: "übersteuert",
+    tune_revert: "Auf global zurücksetzen",
+    tune_on: "ein",
+    tune_off: "aus",
+    tune_grp_pid: "PI-Regler & Trend",
+    tune_grp_band: "Komfortband & Ventil",
+    tune_grp_weather: "Wettervorsteuerung (Ventilöffnung)",
+    tune_grp_fast: "Zusatzquelle (Split/Heizgerät)",
+    tune_grp_dew: "Kondensationsschutz (Kühlung)",
+    tune_grp_hp: "Wärmepumpe — Wasser (nur global)",
+    tune_grp_other: "Sonstige",
+    tune_kp: "Proportionalverstärkung (P)",
+    tune_ki: "Integralverstärkung (I)",
+    tune_kt: "Dämpfung des Temperaturtrends",
+    tune_deadband_c: "Totband um den Sollwert",
+    tune_valve_floor_pct: "Minimale Ventilöffnung beim Heizen",
+    tune_boost_offset_c: "Zuschaltschwelle der Zusatzquelle",
+    tune_fast_min_on_minutes: "Mindestlaufzeit der Zusatzquelle",
+    tune_fast_min_off_minutes: "Mindeststillstandszeit der Zusatzquelle",
+    tune_fast_target_offset_k: "Sollwert-Überhöhung der Zusatzquelle",
+    tune_dew_margin_k: "Sicherheitsmarge über dem Taupunkt",
+    tune_dew_ramp_k: "Rampenbreite der Kühldrosselung",
+    tune_outdoor_ff_enabled: "Wettervorsteuerung aktiviert",
+    tune_ff_neutral_c: "Neutrale Außentemperatur der Vorsteuerung",
+    tune_ff_gain_pct_per_k: "Verstärkung der Vorsteuerung",
+    tune_ff_max_pct: "Obergrenze der Vorsteuerung",
+    tune_cooling_supply_base_c: "Basistemperatur Kühlwasser",
+    tune_heating_supply_base_c: "Basistemperatur Heizwasser",
+    tune_heating_supply_slope: "Kurvensteigung Heizwasser",
+    val_th_command: "Befehl",
+    val_th_raw: "Rohwert",
+    val_th_floor: "Minimum",
+    val_th_sat: "Sättigung",
+    val_th_s2: "S2-Drosselung",
+    val_th_feedback: "Rückmeldung",
+    val_raw_tooltip: "P {p} · I {i} · Trend {t} · FF {f}",
+    val_floor_chip: "Mindestöffnung {v}%",
+    val_s2_flow: "Durchfluss {v}%",
+    val_s2_condensation: "Kondensation",
+    val_loop: "Kreis {n}",
+    val_supply: "Vorlauf",
+    val_return: "Rücklauf",
+    val_dt: "ΔT",
+    val_feedback_pos: "Pos. {v}%",
+    val_no_loops: "keine Ventile zugewiesen",
+    val_show_loops: "Kreise anzeigen ({n})",
+    val_hide_loops: "Kreise ausblenden",
+    val_empty: "Keine Räume konfiguriert.",
+    ast_th_kind: "Art",
+    ast_th_group: "Gruppe",
+    ast_th_command: "Befehl",
+    ast_th_actual: "Ist-Zustand",
+    ast_th_timer: "Timer",
+    ast_th_hours: "Erlaubte Zeiten",
+    ast_hours_always: "immer",
+    assist_window_sub: "erlaubt {start}–{end}",
+    ast_th_flags: "Meldungen",
+    ast_th_entity: "Entität",
+    ast_none_line: "Keine Zusatzquelle: {rooms}",
+    ast_timer_unlock: "entsperrt in ~{n} min",
+    ast_timer_locked: "Mindestlaufzeit-Sperre",
+    ast_timer_conflict: "Gruppenkonflikt",
+    ast_tune_link: "abstimmen",
+    ast_actual_unknown: "—",
+    ast_empty: "Kein Raum hat eine Zusatzquelle.",
+    dew_reason_no_humidity: "kein Luftfeuchtigkeitssensor",
+    dew_reason_cooling_disabled: "Kühlung deaktiviert",
+    dew_reason_not_cooling_mode: "Raum kühlt nicht",
+    dew_reason_no_temperature: "keine Temperaturmessung",
+    dew_none_collective: "{n} Räume ohne Taupunktdaten",
+    dec_dew_reason: "Ausschluss vom sicheren Taupunkt",
+    err_ws: "Integrationsaufruf fehlgeschlagen: {detail}",
+    tooltip_show: "Erläuterung anzeigen",
+    tooltip_hide: "Erläuterung ausblenden",
+    // Tooltips der Abstimmungsparameter (tip_knob_*) — Inhalt gemeinsam mit
+    // docs/manual/de.md §8: BEIDE Stellen zusammen ändern.
+    tip_knob_kp:
+      "Proportionalverstärkung: wie viel Prozent Ventilöffnung jede 1 K " +
+      "Regelabweichung (Sollwert − gemessen) hinzufügt. Höher reagiert schneller, " +
+      "riskiert aber Überschwingen des trägen Bodens mit hoher Masse. Standard 14; " +
+      "typisch 8–20. In kleinen Schritten ändern und einen ganzen Tag beobachten.",
+    tip_knob_ki:
+      "Integralverstärkung: wie schnell der Regler Öffnung hinzufügt, während eine " +
+      "kleine Regelabweichung über Stunden anhält — beseitigt die bleibende " +
+      "Regelabweichung. Die Werte sind bewusst sehr klein (Sekunden im Nenner). " +
+      "Standard 0,0015. Zu hoch = langsame Temperaturschwingung um den Sollwert.",
+    tip_knob_kt:
+      "Trenddämpfung: beobachtet, wie schnell sich die Temperatur bewegt. Wenn sich " +
+      "der Raum dem Sollwert schnell nähert, schließt sie das Ventil frühzeitig etwas " +
+      "und zähmt das Überschwingen des trägen Bodens. Standard 12. Muss selten " +
+      "geändert werden.",
+    tip_knob_deadband_c:
+      "Totband um den Sollwert (±): innerhalb davon jagt der Regler keine winzigen " +
+      "Abweichungen, was Ventilbewegungen und Takten reduziert. Standard 0,3 K; " +
+      "typisch 0,2–0,5 K.",
+    tip_knob_valve_floor_pct:
+      "Minimale Ventilöffnung, solange der Raum Wärme anfordert, um einen sinnvollen " +
+      "Durchfluss im Heizkreis zu halten. Standard 15 %. 0 deaktiviert die " +
+      "Mindestöffnung.",
+    tip_knob_boost_offset_c:
+      "Zuschaltschwelle: sobald die Regelabweichung diesen Wert überschreitet, " +
+      "schaltet sich die Zusatzquelle (Split/Heizgerät) zu. Sie gibt innerhalb des " +
+      "Komfortbands wieder frei; der Boden bleibt stets die Basisquelle. Muss größer " +
+      "als das Totband sein. Standard 1,0 K.",
+    tip_knob_fast_min_on_minutes:
+      "Mindestlaufzeit der Zusatzquelle nach dem Einschalten. Schützt den " +
+      "Split-Kompressor vor Takten und beruhigt Richtungswechsel in einer " +
+      "Multisplit-Gruppe. Standard 10 min; Minimum 3.",
+    tip_knob_fast_min_off_minutes:
+      "Mindeststillstandszeit der Zusatzquelle, bevor sie wieder starten darf. " +
+      "Standard 10 min; Minimum 3.",
+    tip_knob_fast_target_offset_k:
+      "Um wie viel Kelvin der an den Split gesendete Sollwert während eines Boosts " +
+      "über den Raum-Sollwert hinaus angehoben wird (Heizung: Sollwert + Wert, " +
+      "Kühlung: Sollwert − Wert). Der deckenmontierte Sensor des Splits misst wärmer " +
+      "als der Raumsensor — ohne die Überhöhung drosselt sich die Einheit selbst, " +
+      "bevor der Boost geliefert wird. Über das Abschalten entscheidet weiterhin der " +
+      "Raumsensor. 0 = keine Überhöhung (der Split erhält den reinen Sollwert). " +
+      "Standard 1 K.",
+    tip_knob_dew_margin_k:
+      "Kühlung: solange der Vorlauf mindestens so viele K über dem Taupunkt liegt, " +
+      "läuft das Ventil uneingeschränkt; näher am Taupunkt wird der Durchfluss " +
+      "gedrosselt (Kondensationsschutz am Boden). Standard 2 K; erhöhen Sie ihn, " +
+      "falls Sie jemals Feuchtigkeit sehen.",
+    tip_knob_dew_ramp_k:
+      "Breite der Drosselrampe unterhalb der Taupunkt-Marge: über diese Spanne fällt " +
+      "der Durchfluss linear von 100 % auf 0. Kleiner = schärferes Abschneiden. " +
+      "Standard 2 K.",
+    tip_knob_outdoor_ff_enabled:
+      "Wettervorsteuerung: fügt eine Grundöffnung des Ventils basierend auf der " +
+      "Außentemperatur hinzu, bevor der Raum Zeit hat auszukühlen. Nützlich bei " +
+      "großen Glasflächen und Kälteeinbrüchen. Standardmäßig aus.",
+    tip_knob_ff_neutral_c:
+      "Außentemperatur, bei der das Wetterglied null ist; darunter fügt jede 1 K " +
+      "Kälte Öffnung gemäß der FF-Verstärkung hinzu. Standard 15 °C.",
+    tip_knob_ff_gain_pct_per_k:
+      "Wie viel Prozent Öffnung das Wetterglied je 1 K unterhalb der neutralen " +
+      "Temperatur hinzufügt. Standard 1 %/K.",
+    tip_knob_ff_max_pct:
+      "Obergrenze für das Wetterglied — die Vorsteuerung fügt nie mehr als diesen " +
+      "Prozentsatz an Öffnung hinzu. Standard 20 %.",
+    tip_knob_cooling_supply_base_c:
+      "Der an die Wärmepumpe geschriebene Kühlwasser-Sollwert, während das Haus " +
+      "kühlt: Der geschriebene Wert ist das Maximum aus dieser Basis und dem globalen " +
+      "sicheren Taupunkt — nie unter dem Taupunkt. Nur aktiv, wenn die " +
+      "Kühl-Sollwert-Entität konfiguriert ist (Optionen → Wärmepumpe). Globaler " +
+      "Parameter — kann nicht je Raum übersteuert werden. Standard 18 °C.",
+    tip_knob_heating_supply_base_c:
+      "Heizungsvorlauf bei der neutralen Außentemperatur (Parameter „Neutrale " +
+      "Außentemperatur der Vorsteuerung“, Standard 15 °C). Darunter steigt der " +
+      "Sollwert entlang der Kurvensteigung; das Ergebnis wird auf 20–40 °C begrenzt. " +
+      "Nur an die Pumpe geschrieben, wenn die Heiz-Sollwert-Entität konfiguriert ist " +
+      "— standardmäßig folgt die Pumpe ihrer eigenen Kurve. Globaler Parameter. " +
+      "Standard 26 °C.",
+    tip_knob_heating_supply_slope:
+      "Um wie viele Kelvin der Heizwasser-Sollwert je 1 K Außentemperatur unterhalb " +
+      "des Neutralpunkts steigt. Standard 0,5 K/K; typisch 0,3–0,8 für ein gut " +
+      "gedämmtes Fußbodenheizungshaus.",
+    // Tooltips der Raumdetails (tip_dec_*) und der Tabellenköpfe (tip_val_* /
+    // tip_ast_* / tip_th_*) — Inhalt gemeinsam mit docs/manual/de.md: zusammen
+    // ändern.
+    tip_th_assist:
+      "Der Befehl für die Zusatzquelle des Raums (Split/Heizgerät): Betriebsrichtung " +
+      "und Zieltemperatur der Einheit. „—“ = der Raum hat keine Zusatzquelle; " +
+      "„aus“ = die Zusatzquelle ruht (der Boden hält den Raum).",
+    tip_assist_target:
+      "Der Sollwert des Splits weicht bewusst um den Parameter „Sollwert-Überhöhung " +
+      "der Zusatzquelle“ vom Raum-Sollwert ab (Standard 1 K; Heizung: +, Kühlung: −). " +
+      "Der eigene Sensor des Splits sitzt nahe der Decke und misst wärmer als unser " +
+      "Raumsensor — ein Sollwert gleich dem Ziel würde die Einheit drosseln, bevor " +
+      "der Boost den Raum tatsächlich erreicht. Über das Abschalten entscheidet " +
+      "weiterhin UNSER Raumsensor mit Hysterese, sodass der Raum nicht davonlaufen " +
+      "kann. Passen Sie ihn in der Abstimmung an (0 = keine Überhöhung). Im " +
+      "Übergangsmodus entspricht der Sollwert dem Ziel.",
+    tip_dec_error:
+      "Regelabweichung = Sollwert − gemessen. Positiv bedeutet zu kalt (öffnet beim " +
+      "Heizen das Ventil); bei der Kühlung wirkt das Vorzeichen umgekehrt.",
+    tip_dec_trend:
+      "Gefilterte Änderungsrate der Raumtemperatur in K/h. Speist das Trendglied — " +
+      "ein schneller Anstieg zum Sollwert schließt das Ventil frühzeitig etwas. Nach " +
+      "einer Datenlücke braucht der Filter ~30–45 min zum Einschwingen.",
+    tip_dec_terms:
+      "Woraus sich die Rohöffnung zusammensetzt: P reagiert auf die aktuelle " +
+      "Regelabweichung, I auf eine über die Zeit anhaltende Abweichung, Trend dämpft " +
+      "eine sich schnell ändernde Temperatur, FF fügt die Wetter-Grundlinie hinzu. " +
+      "Ihre Summe = Rohwert Ventil.",
+    tip_dec_raw_valve:
+      "Vom Regler BERECHNETE Öffnung VOR den Begrenzungen: Ventil-Mindestöffnung, " +
+      "0–100-%-Begrenzung und Sicherheitsregeln.",
+    tip_dec_final_valve:
+      "Die tatsächlich an die Aktoren gesendete Öffnung (nach Begrenzungen und " +
+      "Sicherheitsregeln). Ein Wert für alle Heizkreise des Raums.",
+    tip_dec_throttle:
+      "Taupunkt-Drosselfaktor (nur Kühlung): 100 % = uneingeschränkt, 0 % = Ventil " +
+      "geschlossen, weil der Vorlauf den Taupunkt erreicht hat (Meldung s2_throttle). " +
+      "0 % wird auch vorsorglich angewendet, wenn Luftfeuchtigkeits- oder " +
+      "Vorlaufdaten fehlen.",
+    tip_dec_integrator:
+      "Das Gedächtnis des Integralanteils. „Eingefroren“ bedeutet bewusst " +
+      "angehalten — z. B. die Wärmepumpe führt WW-Bereitung/Abtauung durch, ein " +
+      "Sensor ist verloren oder der Raum ist aus — damit der Integralanteil nicht " +
+      "fälschlich aufläuft.",
+    tip_dec_saturated:
+      "Das Ventil hat die Grenze 0 oder 100 % erreicht. Der Regler will mehr, als " +
+      "die Physik zulässt; das Anti-Windup verhindert, dass der Integralanteil gegen " +
+      "die Wand läuft.",
+    tip_dec_floor:
+      "Ob die Ventil-Mindestöffnung beim Heizen (Parameter „Ventil-Mindestöffnung“) " +
+      "in diesem Zyklus angewendet wurde.",
+    tip_dec_dew:
+      "Taupunkt, berechnet aus Raumtemperatur und Luftfeuchtigkeit. Darunter " +
+      "kondensiert Wasser am Boden — daher beide Kühlschutzmechanismen. Daneben: der " +
+      "Grund, wenn der Raum nichts zum globalen sicheren Taupunkt beiträgt.",
+    tip_dec_fast:
+      "Befehl für den Split/das Heizgerät: ein + Richtung + Zieltemperatur. Der " +
+      "Split regelt sich selbst; er ersetzt nie den Boden, sondern unterstützt nur " +
+      "oberhalb der Zuschaltschwelle.",
+    tip_dec_flags:
+      "Die Diagnosemeldungen dieses Zyklus — jede benennt den Schutz oder die " +
+      "Begrenzung, die gewirkt hat. Das vollständige Meldungsverzeichnis steht im " +
+      "Handbuch (docs/manual/de.md §12).",
+    tip_val_raw:
+      "Vom Regler vor den Begrenzungen berechnete Öffnung (Ventil-Mindestöffnung, " +
+      "0–100-%-Begrenzung, Sicherheitsregeln). Bewegen Sie den Mauszeiger über den " +
+      "Wert, um die Anteile der Glieder P/I/Trend/FF zu sehen.",
+    tip_val_floor:
+      "Ob die Ventil-Mindestöffnung beim Heizen (Parameter „Ventil-Mindestöffnung“) " +
+      "in diesem Zyklus angewendet wurde.",
+    tip_val_sat:
+      "Das Ventil hat die Grenze 0 oder 100 % erreicht — der Regler will mehr, als " +
+      "die Physik zulässt; das Anti-Windup hält den Integralanteil in Schach.",
+    tip_val_s2:
+      "Taupunkt-Durchflussdrosselung (nur Kühlung): 100 % = uneingeschränkt, 0 % = " +
+      "Ventil geschlossen (Meldung s2_throttle; auch vorsorglich 0 %, wenn " +
+      "Luftfeuchtigkeits- oder Vorlaufdaten fehlen).",
+    tip_val_feedback:
+      "Die vom Aktor gemeldete Position; eine anhaltende Abweichung vom Befehl löst " +
+      "valve_mismatch aus.",
+    tip_ast_timer:
+      "Sperre der Mindest-Ein-/Ausschaltzeit: so viel Zeit muss noch vergehen, bevor " +
+      "die Zusatzquelle den Zustand wechseln darf. Schützt den Kompressor.",
+    tip_ast_group:
+      "Räume an einem gemeinsamen Außengerät (Multisplit) müssen alle heizen oder " +
+      "alle kühlen. Der Verlierer der Abwägung wird zwangsweise abgeschaltet, bis " +
+      "sich die Gruppenrichtung ändert (der größte Bedarf gewinnt; die bestehende " +
+      "Richtung erhält einen Bonus von 0,5 K).",
+    tip_ast_hours:
+      "Das Zeitfenster, in dem die Zusatzquelle dieses Raums laufen darf (z. B. " +
+      "07:00–22:00; das Fenster darf über Mitternacht reichen). Außerhalb schaltet " +
+      "sich der Split nicht ein; läuft er beim Fensterende noch, stoppt er erst nach " +
+      "seiner Mindestlaufzeit — der Kompressorschutz steht über der Pünktlichkeit. " +
+      "Notheizen/-kühlen (S3/S4) darf die Ruhezeiten durchbrechen. Leer = immer " +
+      "erlaubt.",
+    // Reiter Wärmepumpe (B2) — Inhalt gemeinsam mit docs/manual/de.md §11.
+    hp_empty:
+      "Die Wärmepumpen-Anbindung ist nicht konfiguriert. Verweisen Sie die " +
+      "Integration auf die Entitäten der Pumpe unter Einstellungen → Geräte & " +
+      "Dienste → Tortoise-UFH → Konfigurieren → Wärmepumpe. Alles ist optional — " +
+      "unkonfiguriert berührt Tortoise die Pumpe nie.",
+    hp_sec_mode: "Betriebsmodus",
+    hp_tortoise_mode: "Tortoise-Modus",
+    hp_current_option: "Wärmepumpen-Modus",
+    hp_desired_option: "Zielmodus",
+    hp_in_sync: "synchron",
+    hp_diverged: "abweichend",
+    hp_dhw_only_note:
+      "Die Pumpe ist derzeit nur im WW-Betrieb — Tortoise schreibt den Modus nicht, " +
+      "bis die WW-Automatik die Richtung zurückgibt.",
+    hp_no_force:
+      "Im Übergang und Aus erzwingt Tortoise nie eine Richtung — die eigene " +
+      "Automatik der Pumpe und die WW-Bereitung bleiben zuständig.",
+    tip_hp_mode:
+      "Tortoise synchronisiert nur die RICHTUNG des Pumpenmodus: Heizung → die " +
+      "Variante „Heat“, Kühlung → die Variante „Cool“, stets unter Beibehaltung des " +
+      "Teils „+DHW“ (das WW-Flag gehört der externen Automatik). Schreibvorgänge sind " +
+      "selten: bei einem Tortoise-Moduswechsel oder wenn eine Abweichung ≥2 Zyklen " +
+      "anhält, höchstens alle 15 Minuten. Tortoise steuert nie den Kompressor oder " +
+      "die Kurve der Pumpe.",
+    hp_sec_dhw: "Warmwasserbereitung (WW)",
+    hp_dhw_switch: "WW-Flag (+DHW)",
+    hp_dhw_warning:
+      "Hinweis: Die externe WW-Automatik ist Eigentümerin dieses Flags und darf es " +
+      "jederzeit überschreiben — das ist ihr Recht. Dieser Schalter ist eine manuelle " +
+      "Anforderung („Wasser jetzt aufheizen / stopp“), keine Sperre.",
+    tip_hp_dhw:
+      "Fügt den Teil „+DHW“ der Pumpenmodus-Entität hinzu oder entfernt ihn (z. B. " +
+      "„Heat only“ ↔ „Heat+DHW“). Solange die Pumpe im „DHW only“ ist, ist das " +
+      "Entfernen des Flags unmöglich — es gibt keine Richtung, zu der zurückgekehrt " +
+      "werden könnte.",
+    hp_sec_setpoints: "Wasser-Sollwerte",
+    hp_cool_target: "Kühlwasser-Sollwert",
+    hp_cool_calc: "max(Basis {base}, sicherer Taupunkt {dew})",
+    hp_heat_target: "Heizwasser-Sollwert",
+    hp_heat_calc: "Kurve: {base} + {slope} · ({neutral} − Außen {tout})",
+    hp_not_written: "in diesem Modus nicht geschrieben",
+    hp_not_configured_entity: "Entität nicht konfiguriert",
+    tip_hp_cool:
+      "Beim Kühlen schreibt Tortoise einen Wasser-Sollwert = das Maximum aus der " +
+      "Basis (ein Abstimmungsparameter) und dem globalen sicheren Taupunkt (höchster " +
+      "Taupunkt der gekühlten Räume + 2 K) — das Wasser gelangt nie in die " +
+      "Kondensationszone. Geschrieben bei einer Änderung ≥ 0,5 K, alle ~45 min " +
+      "erneut erzwungen.",
+    tip_hp_heat:
+      "Optional: Beim Heizen schreibt Tortoise den Wasser-Sollwert aus einer " +
+      "einfachen Wetterkurve (Basis + Steigung × Unterschreitung der neutralen " +
+      "Temperatur, begrenzt auf 20–40 °C). Wenn Sie die Entität unkonfiguriert " +
+      "lassen, folgt die Pumpe ihrer eigenen Kurve — der Standard und vollständig " +
+      "unterstützt.",
+    hp_active_cap: "Pumpe für Fußbodenheizung verfügbar",
+    hp_active_unknown: "unbekannt",
+    tip_hp_active:
+      "Das Signal „Pumpe bedient die Fußbodenheizung“: Solange es aus ist " +
+      "(WW-Bereitung/Abtauung), frieren die Raumregler ihren Integralanteil ein, " +
+      "damit er nicht aufläuft, während kein Wasser den Boden erreicht.",
+    hp_writes_paused: "Schreibvorgänge pausiert — kein Raum ist in Regelung (Aktiv).",
+    // Hydraulischer No-Flow-Watchdog S6 + Aktuator-Selbsttest (issue #4,
+    // 2026-07-13). DE-Spiegel der obigen Schlüssel.
+    tune_grp_flow: "Durchfluss-Watchdog (S6)",
+    tune_flow_epsilon_k: "Minimale ΔT, die als Durchfluss zählt",
+    tune_flow_open_threshold_pct: "Öffnungsbefehl-Schwelle des Watchdogs",
+    tune_flow_response_window_min: "Hydraulisches Antwortfenster",
+    tip_knob_flow_epsilon_k:
+      "Durchfluss-Watchdog (S6): die minimale Vorlauf−Rücklauf-Temperaturdifferenz " +
+      "des Heizkreises, die als Nachweis von Wasserdurchfluss zählt. Darunter (und " +
+      "ohne Sondenbewegung zur Quelle hin) löst ein Öffnungsbefehl ohne hydraulische " +
+      "Antwort die Meldung „kein Durchfluss“ aus. Standard 0,3 K; bei verrauschten " +
+      "Sonden erhöhen.",
+    tip_knob_flow_open_threshold_pct:
+      "Durchfluss-Watchdog (S6): der Ventilbefehl, oberhalb dessen ein Heizkreis " +
+      "eine hydraulische Antwort zeigen muss. Unterhalb der Schwelle wird der " +
+      "Heizkreis nicht auf fehlenden Durchfluss geprüft. Standard 15 %.",
+    tip_knob_flow_response_window_min:
+      "Durchfluss-Watchdog (S6): wie viele Minuten durchgehend fehlender " +
+      "Durchflusssignatur (bei geöffnetem Befehl und plausibler Zirkulation) die " +
+      "Meldung „kein Durchfluss“ auslösen. Die " +
+      "Platte ist träge — Minimum 30 min, um Flattern zu vermeiden. Standard 45 min; " +
+      "1440 deaktiviert den Watchdog praktisch.",
+    tip_flow_chip:
+      "Durchfluss-Gesundheit von den Wassersonden des Heizkreises (S6-Watchdog) — " +
+      "ein unabhängiger, physischer Zeuge der Aktuierung, der der Rückmeldung der " +
+      "Ventil-Entität NICHT vertraut (dieser Kanal kann nach einem Reglerneustart " +
+      "lügen). „kein Durchfluss?“ = ein Öffnungsbefehl ohne hydraulische Signatur; " +
+      "„—“ = keine Sonden oder der Watchdog pausiert (Zirkulation unsicher).",
+    tip_actuation_test:
+      "Manueller Aktuator-Selbsttest: Das Ventil wird bewusst für 20–30 min auf " +
+      "100 % gefahren, und das Urteil ergibt sich aus der hydraulischen Antwort der " +
+      "Heizkreis-Sonden. Führen Sie ihn nach Wartung oder einem Stromereignis aus. " +
+      "Erfordert den Raum in Regelung und Wassersonden; Sicherheitsregeln " +
+      "(Überhitzung, Kondensation) brechen den Test ab. Während des Tests ist der " +
+      "Integrator eingefroren.",
+    val_th_flow: "Durchfluss",
+    val_th_test: "Aktuierungstest",
+    val_flow_cap: "Durchfluss",
+    val_test_cap: "Test",
+    flow_ok: "ok",
+    flow_no_flow: "kein Durchfluss?",
+    test_btn_start: "Aktuierung testen",
+    test_btn_cancel: "Test abbrechen",
+    test_running_min: "~{m} min",
+    test_passed: "bestanden",
+    test_failed: "nicht bestanden",
+    test_aborted: "abgebrochen",
+    test_untested: "ungetestet",
+  },
 };
 
 /**
@@ -1148,6 +1641,7 @@ const FLAG_LABELS = {
   s1_floor_overheat: {
     pl: "Przegrzanie podłogi",
     en: "Floor overheat",
+    de: "Bodenüberhitzung",
     sev: "problem", sx: "S1", group: "safety",
     descPl:
       "Zabezpieczenie przed przegrzaniem podłogi: woda zasilająca za gorąca " +
@@ -1156,10 +1650,13 @@ const FLAG_LABELS = {
     descEn:
       "Floor-overheat protection: supply water too hot (>40 °C) → valve closed " +
       "until it cools. Check the heat-pump heating curve / supply temperature.",
+    descDe:
+      "Bodenüberhitzungsschutz: Vorlaufwasser zu heiß (>40 °C) → Ventil geschlossen, bis es abkühlt. Prüfen Sie die Heizkurve der Wärmepumpe / die Vorlauftemperatur.",
   },
   s2_condensation: {
     pl: "Ryzyko kondensacji",
     en: "Condensation risk",
+    de: "Kondensationsrisiko",
     sev: "problem", sx: "S2", group: "safety",
     descPl:
       "Twardy bezpiecznik kondensacji: zasilanie osiągnęło punkt rosy pokoju → " +
@@ -1169,10 +1666,13 @@ const FLAG_LABELS = {
       "Condensation backstop: supply reached the room dew point → cooling valve " +
       "closed. Check humidity and the chilled-water temperature / global safe " +
       "dew point.",
+    descDe:
+      "Kondensations-Rückfallschutz: Vorlauf hat den Taupunkt des Raums erreicht → Kühlventil geschlossen. Prüfen Sie die Luftfeuchtigkeit und die Kaltwassertemperatur / den globalen sicheren Taupunkt.",
   },
   s2_throttle: {
     pl: "Dławienie przy punkcie rosy",
     en: "Dew-point throttling",
+    de: "Taupunkt-Drosselung",
     sev: "warn", sx: "S2", group: "safety",
     descPl:
       "Dławienie chłodzenia — zasilanie zbliża się do punktu rosy, przepływ " +
@@ -1181,10 +1681,13 @@ const FLAG_LABELS = {
     descEn:
       "Cooling throttled — supply approaching the dew point, flow <100 %. Normal " +
       "on humid days; if persistent, raise the chilled-water limit or dehumidify.",
+    descDe:
+      "Kühlung gedrosselt — Vorlauf nähert sich dem Taupunkt, Durchfluss <100 %. An feuchten Tagen normal; hält es an, erhöhen Sie die Kaltwassergrenze oder entfeuchten Sie.",
   },
   rh_stale_gated: {
     pl: "Nieświeża wilgotność (+1 K marginesu)",
     en: "Stale humidity (+1 K margin)",
+    de: "Veraltete Luftfeuchtigkeit (+1 K Marge)",
     sev: "warn", sx: "S2", group: "safety",
     descPl:
       "Odczyt wilgotności nieświeży (60–120 min) → punkt rosy zawyżony o max " +
@@ -1194,10 +1697,13 @@ const FLAG_LABELS = {
       "Humidity reading stale (60–120 min) → dew point padded by up to +1 K " +
       "(conservative). Check the humidity sensor; after 120 min the room drops " +
       "out of the dew-point protections.",
+    descDe:
+      "Luftfeuchtigkeitsmesswert veraltet (60–120 min) → Taupunkt um bis zu +1 K aufgeschlagen (vorsichtig). Prüfen Sie den Luftfeuchtigkeitssensor; nach 120 min fällt der Raum aus den Taupunktschutzmechanismen.",
   },
   s3_emergency_heat: {
     pl: "Awaryjne grzanie",
     en: "Emergency heat",
+    de: "Notheizen",
     sev: "problem", sx: "S3", group: "safety",
     descPl:
       "Awaryjne grzanie: pokój mocno wychłodzony (<5 °C) → wymuszone grzanie " +
@@ -1205,10 +1711,13 @@ const FLAG_LABELS = {
     descEn:
       "Emergency heat: room badly under-heated (<5 °C) → forced heating from " +
       "every source. Investigate the cause (open window? fault?).",
+    descDe:
+      "Notheizen: Raum stark unterversorgt (<5 °C) → erzwungenes Heizen aus jeder Quelle. Untersuchen Sie die Ursache (offenes Fenster? Störung?).",
   },
   s4_emergency_cool: {
     pl: "Awaryjne chłodzenie",
     en: "Emergency cooling",
+    de: "Notkühlen",
     sev: "problem", sx: "S4", group: "safety",
     descPl:
       "Awaryjne chłodzenie: pokój mocno przegrzany (>35 °C) → wymuszone " +
@@ -1216,10 +1725,13 @@ const FLAG_LABELS = {
     descEn:
       "Emergency cool: room badly overheated (>35 °C) → forced cooling. " +
       "Investigate the heat source (sun? fault?).",
+    descDe:
+      "Notkühlen: Raum stark überhitzt (>35 °C) → erzwungenes Kühlen. Untersuchen Sie die Wärmequelle (Sonne? Störung?).",
   },
   s5_watchdog: {
     pl: "Watchdog",
     en: "Watchdog",
+    de: "Watchdog",
     sev: "problem", sx: "S5", group: "safety",
     descPl:
       "Brak świeżych danych z pokoju >15 min → neutralna pozycja zaworu + alarm. " +
@@ -1227,10 +1739,13 @@ const FLAG_LABELS = {
     descEn:
       "No fresh room data for >15 min → neutral valve position + alarm. Clears " +
       "after 5 min of continuous fresh data.",
+    descDe:
+      "Keine frischen Raumdaten seit >15 min → neutrale Ventilstellung + Alarm. Verschwindet nach 5 min durchgehend frischer Daten.",
   },
   loop_no_flow: {
     pl: "Brak przepływu w pętli",
     en: "Loop no flow",
+    de: "Kein Durchfluss im Heizkreis",
     sev: "alarm", sx: "S6", group: "safety",
     descPl:
       "Zawór długo otwarty, a sondy pętli nie widzą przepływu wody → integrator " +
@@ -1240,10 +1755,13 @@ const FLAG_LABELS = {
       "Valve open a long time but the loop probes see no water flow → the " +
       "integrator freezes and the flow-fault entity turns on. Check the valve " +
       "controller / actuator / manifold rotameters.",
+    descDe:
+      "Ventil lange offen, aber die Heizkreis-Sonden sehen keinen Wasserdurchfluss → der Integrator friert ein und die Entität „Durchflussstörung“ schaltet sich ein. Prüfen Sie den Ventilcontroller / Aktor / die Rotameter des Verteilers.",
   },
   actuation_test_running: {
     pl: "Trwa test aktuacji",
     en: "Actuation test running",
+    de: "Aktuierungstest läuft",
     sev: "ok", sx: "S6", group: "safety",
     descPl:
       "Trwa ręczny test aktuacji (zawór celowo na 100 %). Informacyjnie — " +
@@ -1251,10 +1769,13 @@ const FLAG_LABELS = {
     descEn:
       "A manual actuation self-test is running (valve deliberately at 100 %). " +
       "Informational — wait or cancel.",
+    descDe:
+      "Ein manueller Aktuator-Selbsttest läuft (Ventil bewusst auf 100 %). Informativ — warten oder abbrechen.",
   },
   actuation_test_failed: {
     pl: "Test aktuacji niezaliczony",
     en: "Actuation test failed",
+    de: "Aktuierungstest nicht bestanden",
     sev: "alarm", sx: "S6", group: "safety",
     descPl:
       "Test aktuacji nie przeszedł — pętla nie odpowiedziała hydraulicznie na " +
@@ -1262,10 +1783,13 @@ const FLAG_LABELS = {
     descEn:
       "Actuation self-test failed — the loop did not respond hydraulically to " +
       "full open. Check the controller / actuator / flow of that loop.",
+    descDe:
+      "Aktuator-Selbsttest nicht bestanden — der Heizkreis reagierte hydraulisch nicht auf volle Öffnung. Prüfen Sie Controller / Aktor / Durchfluss dieses Heizkreises.",
   },
   fast_source_mismatch: {
     pl: "Wspomaganie w innym stanie niż komenda",
     en: "Assist state differs from command",
+    de: "Zusatzquelle weicht vom Befehl ab",
     sev: "warn", sx: null, group: "assist",
     descPl:
       "Split jest w innym stanie niż zadany (np. zmieniony pilotem). Nadpisany " +
@@ -1275,10 +1799,13 @@ const FLAG_LABELS = {
       "The split is in a different state than commanded (e.g. changed by remote). " +
       "Overwritten on the next re-assert (~45 min); for permanent manual control " +
       "set the room to OFF.",
+    descDe:
+      "Der Split ist in einem anderen Zustand als befohlen (z. B. per Fernbedienung geändert). Wird beim nächsten erneuten Erzwingen (~45 min) überschrieben; für dauerhafte manuelle Steuerung stellen Sie den Raum auf AUS.",
   },
   fast_source_min_runtime: {
     pl: "Wspomaganie: blokada min. czasu pracy",
     en: "Assist: min-runtime lock",
+    de: "Zusatzquelle: Mindestlaufzeit-Sperre",
     sev: "warn", sx: null, group: "assist",
     descPl:
       "Blokada minimalnego czasu pracy/postoju — wspomaganie nie może jeszcze " +
@@ -1287,10 +1814,13 @@ const FLAG_LABELS = {
     descEn:
       "Min ON/OFF dwell lock — assist can't change state yet (compressor " +
       "protection). Nothing to do; the timer is shown in the Assist tab.",
+    descDe:
+      "Sperre der Mindest-Ein-/Ausschaltzeit — die Zusatzquelle kann den Zustand noch nicht wechseln (Kompressorschutz). Nichts zu tun; der Timer wird im Reiter Zusatzquelle angezeigt.",
   },
   fast_source_quiet_hours: {
     pl: "Ciche godziny wspomagania",
     en: "Assist quiet hours",
+    de: "Ruhezeiten der Zusatzquelle",
     sev: "ok", sx: null, group: "assist",
     descPl:
       "Pokój poza dozwolonym oknem wspomagania; split się nie załączy (już " +
@@ -1300,10 +1830,13 @@ const FLAG_LABELS = {
       "Room is outside its allowed assist window; the split won't engage (a " +
       "running one finishes its min-ON). Informational; edit the window in the " +
       "room config.",
+    descDe:
+      "Der Raum ist außerhalb seines erlaubten Zusatzquellen-Fensters; der Split schaltet sich nicht ein (ein laufender beendet seine Mindestlaufzeit). Informativ; bearbeiten Sie das Fenster in der Raumkonfiguration.",
   },
   fast_source_group_conflict: {
     pl: "Konflikt kierunków na wspólnym agregacie",
     en: "Direction conflict on shared outdoor unit",
+    de: "Richtungskonflikt am gemeinsamen Außengerät",
     sev: "warn", sx: null, group: "assist",
     descPl:
       "Pokój przegrał arbitraż kierunku na wspólnym agregacie multisplit → split " +
@@ -1311,10 +1844,13 @@ const FLAG_LABELS = {
     descEn:
       "The room lost the direction arbitration on a shared multisplit outdoor " +
       "unit → the split is forced OFF. Returns when the group's direction changes.",
+    descDe:
+      "Der Raum hat die Richtungsabwägung an einem gemeinsamen Multisplit-Außengerät verloren → der Split wird zwangsweise AUS geschaltet. Kehrt zurück, wenn sich die Gruppenrichtung ändert.",
   },
   fast_source_cannot_cool: {
     pl: "Wspomaganie nie chłodzi",
     en: "Assist can't cool",
+    de: "Zusatzquelle kann nicht kühlen",
     sev: "warn", sx: null, group: "assist",
     descPl:
       "Pokój chce chłodzić, ale jego szybkie źródło to grzejnik (nie chłodzi). " +
@@ -1322,10 +1858,13 @@ const FLAG_LABELS = {
     descEn:
       "The room wants cooling but its fast source is a heater (cannot cool). " +
       "Informational.",
+    descDe:
+      "Der Raum möchte kühlen, aber seine Zusatzquelle ist ein Heizgerät (kann nicht kühlen). Informativ.",
   },
   sensor_lost: {
     pl: "Utrata czujnika",
     en: "Sensor lost",
+    de: "Sensor verloren",
     sev: "problem", sx: null, group: "config",
     descPl:
       "Utrata czujnika temperatury (brak / niewiarygodny / starszy niż limit). " +
@@ -1335,10 +1874,13 @@ const FLAG_LABELS = {
       "Temperature sensor lost (missing / implausible / older than the staleness " +
       "limit). Heating holds the last healthy valve, cooling parks at 0, split " +
       "OFF. Recovers on a fresh valid reading.",
+    descDe:
+      "Temperatursensor verloren (fehlend / unplausibel / älter als die Veralterungsgrenze). Heizen hält die letzte gesunde Ventilstellung, Kühlen parkt auf 0, Split AUS. Erholt sich bei einem frischen, gültigen Messwert.",
   },
   cooling_disabled: {
     pl: "Chłodzenie wyłączone w tym pokoju",
     en: "Cooling disabled in this room",
+    de: "Kühlung in diesem Raum deaktiviert",
     sev: "info", sx: null, group: "config",
     descPl:
       "Chłodzenie wyłączone dla tego pokoju w konfiguracji — pomijany w trybie " +
@@ -1346,10 +1888,13 @@ const FLAG_LABELS = {
     descEn:
       "Cooling is disabled for this room in the config — it is skipped in cooling " +
       "mode. Intentional; change it in the room options to allow cooling.",
+    descDe:
+      "Kühlung ist für diesen Raum in der Konfiguration deaktiviert — er wird im Kühlmodus übersprungen. Beabsichtigt; ändern Sie es in den Raumoptionen, um Kühlung zu erlauben.",
   },
   unknown_room: {
     pl: "Brak konfiguracji",
     en: "Unknown room",
+    de: "Unbekannter Raum",
     sev: "problem", sx: null, group: "config",
     descPl:
       "Pokój bez konfiguracji regulatora (przejściowo po zmianach konfiguracji). " +
@@ -1357,10 +1902,13 @@ const FLAG_LABELS = {
     descEn:
       "Room has no controller config (transient after config changes). Reload the " +
       "integration; if it persists, remove and re-add the room.",
+    descDe:
+      "Der Raum hat keine Reglerkonfiguration (vorübergehend nach Konfigurationsänderungen). Laden Sie die Integration neu; hält es an, entfernen Sie den Raum und fügen Sie ihn erneut hinzu.",
   },
   controller_error: {
     pl: "Błąd regulatora",
     en: "Controller error",
+    de: "Reglerfehler",
     sev: "problem", sx: null, group: "config",
     descPl:
       "Wyjątek w regulatorze pokoju → bezpieczne wyhamowanie (grzanie trzyma " +
@@ -1368,10 +1916,13 @@ const FLAG_LABELS = {
     descEn:
       "Exception inside the room controller → safe degrade (heating holds the " +
       "valve, else 0; split OFF). Check the HA logs and report.",
+    descDe:
+      "Ausnahme im Raumregler → sichere Degradierung (Heizen hält das Ventil, sonst 0; Split AUS). Prüfen Sie die HA-Protokolle und melden Sie es.",
   },
   valve_mismatch: {
     pl: "Zawór nie wykonuje komend",
     en: "Valve not following commands",
+    de: "Ventil folgt den Befehlen nicht",
     sev: "problem", sx: null, group: "config",
     descPl:
       "Siłownik od ≥3 cykli raportuje pozycję inną niż komenda. Sprawdź siłownik " +
@@ -1380,6 +1931,8 @@ const FLAG_LABELS = {
       "The actuator has reported a position different from the command for ≥3 " +
       "cycles. Check the actuator / relay / entity; compare Command vs Feedback " +
       "in the Valves tab.",
+    descDe:
+      "Der Aktor meldet seit ≥3 Zyklen eine andere Position als der Befehl. Prüfen Sie Aktor / Relais / Entität; vergleichen Sie Befehl vs. Rückmeldung im Reiter Ventile.",
   },
 };
 
@@ -1956,7 +2509,14 @@ class TortoiseUfhPanel extends HTMLElement {
           hass.language ||
           hass.selectedLanguage)) ||
       "en";
-    return String(raw).toLowerCase().startsWith("pl") ? "pl" : "en";
+    const lang = String(raw).toLowerCase();
+    if (lang.startsWith("pl")) {
+      return "pl";
+    }
+    if (lang.startsWith("de")) {
+      return "de";
+    }
+    return "en";
   }
 
   _t(key) {
@@ -1981,7 +2541,13 @@ class TortoiseUfhPanel extends HTMLElement {
   _flagDesc(code) {
     const meta = FLAG_LABELS[code];
     if (meta) {
-      return (this._lang === "pl" ? meta.descPl : meta.descEn) || meta.descEn || "";
+      const byLang =
+        this._lang === "pl"
+          ? meta.descPl
+          : this._lang === "de"
+            ? meta.descDe
+            : meta.descEn;
+      return byLang || meta.descEn || "";
     }
     return this._t("flag_desc_unknown");
   }

@@ -20,9 +20,11 @@
 [license-badge]: https://img.shields.io/badge/License-MIT-green.svg
 [license-url]: LICENSE
 
-> 📖 **Instrukcja użytkownika (PL): [docs/INSTRUKCJA.md](docs/INSTRUKCJA.md)** —
-> kompletny przewodnik po instalacji, konfiguracji, panelu, strojeniu i flagach.
-> The full end-user manual ships in Polish; this README covers the essentials in English.
+> **Language / Język / Sprache:** **English** (this page) · [Polski](docs/manual/pl.md) · [Deutsch](README.de.md)
+>
+> The full end-user manual (installation, configuration, the sidebar panel, tuning and the flag
+> dictionary) is maintained per language in [`docs/manual/`](docs/manual/) —
+> [Polski](docs/manual/pl.md) · [Deutsch](docs/manual/de.md). This README is the English overview.
 
 ---
 
@@ -132,14 +134,18 @@ explanation of what it did and why.
   integral term is frozen so it does not wind up against a dead actuator.
 - **Optional weather feedforward** — a modest baseline valve term from outdoor temperature;
   the PI loop does the rest.
+- **Optional heat-pump link & quiet hours** — an opt-in link can steer the heat pump's mode
+  and cooling/heating water setpoints (always honouring domestic-hot-water priority), and each
+  room can restrict its fast source to an allowed time window.
 - **Per-room control state (off / live)** — one two-state select per room:
   *off* excludes it from control (the core idles it and nothing is ever written),
   *live* drives its hardware. A whole-house "hands off" is simply every room in
   off (see below).
-- **Sidebar panel** — a dependency-free Home Assistant panel with Rooms / Tuning /
-  Valves / Assist tabs: a live per-room table (control state, measured temperature,
-  setpoint, error, valve %, supply/return water, mode), controller tuning (global gains
-  plus sparse per-room overrides), and each room's full report.
+- **Sidebar panel** — a dependency-free Home Assistant panel with six tabs (Rooms, Flags,
+  Tuning, Valves, Assist, Heat pump): a live per-room table (control state, measured
+  temperature, setpoint, error, valve %, supply/return water, mode), a flag annunciator,
+  controller tuning (global gains plus sparse per-room overrides), the optional heat-pump
+  link, and each room's full report.
 - **Hardware-agnostic** — you map Home Assistant entities to roles at setup; units are
   validated (°C, %, W), brands are not.
 - **Built-in building simulator** — a digital twin (3R3C RC model per room, ZOH via matrix
