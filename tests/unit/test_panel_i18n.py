@@ -166,7 +166,7 @@ def test_flag_labels_have_pl_en_and_severity() -> None:
 # The flag annunciator (Rooms tab) renders ENTIRELY from FLAG_LABELS, so each
 # entry must be a full registry row: adding a flag = one complete entry, and it
 # appears everywhere. These are the vocabularies the panel/annunciator knows.
-_VALID_FLAG_SEV = {"ok", "warn", "problem", "alarm"}
+_VALID_FLAG_SEV = {"ok", "info", "warn", "problem", "alarm"}
 _VALID_FLAG_GROUP = {"safety", "assist", "config"}
 
 

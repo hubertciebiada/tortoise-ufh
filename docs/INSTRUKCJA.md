@@ -1,6 +1,6 @@
 # Tortoise-UFH — instrukcja użytkownika
 
-> Dotyczy wersji **0.11.0**. Instrukcja opisuje integrację po polsku; interfejs
+> Dotyczy wersji **0.11.1**. Instrukcja opisuje integrację po polsku; interfejs
 > (panel, encje, kreator konfiguracji, usługi) jest dostępny po polsku i po
 > angielsku i podąża za językiem ustawionym w Twoim profilu Home Assistant.
 
@@ -562,6 +562,14 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **0.11.1 (2026-07-14)** — panel: flaga **„Chłodzenie wyłączone w tym pokoju"**
+  (`cooling_disabled`) przestała świecić na żółto. To zamierzony, stały stan (pokój celowo
+  wypisany z chłodzenia), więc przez cały sezon chłodniczy fałszywie wyglądał jak usterka.
+  Wprowadzony neutralny poziom severity **„info"** (spokojny, stonowany kolor, poniżej
+  „ostrzeżenia") — flaga jest dalej widoczna i wyjaśniona, ale nie podbija kropki statusu
+  pokoju do żółtej i nie robi szumu. Ten sam fakt widać też bez zmian w szczegółach pokoju
+  („Powód braku punktu rosy"). Wyłącznie panel — bez migracji konfiguracji, bez nowego
+  parametru, kontrakt I/O nietknięty.
 - **0.11.0 (2026-07-14)** — trzy zmiany. **(1) Chłodzenie — podłoga trzyma pozycję podczas
   dogrzewu splitem:** gdy split wspomaga chłodzenie, schłodzone przez niego powietrze nie
   zamyka już zaworu podłogi do zera — podłoga utrzymuje ostatnią pozycję i dalej rozładowuje

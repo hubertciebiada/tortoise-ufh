@@ -1127,7 +1127,11 @@ const STR = {
  * (persistent command-vs-feedback divergence).
  *
  * Each entry carries: `pl`/`en` (short label), `sev` (drives the room status
- * dot + chip colour), `sx` (safety-rule code `"S1".."S6"` or `null`), `group`
+ * dot + chip colour: `ok` < `info` < `warn` < `problem` < `alarm`, where `info`
+ * is a neutral, *intentional steady state* — e.g. a room deliberately opted out
+ * of cooling — that must NOT read as a fault and never escalates the roll-up
+ * above the quiet neutral tint), `sx` (safety-rule code `"S1".."S6"` or `null`),
+ * `group`
  * (`"safety"|"assist"|"config"` — the annunciator bucket), and `descPl`/`descEn`
  * (the full "i"-tooltip explanation). The flag annunciator, the severity
  * roll-up and the detail chips all render FROM this map, so **adding a flag is
@@ -1335,7 +1339,7 @@ const FLAG_LABELS = {
   cooling_disabled: {
     pl: "Chłodzenie wyłączone w tym pokoju",
     en: "Cooling disabled in this room",
-    sev: "warn", sx: null, group: "config",
+    sev: "info", sx: null, group: "config",
     descPl:
       "Chłodzenie wyłączone dla tego pokoju w konfiguracji — pomijany w trybie " +
       "chłodzenia. Celowe; zmień w opcjach pokoju, by dopuścić chłodzenie.",
@@ -1383,7 +1387,7 @@ const FLAG_LABELS = {
 const FLAG_GROUP_ORDER = ["safety", "assist", "config"];
 const FLAG_GROUP_FALLBACK = "other";
 
-const SEV_RANK = { ok: 0, warn: 1, problem: 2, alarm: 3 };
+const SEV_RANK = { ok: 0, info: 1, warn: 2, problem: 3, alarm: 4 };
 
 /**
  * Tuning-tab knob groups (A4, 2026-07-12): the Tuning tab renders a vertical
@@ -2639,7 +2643,15 @@ class TortoiseUfhPanel extends HTMLElement {
 
   /** Map a SEV_RANK integer back to its severity name. */
   _sevName(rank) {
-    return rank >= 3 ? "alarm" : rank === 2 ? "problem" : rank === 1 ? "warn" : "ok";
+    return rank >= 4
+      ? "alarm"
+      : rank === 3
+        ? "problem"
+        : rank === 2
+          ? "warn"
+          : rank === 1
+            ? "info"
+            : "ok";
   }
 
   /** Coerce any control-state value to one of `ROOM_STATES` (default off). */
@@ -3570,7 +3582,13 @@ class TortoiseUfhPanel extends HTMLElement {
       const on = !!rooms;
       row.el.classList.toggle("is-on", on);
       row.el.classList.toggle("is-off", !on);
-      row.el.classList.remove("sev-ok", "sev-warn", "sev-problem", "sev-alarm");
+      row.el.classList.remove(
+        "sev-ok",
+        "sev-info",
+        "sev-warn",
+        "sev-problem",
+        "sev-alarm",
+      );
       row.statusEl.textContent = "";
       if (on) {
         row.el.classList.add("sev-" + this._flagSev(code));
@@ -6431,6 +6449,7 @@ button { font-family: inherit; cursor: pointer; }
 .hero .stat-cap { font-size: 11px; color: var(--t-muted); letter-spacing: .02em; }
 .hero .stat-val { font-size: 15px; font-weight: 600; }
 .stat.sev-ok .stat-val { color: var(--t-ok); }
+.stat.sev-info .stat-val { color: var(--t-info); }
 .stat.sev-warn .stat-val { color: var(--t-warn); }
 .stat.sev-problem .stat-val { color: var(--t-error); }
 .stat.sev-alarm .stat-val { color: var(--t-error); }
@@ -6631,6 +6650,7 @@ button { font-family: inherit; cursor: pointer; }
 
 .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; background: var(--t-muted); }
 .dot.sev-ok { background: var(--t-ok); }
+.dot.sev-info { background: var(--t-info); }
 .dot.sev-warn { background: var(--t-warn); }
 .dot.sev-problem { background: var(--t-error); }
 .dot.sev-alarm { background: var(--t-error); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t-error) 30%, transparent); }
@@ -6669,6 +6689,7 @@ details.flag-legend[open] > summary { margin-bottom: 12px; }
   padding: 2px 10px; border-radius: 999px; background: var(--t-chip); white-space: nowrap;
 }
 .flag-legend-summary.sev-ok { color: var(--t-ok); background: color-mix(in srgb, var(--t-ok) 16%, transparent); }
+.flag-legend-summary.sev-info { color: var(--t-info); background: color-mix(in srgb, var(--t-info) 16%, transparent); }
 .flag-legend-summary.sev-warn { color: var(--t-warn); background: color-mix(in srgb, var(--t-warn) 16%, transparent); }
 .flag-legend-summary.sev-problem { color: var(--t-error); background: color-mix(in srgb, var(--t-error) 16%, transparent); }
 .flag-legend-summary.sev-alarm { color: var(--t-error); background: color-mix(in srgb, var(--t-error) 26%, transparent); }
@@ -6708,6 +6729,10 @@ details.flag-legend[open] > summary { margin-bottom: 12px; }
 .flag-row.is-on.sev-ok .flag-sx { background: var(--t-ok); color: var(--t-on-primary); }
 .flag-row.is-on.sev-ok .flag-row-status { color: var(--t-ok); }
 .flag-row.is-on.sev-ok .flag-dot { background: var(--t-ok); }
+.flag-row.is-on.sev-info { border-left-color: var(--t-info); background: color-mix(in srgb, var(--t-info) 8%, transparent); }
+.flag-row.is-on.sev-info .flag-sx { background: var(--t-info); color: var(--t-on-primary); }
+.flag-row.is-on.sev-info .flag-row-status { color: var(--t-info); }
+.flag-row.is-on.sev-info .flag-dot { background: var(--t-info); }
 .flag-row.is-on.sev-warn { border-left-color: var(--t-warn); background: color-mix(in srgb, var(--t-warn) 9%, transparent); }
 .flag-row.is-on.sev-warn .flag-sx { background: var(--t-warn); color: var(--t-on-primary); }
 .flag-row.is-on.sev-warn .flag-row-status { color: var(--t-warn); }

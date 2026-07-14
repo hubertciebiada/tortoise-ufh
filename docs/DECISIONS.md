@@ -1084,3 +1084,43 @@ lifecycle).
 report/panel (would be new i18n strings — a separate small PR if wanted). No on/off knob for the
 mechanism (it is always active in cooling); a `boost_hold_enabled` knob can be added later if the
 owner wants a switch.
+
+## 19. Panel severity taxonomy — an `info` tier for intentional steady states (2026-07-14, v0.11.1)
+
+> **Status: panel-only.** Pure display taxonomy in `tortoise-ufh-panel.js`. **No core change, no
+> `RoomReport` field, no change to the frozen I/O contract, no new tuning knob.** The core still
+> emits the `cooling_disabled` flag exactly as before; only its rendered colour changed.
+
+**The noise.** The owner (11 cooling rooms LIVE) opts some rooms out of cooling. Such a room emits
+the `cooling_disabled` flag *for the entire cooling season* — a permanent, intended configuration
+fact, not a fault. The flag was registered `sev: "warn"`, and the flag annunciator rolls a room's
+worst flag up into its status dot (`_severity` → `max(SEV_RANK[...])`), so an opted-out room glowed
+yellow all season. That is alarm fatigue: a steady, deliberate state reading with the same visual
+weight as a stale-humidity warning or a dew-throttle event. The same fact was *already* surfaced
+neutrally elsewhere (the per-room "safe dew-point exclusion reason" row and the hero dew-chip
+tooltip), so the yellow flag was largely duplicate noise.
+
+**Chosen fix (owner-selected).** Add a neutral severity tier **`info`** between `ok` and `warn`
+(`SEV_RANK = { ok:0, info:1, warn:2, problem:3, alarm:4 }`, `_sevName` extended to match) and
+reclassify `cooling_disabled` from `warn` → `info`. `info` renders in the calm `--t-info` token
+(theme-aware via HA `--info-color`), so the room dot, the flags stat tile, the annunciator summary
+and the flag row all read as a quiet neutral rather than a yellow alarm. Crucially `info` still
+*rolls up*: a room with `cooling_disabled` **and** a genuine `warn`/`problem` flag escalates to that
+worse tier as before — `info` only sets the floor when it is the single worst thing about the room.
+The information is preserved (the flag stays visible and fully explained); only its alarm connotation
+is removed.
+
+**Alternatives considered (with the owner).** (a) `sev: "ok"` (green) — a one-word change but
+semantically wrong: green reads as "on / running", contradicting a flag whose text is "cooling
+disabled". (b) Drop the flag entirely and lean on the existing dew-exclusion reason — simplest, but
+loses the at-a-glance "this room is deliberately non-standard" signal on the Rooms table (a plain
+green dot would be indistinguishable from a normally-cooling room). (c) A per-entry `roll: false`
+that keeps the chip but excludes it from the dot roll-up — a half-measure that leaves the chip itself
+yellow. The `info` tier was chosen because it is the general, reusable fix: intentional steady states
+now have a home distinct from both "good/running" and "needs attention", and other informational
+flags (e.g. `fast_source_cannot_cool`) can migrate to it later without new machinery.
+
+**Guard.** `tests/unit/test_panel_i18n.py` validates every `FLAG_LABELS.sev` against a fixed
+vocabulary; `info` was added to `_VALID_FLAG_SEV` so the registry-completeness test admits the new
+tier. The class-reset list in `applyRow` gained `sev-info` so a row cannot retain a stale severity
+class. `-m unit` green.
