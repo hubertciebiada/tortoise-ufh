@@ -34,8 +34,9 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   `PIDController`, `RoomController` (the per-room black box) + `BuildingController`
   (orchestrator), `FastSourceMachine` (`fast_source.py`: split direction/dwell machine the
   controller delegates to), `TrendEstimator` (`trend.py`: filtered dT/dt), dew point,
-  weather-comp feedforward, EN 1264 loop power, safety rules,
-  metrics. No HA import, ever. Vendored inside the integration for a self-contained HACS
+  weather-comp feedforward, EN 1264 loop power, safety rules, the S6 hydraulic no-flow
+  watchdog + actuation self-test (`flow_watchdog.py`), the opt-in heat-pump link
+  (`hp_link.py`), metrics. No HA import, ever. Vendored inside the integration for a self-contained HACS
   install; imports its siblings relatively (`from .X import ...`).
 - **Adapter** — `custom_components/tortoise_ufh/`. Thin HA shim: `TortoiseUfhCoordinator`
   (`DataUpdateCoordinator`, 5-min nominal; feeds the core the REAL measured dt, clamped, and
@@ -52,7 +53,10 @@ Core talks to the outside only through plain frozen dataclasses and structural `
 - **Panel** — `custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js`. Self-contained
   vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Six tabs — Rooms (table
   with the per-room two-state control), Flags, Tuning, Valves, Assist, Heat pump — rendering
-  the black-box report.
+  the black-box report. Fully localised PL/EN/DE from one per-language `STR` table with a
+  guaranteed English fallback (`_resolveLang` maps the HA locale; unknown ⇒ English); the HA-side
+  UI strings live in `translations/{en,pl,de}.json` (mirrors, key-parity enforced by
+  `tests/unit/test_panel_i18n.py`).
 - **Simulator** — `custom_components/tortoise_ufh/core/simulator.py` (`BuildingSimulator` +
   `SimulatedRoom`). Digital twin for offline tests. Crucially, `get_all_measurements()`
   produces the SAME `RoomInputs` the
@@ -77,7 +81,9 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
 - **Floor cooling is in v1** with **two-layer dew-point protection**: (1) GLOBAL safe dew point =
   `max_over_cooled_rooms(dew_point(T_room, rh)) + 2 K`, exposed as a sensor for the heat pump's
   cooling-supply lower limit; (2) LOCAL per-room S2 valve throttle via `cooling_throttle_factor`
-  (graduated 0..1, flags `"s2_condensation"` at 0). Cooling uses PI with inverted error sign.
+  (graduated 0..1, flag `"s2_throttle"` while throttling — renamed from `s2_condensation`
+  2026-07-12, B7); the HARD backstop at the dew point itself is a separate rule flagging
+  `"s2_condensation"` (`safety.py`). Cooling uses PI with inverted error sign.
 - **Three outputs (external contract):** (1) per-room valve `0..100 %`; (2) per-room fast-source
   command = `ON + mode(direction) + room target temp` (the split self-regulates; we never touch
   compressor power); (3) global safe dew-point value (°C). Plus a rich per-room `RoomReport`.
@@ -98,6 +104,13 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
 - **Sensor loss ⇒ freeze valve + split off** (see valve rule above). Integrator freezes when
   `hp_active_for_ufh is False` (DHW/defrost) — since 2026-07-08 a DORMANT optional feature
   (the owner has a buffer tank; `CONF_ENTITY_HP_ACTIVE` unset ⇒ `None` by default; PRD §8.3).
+- **Later additive behaviours (no I/O-contract change, no config migration):** opt-in per-room
+  quiet hours + opt-in heat-pump link (`hp_link.py`: mode/water-setpoint sync, always preserving
+  `+DHW`) (v0.8.0); the S6 hydraulic no-flow watchdog + manual actuation self-test
+  (`flow_watchdog.py`, witnessed by loop supply/return probes, never valve feedback) (v0.9.0);
+  cooling boost-hold — the floor valve holds its pre-boost position during a split boost so the
+  slab keeps discharging (v0.11.0, DECISIONS §18); and the panel `info` severity tier for
+  intentional steady states like `cooling_disabled` (v0.11.1, §19).
 
 ---
 
@@ -152,7 +165,7 @@ unavailable.
 
 ## When building a file
 
-1. Read `docs/BUILD_SPEC.md` fully + `scratchpad/pump-ahead-blueprint.md` + PRD §8.
+1. Read `docs/BUILD_SPEC.md` fully + `docs/ALGORITHM_SPEC.md` + PRD §8 Aneks.
 2. Read every core file your module imports to match REAL signatures.
 3. Write EXACTLY your file(s); keep public signatures verbatim; no TODOs/stubs/`NotImplementedError`.
 4. Do not edit files you don't own. Do not add runtime deps beyond numpy/scipy (core) or HA
