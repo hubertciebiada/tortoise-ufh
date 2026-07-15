@@ -39,15 +39,25 @@ Units: temperatures in degrees Celsius (``_c``); curve slope in K/K.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
+from dataclasses import dataclass
 
 from .config import ControllerConfig
-from .models import Mode
+from .const import DEW_MARGIN_DEFAULT_K
+from .models import Mode, RoomReport
 from .weather_comp import WeatherCompCurve
 
 __all__ = [
+    "FLICKER_DEMAND_ERROR_K",
+    "FLICKER_DEMAND_THROTTLE_MIN",
+    "FLICKER_DEW_RESERVE_K",
+    "FLICKER_START_OFFSET_K",
     "HEATING_SUPPLY_MAX_C",
     "HEATING_SUPPLY_MIN_C",
     "HEISHAMON_MODE_OPTIONS",
+    "FlickerDecision",
+    "SetpointFlicker",
+    "cooling_demand",
     "cooling_setpoint_c",
     "dhw_option",
     "direction_option",
@@ -260,3 +270,378 @@ def heating_curve(config: ControllerConfig) -> WeatherCompCurve:
         t_supply_max=HEATING_SUPPLY_MAX_C,
         t_supply_min=HEATING_SUPPLY_MIN_C,
     )
+
+
+# ---------------------------------------------------------------------------
+# Cooling setpoint-flicker (issue #7, 2026-07-15) — pure decision logic
+# ---------------------------------------------------------------------------
+#
+# On a Panasonic Aquarea the cooling compressor is gated by a FIXED 3 K
+# hysteresis on the RETURN (inlet) water: it STARTS when the inlet climbs to
+# ``cool-setpoint + 3 K`` and STOPS when the inlet falls back to ~setpoint.
+# That hysteresis is firmware-baked and cannot be changed over HeishaMon, so
+# through long idles the return parks near ``setpoint + 3 K`` while rooms still
+# call for cooling and the floor under-delivers. The "setpoint-flicker" trips
+# the compressor deliberately: when the pump sits idle in the deadband with
+# genuine unmet demand, Tortoise drops the WRITTEN cooling setpoint for ONE
+# cycle (to the dew-safe pulse floor ``p``) so the pump's own ``+3 K`` rule
+# fires a start, then restores the normal setpoint the very next cycle so the
+# run finishes at the dew-safe value. Net effect: a tighter EFFECTIVE deadband
+# (colder AVERAGE water) while the return floor stays dew-safe. Opt-in,
+# Panasonic-specific, verified on the owner's live unit.
+
+FLICKER_START_OFFSET_K: float = 3.0
+"""The pump's FIXED firmware START band on the return water [K] (issue #7).
+
+The Panasonic Aquarea cooling compressor starts when the inlet reaches
+``cool-setpoint + this`` and stops at ~setpoint. Verified on the owner's unit
+and deliberately NOT modelled as a variable — it is a constant of the pump's
+firmware.
+"""
+
+FLICKER_DEW_RESERVE_K: float = DEW_MARGIN_DEFAULT_K
+"""Reserve subtracted from the global safe dew point to get the pulse floor [K].
+
+The global safe dew point the heat pump is fed is
+``max_over_cooled(T_dew) + GLOBAL_SAFE_DEW_MARGIN_K``. Subtracting the SAME
+margin recovers the RAW worst-room dew point, which is where the one-cycle
+pulse target ``p`` is floored (then ceiled onto the pump's grid).
+
+Single source of truth (2026-07-15, issue #7): BOTH this reserve AND
+``controller.GLOBAL_SAFE_DEW_MARGIN_K`` reference the ONE shared low-level
+constant :data:`~tortoise_ufh.const.DEW_MARGIN_DEFAULT_K`, so they can never
+drift apart — a change to the design margin moves the safe dew point and the
+pulse floor together, and ``p`` always lands exactly on the raw dew point,
+never below it.
+"""
+
+FLICKER_DEMAND_ERROR_K: float = 0.3
+"""How far a cooled room must sit ABOVE its setpoint to "call" for cooling [K].
+
+A room counts toward flicker demand only when its error (``setpoint -
+room_temp``, cooling sign) is at least this far negative — i.e. the room is at
+least 0.3 K too warm.
+"""
+
+FLICKER_DEMAND_THROTTLE_MIN: float = 0.5
+"""Minimum local dew-throttle factor for a room to count as calling [0..1].
+
+A room whose local S2 dew throttle has it mostly shut (factor below this) is
+ignored — its floor is already dew-limited, so tripping the compressor would
+not help it.
+"""
+
+
+def cooling_demand(reports: Iterable[RoomReport]) -> bool:
+    """Whether any cooled room genuinely calls for more cooling (issue #7).
+
+    True iff at least one report is a genuinely-cooling room, above its
+    setpoint, with valid readings and not condensation-limited:
+
+    * ``report.dew_excluded_reason is None`` — the room IS eligible for the
+      global safe dew point (COOLING, ``cooling_enabled`` and usable
+      temperature + humidity);
+    * ``report.error_c is not None and error_c <= -FLICKER_DEMAND_ERROR_K`` —
+      cooling sign (``error_c = setpoint - room_temp``), so a room ABOVE its
+      setpoint is negative;
+    * ``report.dew_throttle_factor >= FLICKER_DEMAND_THROTTLE_MIN`` — the room
+      is not already mostly throttled shut by its local dew defence;
+    * ``"sensor_lost" not in report.flags`` — the room is not degraded.
+
+    Args:
+        reports: The per-room :class:`~tortoise_ufh.models.RoomReport`s of one
+            control cycle.
+
+    Returns:
+        ``True`` when the flicker has a real reason to trip the compressor.
+    """
+    for report in reports:
+        if (
+            report.dew_excluded_reason is None
+            and report.error_c is not None
+            and report.error_c <= -FLICKER_DEMAND_ERROR_K
+            and report.dew_throttle_factor >= FLICKER_DEMAND_THROTTLE_MIN
+            and "sensor_lost" not in report.flags
+        ):
+            return True
+    return False
+
+
+_FLICKER_STATES: frozenset[str] = frozenset({"idle", "pulse", "cooldown"})
+"""The three :class:`SetpointFlicker` states."""
+
+_FLICKER_FLAGS: frozenset[str] = frozenset(
+    {"flicker_pulsing", "flicker_dew_blocked", "flicker_no_sensor"}
+)
+"""The flag vocabulary a :class:`FlickerDecision` may carry."""
+
+_FLICKER_WINDOW_S: float = 3600.0
+"""Rolling window for the max-starts-per-hour cap [s]."""
+
+
+@dataclass(frozen=True)
+class FlickerDecision:
+    """One cycle's cooling setpoint-flicker verdict + diagnostics (issue #7).
+
+    JSON-friendly (all fields are primitives or ``None``): the adapter maps it
+    straight into the heat-pump runtime payload and the panel.
+
+    Attributes:
+        pulse_target_c: The cooling setpoint to WRITE this cycle when pulsing
+            [degC]; ``None`` means "write the normal target ``w``".
+        restore_pending: ``True`` on the pulse -> cooldown edge — tells the
+            adapter it MUST write the normal ``w`` even if the cooling branch
+            would otherwise skip the write (the mode flipped out of COOLING
+            mid-pulse). The restore is unconditional.
+        state: The machine state AFTER this step: ``"idle"`` / ``"pulse"`` /
+            ``"cooldown"``.
+        flags: Subset of ``"flicker_pulsing"`` (a pulse is being written this
+            cycle), ``"flicker_dew_blocked"`` (armed but a pulse would cross
+            the raw dew point — cannot pulse) and ``"flicker_no_sensor"``
+            (enabled + cooling but the inlet/compressor reading is
+            missing/stale).
+        trigger_c: The armed threshold ``max(w + band_k, p + 3)`` [degC] this
+            cycle, or ``None`` when the feature is idle.
+        stuck_remaining_s: Seconds of "stuck & armed" still needed before a
+            pulse, or ``None`` when not currently accumulating.
+        cooldown_remaining_s: Seconds left on the forced-start cooldown, or
+            ``None`` when not in cooldown.
+        pulses_last_hour: Forced starts recorded in the last rolling hour.
+        last_pulse_target_c: The pulse floor ``p`` of the most recent pulse
+            [degC], or ``None`` when none has fired.
+
+    Raises:
+        ValueError: If ``state`` or a ``flags`` entry is outside its
+            vocabulary.
+    """
+
+    pulse_target_c: float | None
+    restore_pending: bool
+    state: str
+    flags: tuple[str, ...] = ()
+    trigger_c: float | None = None
+    stuck_remaining_s: float | None = None
+    cooldown_remaining_s: float | None = None
+    pulses_last_hour: int = 0
+    last_pulse_target_c: float | None = None
+
+    def __post_init__(self) -> None:
+        """Validate the state and flag vocabularies."""
+        if self.state not in _FLICKER_STATES:
+            msg = f"state must be one of {sorted(_FLICKER_STATES)}, got {self.state!r}"
+            raise ValueError(msg)
+        for flag in self.flags:
+            if flag not in _FLICKER_FLAGS:
+                msg = (
+                    "flags entries must be one of "
+                    f"{sorted(_FLICKER_FLAGS)}, got {flag!r}"
+                )
+                raise ValueError(msg)
+
+
+class SetpointFlicker:
+    """Stateful cooling setpoint-flicker machine (issue #7, 2026-07-15).
+
+    Pure: it never reads a wall clock. Time is accumulated by :meth:`tick`
+    exactly ONCE per control step (the same discipline as
+    :class:`~tortoise_ufh.fast_source.FastSourceMachine`, whose double-tick
+    bug this deliberately avoids); the rolling-hour start cap uses an internal
+    elapsed-seconds accumulator, never ``time`` / ``Date``.
+
+    Lifecycle of one control step::
+
+        flicker.tick(dt_seconds)     # advance time ONCE
+        decision = flicker.step(...) # decide + transition
+
+    The machine starts in ``"cooldown"`` with the full cooldown still to run:
+    after an HA restart no pulse fires immediately, and because the adapter's
+    setpoint write cache is empty the first cooling cycle writes the normal
+    target — self-healing.
+    """
+
+    def __init__(self, config: ControllerConfig) -> None:
+        """Read the four flicker knobs off the global config.
+
+        Args:
+            config: The GLOBAL controller tuning (the flicker knobs are
+                global-only; per-room overrides never carry them).
+        """
+        self._band_k: float = config.hp_flicker_band_k
+        self._stuck_threshold_s: float = config.hp_flicker_stuck_minutes * 60.0
+        self._min_off_s: float = config.hp_flicker_min_off_minutes * 60.0
+        self._max_starts: float = config.hp_flicker_max_starts_per_h
+        # Start in cooldown with the full gap to run (safe after a restart).
+        self._state: str = "cooldown"
+        self._elapsed_s: float = 0.0
+        self._stuck_s: float = 0.0
+        self._cooldown_s: float = 0.0
+        self._pulse_times_s: list[float] = []
+        self._last_pulse_target_c: float | None = None
+
+    @property
+    def state(self) -> str:
+        """Current machine state (``"idle"`` / ``"pulse"`` / ``"cooldown"``)."""
+        return self._state
+
+    def tick(self, dt_seconds: float) -> None:
+        """Advance every internal timer by ``dt_seconds`` — once per step.
+
+        Advances the elapsed accumulator and the state timers, then prunes the
+        pulse-times window of entries older than one hour. The decision method
+        only RESETS timers on transitions (never advances them), so calling
+        this more than once per cycle would over-count time (the
+        :class:`~tortoise_ufh.fast_source.FastSourceMachine` double-tick bug).
+
+        Args:
+            dt_seconds: Elapsed time since the previous control step [s].
+        """
+        self._elapsed_s += dt_seconds
+        self._stuck_s += dt_seconds
+        self._cooldown_s += dt_seconds
+        cutoff = self._elapsed_s - _FLICKER_WINDOW_S
+        self._pulse_times_s = [t for t in self._pulse_times_s if t > cutoff]
+
+    def _pulse_floor_c(self, safe_dew_c: float, step_c: float) -> float:
+        """The pulse target ``p``: the raw dew point ceiled onto the pump grid.
+
+        ``p`` is the lowest pump-grid multiple at or above
+        ``safe_dew_c - FLICKER_DEW_RESERVE_K`` (the raw worst-room dew point),
+        ceiled — never floored — so the pulse can never land BELOW the dew
+        point.
+
+        Args:
+            safe_dew_c: The global safe dew point [degC].
+            step_c: The pump number entity's grid step [degC / K].
+
+        Returns:
+            The pulse floor ``p`` [degC].
+        """
+        raw = safe_dew_c - FLICKER_DEW_RESERVE_K
+        if step_c <= 0.0:
+            return raw
+        return math.ceil(raw / step_c - 1e-9) * step_c
+
+    def step(
+        self,
+        *,
+        cooling_active: bool,
+        demand: bool,
+        hp_return_c: float | None,
+        compressor_freq_hz: float | None,
+        written_target_c: float | None,
+        safe_dew_c: float | None,
+        step_c: float,
+    ) -> FlickerDecision:
+        """Decide this cycle's flicker action and advance the state machine.
+
+        Args:
+            cooling_active: Whether the home is actively cooling AND the link
+                may write (COOLING mode, writes enabled, not doing DHW).
+            demand: Whether any cooled room genuinely calls for cooling (see
+                :func:`cooling_demand`).
+            hp_return_c: The pump inlet/return water temperature [degC], or
+                ``None`` when unreadable.
+            compressor_freq_hz: The compressor frequency [Hz] (``0`` = off), or
+                ``None`` when unreadable.
+            written_target_c: The normal cooling setpoint ``w`` written this
+                cycle [degC], or ``None`` when there is none.
+            safe_dew_c: The global safe dew point [degC], or ``None``.
+            step_c: The pump setpoint entity's grid step [degC / K].
+
+        Returns:
+            The :class:`FlickerDecision` for this cycle.
+        """
+        # 1. A pending pulse ALWAYS restores exactly one cycle later, even if a
+        #    gate broke mid-pulse (the mode flipped out of COOLING): the pump
+        #    must not be left parked at the low pulse floor.
+        if self._state == "pulse":
+            self._state = "cooldown"
+            self._cooldown_s = 0.0
+            return FlickerDecision(
+                pulse_target_c=None,
+                restore_pending=True,
+                state="cooldown",
+                cooldown_remaining_s=self._min_off_s,
+                pulses_last_hour=len(self._pulse_times_s),
+                last_pulse_target_c=self._last_pulse_target_c,
+            )
+
+        # 2. Feature idle: missing dew / target, or the home is not cooling.
+        #    Nothing can be "stuck" without demand and a live cooling write.
+        if safe_dew_c is None or written_target_c is None or not cooling_active:
+            self._stuck_s = 0.0
+            return FlickerDecision(
+                pulse_target_c=None,
+                restore_pending=False,
+                state=self._state,
+                pulses_last_hour=len(self._pulse_times_s),
+                last_pulse_target_c=self._last_pulse_target_c,
+            )
+
+        # 3. Active cooling: evaluate the arming and dew-clamp conditions.
+        p = self._pulse_floor_c(safe_dew_c, step_c)
+        trigger_c = max(written_target_c + self._band_k, p + FLICKER_START_OFFSET_K)
+        sensor_missing = hp_return_c is None or compressor_freq_hz is None
+        would_arm = (
+            demand
+            and hp_return_c is not None
+            and compressor_freq_hz is not None
+            and compressor_freq_hz == 0.0
+            and hp_return_c >= trigger_c
+        )
+        dew_blocked = p > written_target_c - step_c
+        can_pulse = would_arm and not dew_blocked
+
+        flags: list[str] = []
+        if sensor_missing:
+            flags.append("flicker_no_sensor")
+        if would_arm and dew_blocked:
+            flags.append("flicker_dew_blocked")
+
+        stuck_remaining_s: float | None = None
+        cooldown_remaining_s: float | None = None
+
+        if self._state == "cooldown":
+            cooldown_remaining_s = max(0.0, self._min_off_s - self._cooldown_s)
+            if self._cooldown_s >= self._min_off_s:
+                self._state = "idle"
+                self._stuck_s = 0.0
+                cooldown_remaining_s = None
+        elif self._state == "idle":
+            if can_pulse:
+                stuck_remaining_s = max(0.0, self._stuck_threshold_s - self._stuck_s)
+                if (
+                    self._stuck_s >= self._stuck_threshold_s
+                    and len(self._pulse_times_s) < self._max_starts
+                ):
+                    # EMIT PULSE: write the dew-safe floor for one cycle.
+                    self._pulse_times_s.append(self._elapsed_s)
+                    self._last_pulse_target_c = p
+                    self._state = "pulse"
+                    self._stuck_s = 0.0
+                    flags.append("flicker_pulsing")
+                    return FlickerDecision(
+                        pulse_target_c=p,
+                        restore_pending=False,
+                        state="pulse",
+                        flags=tuple(flags),
+                        trigger_c=trigger_c,
+                        cooldown_remaining_s=None,
+                        pulses_last_hour=len(self._pulse_times_s),
+                        last_pulse_target_c=self._last_pulse_target_c,
+                    )
+            else:
+                # Not armed (or dew-blocked): do not accumulate toward a pulse.
+                self._stuck_s = 0.0
+
+        return FlickerDecision(
+            pulse_target_c=None,
+            restore_pending=False,
+            state=self._state,
+            flags=tuple(flags),
+            trigger_c=trigger_c,
+            stuck_remaining_s=stuck_remaining_s,
+            cooldown_remaining_s=cooldown_remaining_s,
+            pulses_last_hour=len(self._pulse_times_s),
+            last_pulse_target_c=self._last_pulse_target_c,
+        )

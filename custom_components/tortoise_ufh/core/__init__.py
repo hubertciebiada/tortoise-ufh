@@ -60,6 +60,9 @@ from .hp_link import (
     HEATING_SUPPLY_MAX_C,
     HEATING_SUPPLY_MIN_C,
     HEISHAMON_MODE_OPTIONS,
+    FlickerDecision,
+    SetpointFlicker,
+    cooling_demand,
     cooling_setpoint_c,
     dhw_option,
     direction_option,
@@ -122,7 +125,7 @@ from .weather import (
 )
 from .weather_comp import CoolingCompCurve, WeatherCompCurve
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 
 __all__ = [
     "BUILDING_PROFILES",
@@ -152,6 +155,7 @@ __all__ = [
     "FastSourceKind",
     "FastSourceMachine",
     "FastSourceMode",
+    "FlickerDecision",
     "HeatPumpMode",
     "LoopGeometry",
     "LoopInput",
@@ -173,6 +177,7 @@ __all__ = [
     "SafetyRuleResult",
     "SensorNoise",
     "SensorSnapshot",
+    "SetpointFlicker",
     "SimMetrics",
     "SimRecord",
     "SimScenario",
@@ -192,6 +197,7 @@ __all__ = [
     "assert_no_prolonged_cold",
     "cold_snap",
     "condensation_margin",
+    "cooling_demand",
     "cooling_setpoint_c",
     "cooling_throttle_factor",
     "dew_point",

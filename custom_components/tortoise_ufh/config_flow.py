@@ -58,9 +58,12 @@ from .const import (
     CONF_ENTITY_FAST_SOURCE,
     CONF_ENTITY_GLOBAL_SUPPLY,
     CONF_ENTITY_HP_ACTIVE,
+    CONF_ENTITY_HP_COMPRESSOR_FREQ,
     CONF_ENTITY_HP_COOLING_SETPOINT,
     CONF_ENTITY_HP_HEATING_SETPOINT,
     CONF_ENTITY_HP_MODE,
+    CONF_ENTITY_HP_OUTLET_TEMP,
+    CONF_ENTITY_HP_RETURN_TEMP,
     CONF_ENTITY_HUMIDITY,
     CONF_ENTITY_MODE,
     CONF_ENTITY_RETURN,
@@ -74,6 +77,7 @@ from .const import (
     CONF_FAST_WINDOW_START,
     CONF_HEAT_PUMP,
     CONF_HOME_SETPOINT,
+    CONF_HP_FLICKER_ENABLED,
     CONF_ROOM_AREA,
     CONF_ROOM_NAME,
     CONF_ROOM_OFFSET,
@@ -1049,11 +1053,14 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
     ) -> FlowResult:
         """Configure the OPTIONAL heat-pump link (everything may stay empty).
 
-        Four optional entity pickers: the pump-mode select (HeishaMon-style),
-        the heating / cooling water-setpoint numbers, and the "pump serves the
-        UFH" status entity. An entirely empty form removes the section — the
-        pre-0.8.0 behaviour (Tortoise never touches the pump). Saving writes
-        ``entry.options[CONF_HEAT_PUMP]`` and reloads the entry.
+        Optional entity pickers: the pump-mode select (HeishaMon-style), the
+        heating / cooling water-setpoint numbers, the "pump serves the UFH"
+        status entity, and — for the cooling setpoint-flicker (issue #7) — the
+        return / outlet water temperature sensors, the compressor-frequency
+        sensor and the flicker master switch. An entirely empty form removes
+        the section — the pre-0.8.0 behaviour (Tortoise never touches the
+        pump). Saving writes ``entry.options[CONF_HEAT_PUMP]`` and reloads the
+        entry.
         """
         entry = self.config_entry
         current: dict[str, Any] = dict(entry.options.get(CONF_HEAT_PUMP, {}) or {})
@@ -1065,10 +1072,17 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 CONF_ENTITY_HP_HEATING_SETPOINT,
                 CONF_ENTITY_HP_COOLING_SETPOINT,
                 CONF_ENTITY_HP_ACTIVE,
+                CONF_ENTITY_HP_RETURN_TEMP,
+                CONF_ENTITY_HP_OUTLET_TEMP,
+                CONF_ENTITY_HP_COMPRESSOR_FREQ,
             ):
                 value = str(user_input.get(key, "") or "").strip()
                 if value:
                     hp[key] = value
+            # The flicker toggle is a bool; store it only when ON to keep the
+            # section sparse (an absent key reads as OFF, the safe default).
+            if bool(user_input.get(CONF_HP_FLICKER_ENABLED, False)):
+                hp[CONF_HP_FLICKER_ENABLED] = True
             new_options = {
                 key: value
                 for key, value in entry.options.items()
@@ -1105,6 +1119,23 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                         ]
                     )
                 ),
+                marker(CONF_ENTITY_HP_RETURN_TEMP): EntitySelector(
+                    EntitySelectorConfig(
+                        domain=["sensor"], device_class=["temperature"]
+                    )
+                ),
+                marker(CONF_ENTITY_HP_OUTLET_TEMP): EntitySelector(
+                    EntitySelectorConfig(
+                        domain=["sensor"], device_class=["temperature"]
+                    )
+                ),
+                marker(CONF_ENTITY_HP_COMPRESSOR_FREQ): EntitySelector(
+                    EntitySelectorConfig(domain=["sensor"])
+                ),
+                vol.Optional(
+                    CONF_HP_FLICKER_ENABLED,
+                    default=bool(current.get(CONF_HP_FLICKER_ENABLED, False)),
+                ): BooleanSelector(),
             }
         )
         return self.async_show_form(step_id="heat_pump", data_schema=schema)

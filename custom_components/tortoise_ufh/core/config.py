@@ -112,6 +112,22 @@ class ControllerConfig:
         heating_supply_slope: Heating-water curve steepness [K_supply per K
             outdoor shortfall below ``ff_neutral_c``] (in [0, 2]; B2
             2026-07-12). GLOBAL knob.
+        hp_flicker_band_k: Target effective cooling deadband [K] of the opt-in
+            setpoint-flicker (in [0.5, 3.0]; issue #7, 2026-07-15). Must be
+            below the pump's fixed 3 K return hysteresis to tighten it — a
+            pulse arms once the return climbs ``band_k`` above the written
+            cooling setpoint. GLOBAL knob (a per-room water deadband is
+            meaningless), read only by the adapter's
+            :class:`~tortoise_ufh.hp_link.SetpointFlicker`.
+        hp_flicker_stuck_minutes: How long the return must sit stuck & armed
+            (idle in the deadband with genuine unmet cooling demand) before a
+            single flicker pulse is emitted [min] (in [5, 120]; issue #7).
+            GLOBAL knob.
+        hp_flicker_min_off_minutes: Compressor-protection cooldown — the
+            minimum gap between two forced starts [min] (in [5, 120]; issue
+            #7). GLOBAL knob.
+        hp_flicker_max_starts_per_h: Hard cap on forced compressor starts per
+            rolling hour [1/h] (in [1, 6]; issue #7). GLOBAL knob.
         flow_epsilon_k: Minimum loop supply-return temperature difference
             counting as flow evidence for the S6 hydraulic no-flow watchdog
             [K] (> 0; 2026-07-13, S6). Below it — and with no probe
@@ -171,6 +187,15 @@ class ControllerConfig:
     cooling_supply_base_c: float = 18.0
     heating_supply_base_c: float = 26.0
     heating_supply_slope: float = 0.5
+    # Cooling setpoint-flicker knobs (2026-07-15, issue #7): global-only timing
+    # of the opt-in, Panasonic-specific flicker that trips the cooling
+    # compressor out of its fixed 3 K return-water deadband; read only by the
+    # adapter's SetpointFlicker (see core/hp_link.py). The room control law
+    # never touches them.
+    hp_flicker_band_k: float = 1.5
+    hp_flicker_stuck_minutes: float = 10.0
+    hp_flicker_min_off_minutes: float = 20.0
+    hp_flicker_max_starts_per_h: float = 2.0
     # S6 hydraulic no-flow watchdog knobs (2026-07-13): thresholds/windows of
     # the loop-probe actuation witness; see core/flow_watchdog.py.
     flow_epsilon_k: float = 0.3
@@ -195,7 +220,11 @@ class ControllerConfig:
                 not exceed ``deadband_c``, ``fast_target_offset_k`` is outside
                 ``[0, 3]``, or a heat-pump water knob is outside its range
                 (``cooling_supply_base_c`` [10, 25], ``heating_supply_base_c``
-                [20, 40], ``heating_supply_slope`` [0, 2]), or an S6 watchdog
+                [20, 40], ``heating_supply_slope`` [0, 2]), a flicker knob is
+                out of range (``hp_flicker_band_k`` [0.5, 3.0],
+                ``hp_flicker_stuck_minutes`` [5, 120],
+                ``hp_flicker_min_off_minutes`` [5, 120],
+                ``hp_flicker_max_starts_per_h`` [1, 6]), or an S6 watchdog
                 knob is out of range (``flow_epsilon_k`` > 0,
                 ``flow_open_threshold_pct`` [0, 100],
                 ``flow_response_window_min`` > 0).
@@ -269,6 +298,29 @@ class ControllerConfig:
             msg = (
                 "heating_supply_slope must be in [0, 2], got "
                 f"{self.heating_supply_slope}"
+            )
+            raise ValueError(msg)
+        if not 0.5 <= self.hp_flicker_band_k <= 3.0:
+            msg = (
+                f"hp_flicker_band_k must be in [0.5, 3.0], got {self.hp_flicker_band_k}"
+            )
+            raise ValueError(msg)
+        if not 5.0 <= self.hp_flicker_stuck_minutes <= 120.0:
+            msg = (
+                "hp_flicker_stuck_minutes must be in [5, 120], got "
+                f"{self.hp_flicker_stuck_minutes}"
+            )
+            raise ValueError(msg)
+        if not 5.0 <= self.hp_flicker_min_off_minutes <= 120.0:
+            msg = (
+                "hp_flicker_min_off_minutes must be in [5, 120], got "
+                f"{self.hp_flicker_min_off_minutes}"
+            )
+            raise ValueError(msg)
+        if not 1.0 <= self.hp_flicker_max_starts_per_h <= 6.0:
+            msg = (
+                "hp_flicker_max_starts_per_h must be in [1, 6], got "
+                f"{self.hp_flicker_max_starts_per_h}"
             )
             raise ValueError(msg)
         if self.flow_epsilon_k <= 0:

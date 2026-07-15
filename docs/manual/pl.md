@@ -473,6 +473,20 @@ przestań", nie blokada. **Zewnętrzna automatyka CWU jest właścicielem tej fl
 i może ją w każdej chwili nadpisać — to jej prawo.** Zdjęcie flagi, gdy pompa jest
 w „DHW only", jest niemożliwe (nie ma kierunku, do którego można wrócić).
 
+**Flicker nastawy chłodzenia (opcjonalny, Panasonic; od v0.13.0):** w chłodzeniu sprężarka
+Panasonic Aquarea rusza dopiero, gdy powrót osiągnie `nastawa + 3 K`, a zatrzymuje się przy
+`nastawa` — ta histereza 3 K jest zaszyta w firmware. W długich postojach powrót stoi więc
+wysoko, a podłoga niedodostarcza. Gdy włączysz flicker i wskażesz encje **temperatury powrotu**
+oraz **częstotliwości sprężarki** (opcje → Pompa ciepła), Tortoise — widząc pompę w postoju z
+realnym zapotrzebowaniem — na jeden cykl obniża zapisaną nastawę do bezpiecznego dla rosy punktu
+rosy, żeby wytrącić sprężarkę, po czym natychmiast przywraca normalną nastawę. Efekt: chłodniejsza
+średnia woda przy wciąż bezpiecznym dla rosy powrocie. Cztery globalne pokrętła (zakładka
+Strojenie, grupa „Flicker") sterują docelową martwą strefą, czasem utknięcia przed impulsem,
+przerwą między wymuszonymi startami i limitem startów na godzinę. Encja **wylotu** jest tylko
+diagnostyczna (pokazywana w zakładce). Domyślnie **wyłączony**; rozwiązanie specyficzne dla
+Panasonica. Stan flickera (impuls / czuwanie / przerwa, próg, odczyty) widać w zakładce Pompa
+ciepła.
+
 **Kiedy Tortoise pisze do pompy:** tylko gdy przynajmniej jeden pokój jest w stanie
 **Steruje** (globalne urządzenie wolno ruszać tylko, gdy ktokolwiek oddał sterowanie)
 — inaczej zakładka pokazuje „Zapisy wstrzymane". Komenda pożegnalna (wyłączenie
@@ -503,6 +517,9 @@ automatycznie. Pełny słownik poniżej:
 | `fast_source_group_conflict` | Pokój przegrał arbitraż kierunku na wspólnym agregacie — jego split przymusowo OFF. | Nic — wróci po zmianie kierunku grupy. Jeśli częste: przemyśl korekty pokoi w grupie. |
 | `fast_source_cannot_cool` | Pokój chce chłodzić, ale jego szybkie źródło nie umie (grzałka). | Informacyjne. |
 | `cooling_disabled` | Pokój nie bierze udziału w chłodzeniu (opcja konfiguracji) — w trybie chłodzenia jest pomijany. | Zamierzone; zmień w opcjach pokoju, jeśli chcesz chłodzić. |
+| `flicker_pulsing` | Flicker nastawy chłodzenia (Panasonic, §11): na ten jeden cykl nastawę obniżono do bezpiecznego dla rosy progu, by wytrącić sprężarkę z jej stałej histerezy 3 K powrotu; następny cykl przywraca normalną nastawę. | Informacyjne (zamierzone). |
+| `flicker_dew_blocked` | Flicker byłby uzbrojony, ale impuls musiałby przekroczyć surowy punkt rosy — brak zapasu na obniżenie nastawy; impuls wstrzymany. | Informacyjne; normalne w wilgotne dni. |
+| `flicker_no_sensor` | Flicker chłodzenia włączony, ale brak odczytu powrotu lub częstotliwości sprężarki (encja nieustawiona lub nieświeża) — impulsy wstrzymane. | Sprawdź encje temperatury powrotu i częstotliwości sprężarki (opcje → Pompa ciepła). |
 | `s1_floor_overheat` | Zabezpieczenie posadzki: zbyt gorące zasilanie — zawór zamknięty do ostygnięcia. | Sprawdź krzywą grzewczą/temperaturę zasilania pompy ciepła. |
 | `s3_emergency_heat` | Awaryjne grzanie: pokój mocno wychłodzony — wymuszone grzanie wszystkim, co jest. | Sprawdź, czemu pokój tak wystygł (okno? awaria?). |
 | `s4_emergency_cool` | Awaryjne chłodzenie: pokój mocno przegrzany — wymuszone chłodzenie. | Sprawdź źródło przegrzewu (słońce? awaria?). |

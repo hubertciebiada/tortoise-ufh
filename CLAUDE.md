@@ -109,8 +109,12 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
   `+DHW`) (v0.8.0); the S6 hydraulic no-flow watchdog + manual actuation self-test
   (`flow_watchdog.py`, witnessed by loop supply/return probes, never valve feedback) (v0.9.0);
   cooling boost-hold — the floor valve holds its pre-boost position during a split boost so the
-  slab keeps discharging (v0.11.0, DECISIONS §18); and the panel `info` severity tier for
-  intentional steady states like `cooling_disabled` (v0.11.1, §19).
+  slab keeps discharging (v0.11.0, DECISIONS §18); the panel `info` severity tier for
+  intentional steady states like `cooling_disabled` (v0.11.1, §19); and the opt-in
+  **cooling setpoint-flicker** (`SetpointFlicker` + `cooling_demand` in `hp_link.py`): when the
+  Panasonic pump idles in its fixed 3 K return deadband with real demand, drop the written cooling
+  setpoint to the raw dew point for ONE cycle to trip the compressor, then restore — colder average
+  water, return stays dew-safe; 4 global knobs, Panasonic-specific, OFF by default (v0.13.0, §21).
 
 ---
 

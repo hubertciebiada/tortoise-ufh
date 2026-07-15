@@ -351,6 +351,28 @@ class CommandWriter:
         _LOGGER.info("Heat-pump mode written: %s -> %s", entity_id, option)
         return True
 
+    def hp_setpoint_step(self, entity_id: str) -> float:
+        """Read a setpoint ``number`` entity's grid step [degC / K] (B2 / #7).
+
+        Shared by :meth:`write_hp_setpoint` (to quantize the written value) and
+        the coordinator's cooling setpoint-flicker (to ceil the pulse floor
+        onto the SAME grid). Falls back to :data:`_DEFAULT_HP_STEP_C` when the
+        entity or its ``step`` attribute cannot be read.
+
+        Args:
+            entity_id: The setpoint ``number`` entity id.
+
+        Returns:
+            The entity's ``step`` attribute [degC / K], or the default.
+        """
+        state = self._hass.states.get(entity_id)
+        if state is None:
+            return _DEFAULT_HP_STEP_C
+        try:
+            return float(state.attributes.get("step", _DEFAULT_HP_STEP_C))
+        except (TypeError, ValueError):
+            return _DEFAULT_HP_STEP_C
+
     async def write_hp_setpoint(
         self, entity_id: str, value_c: float, *, threshold_k: float = 0.5
     ) -> None:
@@ -376,13 +398,7 @@ class CommandWriter:
             value_c: The setpoint to write [degC].
             threshold_k: Minimum change that triggers a fresh write [K].
         """
-        step_c = _DEFAULT_HP_STEP_C
-        state = self._hass.states.get(entity_id)
-        if state is not None:
-            try:
-                step_c = float(state.attributes.get("step", _DEFAULT_HP_STEP_C))
-            except (TypeError, ValueError):
-                step_c = _DEFAULT_HP_STEP_C
+        step_c = self.hp_setpoint_step(entity_id)
         value_c = round_to_step_c(value_c, step_c)
         cached = self._last_written_hp_setpoint.get(entity_id)
         now_monotonic = time.monotonic()

@@ -623,6 +623,47 @@ const STR = {
       "żeby nie nabijać całki, kiedy woda i tak nie płynie w podłogę.",
     hp_writes_paused:
       "Zapisy wstrzymane — żaden pokój nie steruje (Steruje).",
+    // Flicker nastawy chłodzenia (issue #7, 2026-07-15).
+    tune_grp_flicker: "Flicker nastawy chłodzenia (tylko globalnie)",
+    tune_hp_flicker_band_k: "Flicker: docelowa martwa strefa chłodzenia",
+    tune_hp_flicker_stuck_minutes: "Flicker: czas utknięcia przed impulsem",
+    tune_hp_flicker_min_off_minutes:
+      "Flicker: min. czas między wymuszonymi startami",
+    tune_hp_flicker_max_starts_per_h:
+      "Flicker: maks. wymuszonych startów na godzinę",
+    tip_knob_hp_flicker_band_k:
+      "Docelowa efektywna martwa strefa wody chłodzenia [K]. Musi być poniżej " +
+      "stałej histerezy 3 K pompy, by ją zacieśnić — impuls uzbraja się, gdy " +
+      "powrót wzrośnie o tyle powyżej zapisanej nastawy. Globalne.",
+    tip_knob_hp_flicker_stuck_minutes:
+      "Jak długo powrót musi tkwić uzbrojony (postój w martwej strefie z realnym " +
+      "zapotrzebowaniem), zanim padnie impuls [min]. Globalne.",
+    tip_knob_hp_flicker_min_off_minutes:
+      "Ochrona sprężarki: minimalny odstęp między wymuszonymi startami [min]. " +
+      "Globalne.",
+    tip_knob_hp_flicker_max_starts_per_h:
+      "Twardy limit wymuszonych startów sprężarki na godzinę kroczącą. Globalne.",
+    hp_sec_flicker: "Flicker nastawy chłodzenia",
+    tip_hp_flicker:
+      "Panasonic: gdy pompa stoi w martwej strefie, a pokoje wciąż chłodzą, " +
+      "Tortoise na jeden cykl obniża nastawę chłodzenia, by wytrącić sprężarkę z " +
+      "jej stałej histerezy 3 K powrotu, po czym przywraca wartość bezpieczną dla " +
+      "rosy. Skutek: chłodniejsza średnia woda, powrót nadal bezpieczny dla rosy.",
+    hp_flicker_on: "włączony",
+    hp_flicker_off: "wyłączony",
+    hp_flicker_pulsing_badge: "impuls",
+    hp_flicker_state: "Stan",
+    hp_flicker_st_idle: "czuwa",
+    hp_flicker_st_pulse: "impuls",
+    hp_flicker_st_cooldown: "przerwa",
+    hp_flicker_trigger: "Próg uzbrojenia",
+    hp_flicker_stuck: "Utknięcie do impulsu",
+    hp_flicker_cooldown: "Przerwa do końca",
+    hp_flicker_pulses: "Wymuszone starty (ost. godz.)",
+    hp_flicker_last_pulse: "Ostatni cel impulsu",
+    hp_flicker_return: "Powrót / wlot",
+    hp_flicker_outlet: "Wylot / zasilanie",
+    hp_flicker_freq: "Sprężarka",
   },
   en: {
     status_running: "Running · cycle {age}",
@@ -1062,6 +1103,46 @@ const STR = {
       "room controllers freeze their integral term so it does not wind up " +
       "while no water reaches the floor.",
     hp_writes_paused: "Writes paused — no room is in control (Live).",
+    // Cooling setpoint-flicker (issue #7, 2026-07-15).
+    tune_grp_flicker: "Cooling setpoint-flicker (global only)",
+    tune_hp_flicker_band_k: "Flicker: target cooling deadband",
+    tune_hp_flicker_stuck_minutes: "Flicker: stuck time before a pulse",
+    tune_hp_flicker_min_off_minutes: "Flicker: min time between forced starts",
+    tune_hp_flicker_max_starts_per_h: "Flicker: max forced starts per hour",
+    tip_knob_hp_flicker_band_k:
+      "Target effective cooling-water deadband [K]. Must be below the pump's " +
+      "fixed 3 K hysteresis to tighten it — a pulse arms once the return climbs " +
+      "this far above the written setpoint. Global.",
+    tip_knob_hp_flicker_stuck_minutes:
+      "How long the return must sit stuck & armed (idle in the deadband with " +
+      "genuine demand) before a pulse fires [min]. Global.",
+    tip_knob_hp_flicker_min_off_minutes:
+      "Compressor protection: the minimum gap between two forced starts [min]. " +
+      "Global.",
+    tip_knob_hp_flicker_max_starts_per_h:
+      "Hard cap on forced compressor starts per rolling hour. Global.",
+    hp_sec_flicker: "Cooling setpoint-flicker",
+    tip_hp_flicker:
+      "Panasonic: when the pump idles in its deadband while rooms still call for " +
+      "cooling, Tortoise drops the cooling setpoint for one cycle to trip the " +
+      "compressor out of its fixed 3 K return hysteresis, then restores the " +
+      "dew-safe value. Net effect: colder average water while the return stays " +
+      "dew-safe.",
+    hp_flicker_on: "enabled",
+    hp_flicker_off: "disabled",
+    hp_flicker_pulsing_badge: "pulsing",
+    hp_flicker_state: "State",
+    hp_flicker_st_idle: "idle",
+    hp_flicker_st_pulse: "pulse",
+    hp_flicker_st_cooldown: "cooldown",
+    hp_flicker_trigger: "Arm threshold",
+    hp_flicker_stuck: "Stuck to pulse",
+    hp_flicker_cooldown: "Cooldown left",
+    hp_flicker_pulses: "Forced starts (last h)",
+    hp_flicker_last_pulse: "Last pulse target",
+    hp_flicker_return: "Return / inlet",
+    hp_flicker_outlet: "Outlet / supply",
+    hp_flicker_freq: "Compressor",
     // S6 hydraulic no-flow watchdog + actuation self-test (issue #4,
     // 2026-07-13). EN mirror of the PL keys above.
     tune_grp_flow: "Flow watchdog (S6)",
@@ -1555,6 +1636,50 @@ const STR = {
       "(WW-Bereitung/Abtauung), frieren die Raumregler ihren Integralanteil ein, " +
       "damit er nicht aufläuft, während kein Wasser den Boden erreicht.",
     hp_writes_paused: "Schreibvorgänge pausiert — kein Raum ist in Regelung (Aktiv).",
+    // Kühl-Sollwert-Flicker (issue #7, 2026-07-15).
+    tune_grp_flicker: "Kühl-Sollwert-Flicker (nur global)",
+    tune_hp_flicker_band_k: "Flicker: angestrebtes Kühl-Totband",
+    tune_hp_flicker_stuck_minutes: "Flicker: Verharrzeit vor einem Impuls",
+    tune_hp_flicker_min_off_minutes:
+      "Flicker: Mindestabstand zwischen erzwungenen Starts",
+    tune_hp_flicker_max_starts_per_h:
+      "Flicker: max. erzwungene Starts pro Stunde",
+    tip_knob_hp_flicker_band_k:
+      "Angestrebtes effektives Kühlwasser-Totband [K]. Muss unter der festen " +
+      "3-K-Hysterese der Pumpe liegen, um sie zu verengen — ein Impuls wird " +
+      "scharf, sobald der Rücklauf so weit über den geschriebenen Sollwert " +
+      "steigt. Global.",
+    tip_knob_hp_flicker_stuck_minutes:
+      "Wie lange der Rücklauf scharf verharren muss (Stillstand im Totband mit " +
+      "echtem Bedarf), bevor ein Impuls ausgelöst wird [min]. Global.",
+    tip_knob_hp_flicker_min_off_minutes:
+      "Verdichterschutz: Mindestabstand zwischen zwei erzwungenen Starts [min]. " +
+      "Global.",
+    tip_knob_hp_flicker_max_starts_per_h:
+      "Harte Obergrenze erzwungener Verdichterstarts pro gleitender Stunde. " +
+      "Global.",
+    hp_sec_flicker: "Kühl-Sollwert-Flicker",
+    tip_hp_flicker:
+      "Panasonic: Wenn die Pumpe in ihrem Totband stillsteht, während Räume noch " +
+      "Kühlung anfordern, senkt Tortoise den Kühl-Sollwert für einen Zyklus, um " +
+      "den Verdichter aus seiner festen 3-K-Rücklaufhysterese zu lösen, und " +
+      "stellt dann den taupunktsicheren Wert wieder her. Nettoeffekt: kälteres " +
+      "Durchschnittswasser, während der Rücklauf taupunktsicher bleibt.",
+    hp_flicker_on: "aktiviert",
+    hp_flicker_off: "deaktiviert",
+    hp_flicker_pulsing_badge: "Impuls",
+    hp_flicker_state: "Zustand",
+    hp_flicker_st_idle: "Ruhe",
+    hp_flicker_st_pulse: "Impuls",
+    hp_flicker_st_cooldown: "Sperrzeit",
+    hp_flicker_trigger: "Schärfschwelle",
+    hp_flicker_stuck: "Verharren bis Impuls",
+    hp_flicker_cooldown: "Sperrzeit übrig",
+    hp_flicker_pulses: "Erzwungene Starts (letzte h)",
+    hp_flicker_last_pulse: "Letztes Impulsziel",
+    hp_flicker_return: "Rücklauf / Eintritt",
+    hp_flicker_outlet: "Vorlauf / Austritt",
+    hp_flicker_freq: "Verdichter",
     // Hydraulischer No-Flow-Watchdog S6 + Aktuator-Selbsttest (issue #4,
     // 2026-07-13). DE-Spiegel der obigen Schlüssel.
     tune_grp_flow: "Durchfluss-Watchdog (S6)",
@@ -1934,6 +2059,54 @@ const FLAG_LABELS = {
     descDe:
       "Der Aktor meldet seit ≥3 Zyklen eine andere Position als der Befehl. Prüfen Sie Aktor / Relais / Entität; vergleichen Sie Befehl vs. Rückmeldung im Reiter Ventile.",
   },
+  flicker_pulsing: {
+    pl: "Impuls flickera chłodzenia",
+    en: "Cooling flicker pulse",
+    de: "Kühl-Flicker-Impuls",
+    sev: "info", sx: null, group: "assist",
+    descPl:
+      "Flicker nastawy chłodzenia (Panasonic): na ten jeden cykl obniżono zapisaną " +
+      "nastawę do bezpiecznego dla rosy progu, aby wytrącić sprężarkę z jej stałej " +
+      "3 K histerezy powrotu; następny cykl przywraca normalną nastawę.",
+    descEn:
+      "Cooling setpoint-flicker (Panasonic): for this one cycle the written setpoint " +
+      "was dropped to the dew-safe floor to trip the compressor out of its fixed 3 K " +
+      "return hysteresis; the next cycle restores the normal setpoint.",
+    descDe:
+      "Kühl-Sollwert-Flicker (Panasonic): Für diesen einen Zyklus wurde der geschriebene Sollwert auf den taupunktsicheren Boden gesenkt, um den Verdichter aus seiner festen 3-K-Rücklaufhysterese zu lösen; der nächste Zyklus stellt den normalen Sollwert wieder her.",
+  },
+  flicker_dew_blocked: {
+    pl: "Flicker zablokowany punktem rosy",
+    en: "Flicker dew-blocked",
+    de: "Flicker durch Taupunkt blockiert",
+    sev: "info", sx: null, group: "assist",
+    descPl:
+      "Flicker byłby uzbrojony, ale impuls musiałby przekroczyć surowy punkt rosy — " +
+      "nie ma zapasu, by obniżyć nastawę. Impuls wstrzymany (chłodzenie pozostaje " +
+      "bezpieczne dla rosy). Normalne w wilgotne dni.",
+    descEn:
+      "The flicker would be armed, but a pulse would have to cross the raw dew point — " +
+      "there is no headroom to drop the setpoint. The pulse is withheld (cooling stays " +
+      "dew-safe). Normal on humid days.",
+    descDe:
+      "Der Flicker wäre scharf, aber ein Impuls müsste den rohen Taupunkt überschreiten — es gibt keinen Spielraum, den Sollwert zu senken. Der Impuls wird zurückgehalten (die Kühlung bleibt taupunktsicher). An feuchten Tagen normal.",
+  },
+  flicker_no_sensor: {
+    pl: "Flicker: brak czujnika pompy",
+    en: "Flicker: pump sensor missing",
+    de: "Flicker: Pumpensensor fehlt",
+    sev: "warn", sx: null, group: "assist",
+    descPl:
+      "Flicker chłodzenia włączony, ale brakuje odczytu powrotu lub częstotliwości " +
+      "sprężarki (encja nieskonfigurowana lub nieświeża) — impulsy wstrzymane. " +
+      "Sprawdź encje temperatury powrotu i częstotliwości sprężarki.",
+    descEn:
+      "The cooling flicker is enabled but the return-water or compressor-frequency " +
+      "reading is missing (entity unset or stale) — pulses are withheld. Check the " +
+      "return-temperature and compressor-frequency entities.",
+    descDe:
+      "Der Kühl-Flicker ist aktiviert, aber der Rücklauf- oder Verdichterfrequenz-Messwert fehlt (Entität nicht gesetzt oder veraltet) — Impulse werden zurückgehalten. Prüfen Sie die Entitäten für Rücklauftemperatur und Verdichterfrequenz.",
+  },
 };
 
 /** Group display order + fallback bucket for codes missing a `group`. */
@@ -2000,6 +2173,17 @@ const KNOB_GROUPS = [
       "cooling_supply_base_c",
       "heating_supply_base_c",
       "heating_supply_slope",
+    ],
+    globalOnly: true,
+  },
+  {
+    key: "flicker",
+    labelKey: "tune_grp_flicker",
+    knobs: [
+      "hp_flicker_band_k",
+      "hp_flicker_stuck_minutes",
+      "hp_flicker_min_off_minutes",
+      "hp_flicker_max_starts_per_h",
     ],
     globalOnly: true,
   },
@@ -5670,6 +5854,46 @@ class TortoiseUfhPanel extends HTMLElement {
       ]),
     ]);
 
+    // Card: cooling setpoint-flicker diagnostics (issue #7). Hidden unless the
+    // link exposes a flicker payload (enabled, or its diagnostic sensors set).
+    P.flickerBadge = h("span", { class: "chip", style: "display:none" });
+    P.flickerState = h("span", { class: "kv-val" });
+    P.flickerReturn = h("span", { class: "kv-val" });
+    P.flickerOutlet = h("span", { class: "kv-val" });
+    P.flickerFreq = h("span", { class: "kv-val" });
+    P.flickerTrigger = h("span", { class: "kv-val" });
+    P.flickerStuck = h("span", { class: "kv-val" });
+    P.flickerCooldown = h("span", { class: "kv-val" });
+    P.flickerPulses = h("span", { class: "kv-val" });
+    P.flickerLastPulse = h("span", { class: "kv-val" });
+    // Active GLOBAL flicker flags (not per-room, so the Rooms-tab annunciator
+    // never surfaces them — they live here) rendered from FLAG_LABELS.
+    P.flickerFlags = h("div", { class: "hp-flicker-flags", style: "display:none" });
+    const flickerKv = (labelKey, valEl) =>
+      h("div", { class: "kv" }, [
+        h("span", { class: "kv-cap", text: this._t(labelKey) }),
+        valEl,
+      ]);
+    P.flickerCard = h("div", { class: "hp-card", style: "display:none" }, [
+      h("div", { class: "hp-card-cap" }, [
+        this._t("hp_sec_flicker"),
+        this._infoIcon("tip_hp_flicker"),
+        P.flickerBadge,
+      ]),
+      h("div", { class: "kv-grid hp-grid" }, [
+        flickerKv("hp_flicker_state", P.flickerState),
+        flickerKv("hp_flicker_return", P.flickerReturn),
+        flickerKv("hp_flicker_outlet", P.flickerOutlet),
+        flickerKv("hp_flicker_freq", P.flickerFreq),
+        flickerKv("hp_flicker_trigger", P.flickerTrigger),
+        flickerKv("hp_flicker_stuck", P.flickerStuck),
+        flickerKv("hp_flicker_cooldown", P.flickerCooldown),
+        flickerKv("hp_flicker_pulses", P.flickerPulses),
+        flickerKv("hp_flicker_last_pulse", P.flickerLastPulse),
+      ]),
+      P.flickerFlags,
+    ]);
+
     // Card: "pump available for UFH" (only when the entity is configured).
     P.activeVal = h("span", { class: "kv-val" });
     P.activeCard = h("div", { class: "hp-card", style: "display:none" }, [
@@ -5690,6 +5914,7 @@ class TortoiseUfhPanel extends HTMLElement {
       P.modeCard,
       P.dhwCard,
       P.setpointsCard,
+      P.flickerCard,
       P.activeCard,
     ]);
 
@@ -5781,6 +6006,65 @@ class TortoiseUfhPanel extends HTMLElement {
           ? this._t("hp_active_unknown")
           : this._t(hp.hp_active ? "yes" : "no");
       P.activeVal.classList.toggle("warn", hp.hp_active === false);
+    }
+
+    // Cooling setpoint-flicker diagnostics (issue #7) — only when the payload
+    // is present (the flicker is enabled or its diagnostic sensors are set).
+    const fl = hp.flicker || null;
+    P.flickerCard.style.display = fl ? "" : "none";
+    if (fl) {
+      const st = fl.state || "idle";
+      const flags = Array.isArray(fl.flags) ? fl.flags : [];
+      const pulsing =
+        st === "pulse" ||
+        (fl.pulse_target_c !== null && fl.pulse_target_c !== undefined);
+      const noSensor = flags.includes("flicker_no_sensor");
+      P.flickerBadge.style.display = "";
+      if (pulsing) {
+        // A pulse is being written this cycle.
+        P.flickerBadge.className = "chip chip-warn";
+        P.flickerBadge.textContent = this._t("hp_flicker_pulsing_badge");
+      } else if (fl.enabled && noSensor) {
+        // Enabled but degraded (a pump sensor is missing/stale): NOT green.
+        P.flickerBadge.className = "chip chip-warn";
+        P.flickerBadge.textContent = this._t("hp_flicker_on");
+      } else {
+        P.flickerBadge.className = "chip " + (fl.enabled ? "chip-ok" : "");
+        P.flickerBadge.textContent = this._t(
+          fl.enabled ? "hp_flicker_on" : "hp_flicker_off",
+        );
+      }
+      // Active GLOBAL flicker flags, rendered from FLAG_LABELS (localized label
+      // + severity colour + description tooltip) — these are not per-room, so
+      // the Rooms-tab annunciator never shows them.
+      P.flickerFlags.textContent = "";
+      const known = flags.filter((code) => code in FLAG_LABELS);
+      P.flickerFlags.style.display = known.length ? "" : "none";
+      for (const code of known) {
+        P.flickerFlags.appendChild(this._chip(code));
+      }
+      const stKey =
+        {
+          idle: "hp_flicker_st_idle",
+          pulse: "hp_flicker_st_pulse",
+          cooldown: "hp_flicker_st_cooldown",
+        }[st] || "hp_flicker_st_idle";
+      P.flickerState.textContent = this._t(stKey);
+      P.flickerReturn.textContent = fmt(fl.return_c, 1, " °C");
+      P.flickerOutlet.textContent = fmt(fl.outlet_c, 1, " °C");
+      P.flickerFreq.textContent = fmt(fl.compressor_freq_hz, 0, " Hz");
+      P.flickerTrigger.textContent = fmt(fl.trigger_c, 1, " °C");
+      const mins = (s) =>
+        num(s) === null
+          ? "—"
+          : fmtStr(this._t("test_running_min"), {
+              m: Math.max(0, Math.round(num(s) / 60)),
+            });
+      P.flickerStuck.textContent = mins(fl.stuck_remaining_s);
+      P.flickerCooldown.textContent = mins(fl.cooldown_remaining_s);
+      P.flickerPulses.textContent =
+        num(fl.pulses_last_hour) === null ? "—" : String(fl.pulses_last_hour);
+      P.flickerLastPulse.textContent = fmt(fl.last_pulse_target_c, 1, " °C");
     }
   }
 
@@ -7548,6 +7832,8 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 .hp-calc { font-size: 12px; }
 .hp-dhw-row { display: flex; align-items: center; gap: 12px; }
 .chip-ok { background: color-mix(in srgb, var(--t-ok) 18%, transparent); color: var(--t-ok); }
+.chip-info { background: color-mix(in srgb, var(--t-info) 16%, transparent); color: var(--t-info); }
+.hp-flicker-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
 /* Chart tooltip */
 .chart-tip {

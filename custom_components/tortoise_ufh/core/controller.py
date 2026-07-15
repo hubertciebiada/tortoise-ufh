@@ -35,6 +35,7 @@ import math
 from dataclasses import replace
 
 from .config import ControllerConfig
+from .const import DEW_MARGIN_DEFAULT_K
 from .dew_point import cooling_throttle_factor, dew_point
 from .fast_source import FAST_TARGET_OFFSET_K, FastSourceMachine  # noqa: F401
 from .flow_watchdog import (
@@ -179,12 +180,19 @@ report/websocket payload can never bloat.
 # ``ControllerConfig.fast_target_offset_k`` knob, which the controller reads
 # instead.
 
-GLOBAL_SAFE_DEW_MARGIN_K: float = 2.0
+GLOBAL_SAFE_DEW_MARGIN_K: float = DEW_MARGIN_DEFAULT_K
 """Safety margin [K] added on top of ``max_i(T_dew_i)`` for the global sensor.
 
 The system's ONE working condensation margin (2026-07-12, K6): the local
 per-room throttle ramps BELOW this gap instead of stacking a second margin on
 top of it (see :func:`~tortoise_ufh.dew_point.cooling_throttle_factor`).
+
+Bound to the shared low-level constant :data:`~tortoise_ufh.const.
+DEW_MARGIN_DEFAULT_K` (2026-07-15, issue #7) so this margin and the cooling
+setpoint-flicker's :data:`~tortoise_ufh.hp_link.FLICKER_DEW_RESERVE_K` (which
+also references it) can never drift apart — the flicker's pulse floor is
+computed as ``safe_dew − reserve`` and MUST land exactly on the raw worst-room
+dew point.
 """
 
 _INTEGRATOR_UNWIND_FACTOR: float = 8.0

@@ -184,6 +184,45 @@ class TestControllerConfigValidation:
         with pytest.raises(ValueError, match="valve_write_threshold_pct must be >= 0"):
             ControllerConfig(valve_write_threshold_pct=-1.0)
 
+    @pytest.mark.unit
+    @pytest.mark.parametrize("value", [0.4, 3.1])
+    def test_flicker_band_out_of_range_rejected(self, value: float) -> None:
+        """A flicker band outside [0.5, 3.0] raises ValueError (issue #7)."""
+        with pytest.raises(ValueError, match=r"hp_flicker_band_k must be in"):
+            ControllerConfig(hp_flicker_band_k=value)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("value", [4.9, 121.0])
+    def test_flicker_stuck_minutes_out_of_range_rejected(self, value: float) -> None:
+        """A flicker stuck time outside [5, 120] raises ValueError (issue #7)."""
+        with pytest.raises(ValueError, match=r"hp_flicker_stuck_minutes must be in"):
+            ControllerConfig(hp_flicker_stuck_minutes=value)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("value", [4.9, 121.0])
+    def test_flicker_min_off_minutes_out_of_range_rejected(self, value: float) -> None:
+        """A flicker cooldown outside [5, 120] raises ValueError (issue #7)."""
+        with pytest.raises(ValueError, match=r"hp_flicker_min_off_minutes must be in"):
+            ControllerConfig(hp_flicker_min_off_minutes=value)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("value", [0.9, 6.1])
+    def test_flicker_max_starts_out_of_range_rejected(self, value: float) -> None:
+        """A flicker max-starts cap outside [1, 6] raises ValueError (issue #7)."""
+        with pytest.raises(ValueError, match=r"hp_flicker_max_starts_per_h must be in"):
+            ControllerConfig(hp_flicker_max_starts_per_h=value)
+
+    @pytest.mark.unit
+    def test_flicker_knob_bounds_are_inclusive(self) -> None:
+        """The flicker knob range endpoints are accepted (issue #7)."""
+        cfg = ControllerConfig(
+            hp_flicker_band_k=0.5,
+            hp_flicker_stuck_minutes=120.0,
+            hp_flicker_min_off_minutes=5.0,
+            hp_flicker_max_starts_per_h=6.0,
+        )
+        assert cfg.hp_flicker_band_k == 0.5
+
 
 # ---------------------------------------------------------------------------
 # WindowConfig validation

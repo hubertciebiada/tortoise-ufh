@@ -292,6 +292,16 @@ unusable) — it does NOT mean "no condensation risk". The HA sensor renders it 
 limit MUST be fail-safe: on `unknown` either hold a conservative fixed lower limit (e.g. 18-19 °C)
 or stop floor cooling entirely — never "no limit". See the README for a reference automation.
 
+**Amendment 2026-07-15 (cooling setpoint-flicker, DECISIONS §21, v0.13.0, issue #7):** an ADDITIVE
+opt-in hp-link behaviour — **no change to the frozen three-output contract, no `RoomReport` field,
+no config migration.** The pure-core `SetpointFlicker` (`core/hp_link.py`) may, for ONE cycle, lower
+the ONE existing cooling-setpoint write to the raw worst-room dew point (`p`, ceiled onto the pump
+grid; reserve = `DEW_MARGIN_DEFAULT_K`) to trip a Panasonic compressor out of its FIXED 3 K return
+deadband when it idles (`compressor_freq == 0`) with real `cooling_demand`, then unconditionally
+restores the dew-safe target. The four `hp_flicker_*` knobs above are the only new config; three
+optional pump entities (return + compressor-frequency drive it, outlet is diagnostic-only). OFF by
+default; Panasonic-specific.
+
 **Report must be JSON-serializable** (provide `to_dict()` helpers on `RoomOutputs`/`RoomReport`/
 `BuildingOutputs` returning plain dict/list/str/float/bool; enums -> their `.value`). The HA websocket
 and the panel consume these dicts.
@@ -588,6 +598,10 @@ class ControllerConfig:
     cooling_supply_base_c: float = 18.0  # ADDITIVE (2026-07-12, B2): heat-pump cooling water base, GLOBAL-only, [10,25]
     heating_supply_base_c: float = 26.0  # ADDITIVE (2026-07-12, B2): heating water base at ff_neutral_c, GLOBAL-only, [20,40]
     heating_supply_slope: float = 0.5    # ADDITIVE (2026-07-12, B2): heating curve slope, GLOBAL-only, [0,2]
+    hp_flicker_band_k: float = 1.5       # ADDITIVE (2026-07-15, #7): flicker target cooling deadband, GLOBAL-only, [0.5,3.0]
+    hp_flicker_stuck_minutes: float = 10.0   # ADDITIVE (2026-07-15, #7): stuck&armed time before a pulse, GLOBAL-only, [5,120]
+    hp_flicker_min_off_minutes: float = 20.0  # ADDITIVE (2026-07-15, #7): forced-start cooldown, GLOBAL-only, [5,120]
+    hp_flicker_max_starts_per_h: float = 2.0  # ADDITIVE (2026-07-15, #7): forced starts/rolling hour cap, GLOBAL-only, [1,6]
     flow_epsilon_k: float = 0.3          # ADDITIVE (2026-07-13, S6): min loop |ΔT| counted as flow, (0,3]
     flow_open_threshold_pct: float = 15.0  # ADDITIVE (2026-07-13, S6): valve cmd above which no-flow is evaluated, [0,100]
     flow_response_window_min: float = 45.0  # ADDITIVE (2026-07-13, S6): no-flow window, >0 (UI floor 30, 1440 disables)
@@ -598,7 +612,8 @@ class ControllerConfig:
     # __post_init__: all gains >=0, 0<=valve_floor<=100, deadband>=0, margins>=0, cycle>0,
     # boost_offset_c > deadband_c, ff_neutral_c in [-30,40], ff_max_pct in [0,100],
     # fast_target_offset_k in [0,3], cooling_supply_base_c in [10,25], heating_supply_base_c in [20,40],
-    # heating_supply_slope in [0,2], flow_epsilon_k > 0, 0<=flow_open_threshold_pct<=100, flow_response_window_min > 0
+    # heating_supply_slope in [0,2], flow_epsilon_k > 0, 0<=flow_open_threshold_pct<=100, flow_response_window_min > 0,
+    # hp_flicker_band_k in [0.5,3.0], hp_flicker_stuck_minutes in [5,120], hp_flicker_min_off_minutes in [5,120], hp_flicker_max_starts_per_h in [1,6]
 
 @dataclass(frozen=True)
 class RoomConfig:

@@ -514,6 +514,21 @@ Eigentümerin dieses Flags und darf es jederzeit überschreiben — das ist ihr 
 Das Entfernen des Flags, wenn die Pumpe im „DHW only“ ist, ist unmöglich (es gibt keine
 Richtung, zu der zurückgekehrt werden könnte).
 
+**Kühl-Sollwert-Flicker (optional, Panasonic; ab v0.13.0):** Im Kühlbetrieb startet der
+Verdichter einer Panasonic Aquarea erst, wenn der Rücklauf `Sollwert + 3 K` erreicht, und
+stoppt bei `Sollwert` — diese 3-K-Hysterese ist im Firmware fest verdrahtet. In langen
+Stillständen bleibt der Rücklauf daher hoch stehen und der Boden liefert zu wenig. Wenn Sie
+den Flicker aktivieren und die Entitäten für **Rücklauftemperatur** und **Verdichterfrequenz**
+angeben (Optionen → Wärmepumpe), senkt Tortoise — sobald es die Pumpe im Stillstand mit echtem
+Bedarf sieht — den geschriebenen Sollwert für einen Zyklus auf den taupunktsicheren Taupunkt,
+um den Verdichter zu lösen, und stellt danach sofort den normalen Sollwert wieder her. Ergebnis:
+kälteres Durchschnittswasser bei weiterhin taupunktsicherem Rücklauf. Vier globale Regler (Reiter
+Feineinstellung, Gruppe „Flicker“) steuern das angestrebte Totband, die Verharrzeit vor einem
+Impuls, den Abstand zwischen erzwungenen Starts und die Obergrenze der Starts pro Stunde. Die
+**Vorlauf**-Entität ist rein diagnostisch (im Reiter angezeigt). Standardmäßig **deaktiviert**;
+Panasonic-spezifisch. Den Flicker-Zustand (Impuls / Ruhe / Sperrzeit, Schwelle, Messwerte) sehen
+Sie im Reiter Wärmepumpe.
+
 **Wann Tortoise an die Pumpe schreibt:** nur wenn mindestens ein Raum im Zustand
 **Aktiv** ist (das globale Gerät darf nur bewegt werden, wenn irgendjemand die Regelung
 übergeben hat) — sonst zeigt der Reiter „Schreibvorgänge pausiert“. Der Abschiedsbefehl
@@ -545,6 +560,9 @@ Das vollständige Verzeichnis unten:
 | `fast_source_group_conflict` | Der Raum hat die Richtungsabwägung am gemeinsamen Außengerät verloren — sein Split zwangsweise AUS. | Nichts — er kehrt nach einem Richtungswechsel der Gruppe zurück. Wenn häufig: Überdenken Sie die Offsets der Räume in der Gruppe. |
 | `fast_source_cannot_cool` | Der Raum möchte kühlen, aber seine Zusatzquelle kann es nicht (Heizgerät). | Informativ. |
 | `cooling_disabled` | Der Raum nimmt nicht an der Kühlung teil (Konfigurationsoption) — im Kühlmodus wird er übersprungen. | Beabsichtigt; ändern Sie es in den Raumoptionen, wenn Sie kühlen möchten. |
+| `flicker_pulsing` | Kühl-Sollwert-Flicker (Panasonic, §11): Für diesen einen Zyklus wurde der Sollwert auf den taupunktsicheren Boden gesenkt, um den Verdichter aus seiner festen 3-K-Rücklaufhysterese zu lösen; der nächste Zyklus stellt den normalen Sollwert wieder her. | Informativ (beabsichtigt). |
+| `flicker_dew_blocked` | Der Flicker wäre scharf, aber ein Impuls müsste den rohen Taupunkt überschreiten — kein Spielraum, den Sollwert zu senken; der Impuls wird zurückgehalten. | Informativ; an feuchten Tagen normal. |
+| `flicker_no_sensor` | Der Kühl-Flicker ist aktiviert, aber der Rücklauf- oder Verdichterfrequenz-Messwert fehlt (Entität nicht gesetzt oder veraltet) — Impulse werden zurückgehalten. | Prüfen Sie die Entitäten für Rücklauftemperatur und Verdichterfrequenz (Optionen → Wärmepumpe). |
 | `s1_floor_overheat` | Bodenschutz: zu heißer Vorlauf — Ventil bis zum Abkühlen geschlossen. | Prüfen Sie die Heizkurve/Vorlauftemperatur der Wärmepumpe. |
 | `s3_emergency_heat` | Notheizen: Raum stark unterkühlt — erzwungenes Heizen mit allem, was da ist. | Prüfen Sie, warum der Raum so ausgekühlt ist (Fenster? Störung?). |
 | `s4_emergency_cool` | Notkühlen: Raum stark überhitzt — erzwungenes Kühlen. | Prüfen Sie die Überhitzungsquelle (Sonne? Störung?). |

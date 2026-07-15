@@ -219,7 +219,7 @@ def test_every_knob_has_label_and_tooltip_in_both_languages() -> None:
     """Each exposed knob has tune_<name> and tip_knob_<name> in pl AND en."""
     sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
     knobs = _knob_names()
-    assert len(knobs) == 21, f"expected 21 exposed knobs, parsed {knobs}"
+    assert len(knobs) == 25, f"expected 25 exposed knobs, parsed {knobs}"
     missing: list[str] = []
     for knob in knobs:
         for key in (f"tune_{knob}", f"tip_knob_{knob}"):
@@ -408,6 +408,64 @@ def test_v0100_surfaces_have_their_str_keys() -> None:
         if key not in sections[lang]
     ]
     assert not missing, f"missing STR keys: {missing}"
+
+
+# New v0.13.0 surface: the Heat-pump tab's cooling setpoint-flicker diagnostics
+# block and its group label (issue #7). Pinned so a rename cannot silently drop
+# a flicker surface (the knob tune_/tip_ keys are already covered by the
+# per-knob loop above).
+_REQUIRED_V013_KEYS = (
+    "tune_grp_flicker",
+    "hp_sec_flicker",
+    "tip_hp_flicker",
+    "hp_flicker_on",
+    "hp_flicker_off",
+    "hp_flicker_pulsing_badge",
+    "hp_flicker_state",
+    "hp_flicker_st_idle",
+    "hp_flicker_st_pulse",
+    "hp_flicker_st_cooldown",
+    "hp_flicker_trigger",
+    "hp_flicker_stuck",
+    "hp_flicker_cooldown",
+    "hp_flicker_pulses",
+    "hp_flicker_last_pulse",
+    "hp_flicker_return",
+    "hp_flicker_outlet",
+    "hp_flicker_freq",
+)
+
+
+@pytest.mark.unit
+def test_v013_surfaces_have_their_str_keys() -> None:
+    """The v0.13.0 cooling setpoint-flicker STR keys exist in all languages."""
+    sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
+    missing = [
+        f"{lang}:{key}"
+        for key in _REQUIRED_V013_KEYS
+        for lang in ("pl", "en", "de")
+        if key not in sections[lang]
+    ]
+    assert not missing, f"missing STR keys: {missing}"
+
+
+@pytest.mark.unit
+def test_flicker_flags_registered_and_consumed() -> None:
+    """The 3 global flicker flags are FLAG_LABELS rows AND rendered (no orphans).
+
+    They are GLOBAL flags (surfaced on the Heat-pump tab, not the per-room
+    annunciator), so this pins both halves: the registry entry exists and the
+    Heat-pump render actually forwards the payload flags into FLAG_LABELS chips.
+    """
+    source = _PANEL_JS.read_text(encoding="utf-8")
+    block = _extract_block(source, "const FLAG_LABELS = {")
+    codes = {code for code, _ in _FLAG_ENTRY.findall(block)}
+    for flag in ("flicker_pulsing", "flicker_dew_blocked", "flicker_no_sensor"):
+        assert flag in codes, f"FLAG_LABELS is missing the flicker flag {flag!r}"
+    # The Heat-pump render consumes the payload flags and builds FLAG_LABELS
+    # chips from them — a guard against re-orphaning the flags.
+    assert "fl.flags" in source, "the HP render does not read the flicker flags"
+    assert "this._chip(code)" in source, "the flicker flags are not rendered"
 
 
 @pytest.mark.unit

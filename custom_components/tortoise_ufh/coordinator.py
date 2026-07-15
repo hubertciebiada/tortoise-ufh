@@ -49,9 +49,12 @@ from .const import (
     CONF_ENTITY_FAST_SOURCE,
     CONF_ENTITY_GLOBAL_SUPPLY,
     CONF_ENTITY_HP_ACTIVE,
+    CONF_ENTITY_HP_COMPRESSOR_FREQ,
     CONF_ENTITY_HP_COOLING_SETPOINT,
     CONF_ENTITY_HP_HEATING_SETPOINT,
     CONF_ENTITY_HP_MODE,
+    CONF_ENTITY_HP_OUTLET_TEMP,
+    CONF_ENTITY_HP_RETURN_TEMP,
     CONF_ENTITY_HUMIDITY,
     CONF_ENTITY_MODE,
     CONF_ENTITY_RETURN,
@@ -65,6 +68,7 @@ from .const import (
     CONF_FAST_WINDOW_START,
     CONF_HEAT_PUMP,
     CONF_HOME_SETPOINT,
+    CONF_HP_FLICKER_ENABLED,
     CONF_ROOM_NAME,
     CONF_ROOM_OFFSET,
     CONF_ROOM_STATE,
@@ -83,6 +87,9 @@ from .core.config import ControllerConfig
 from .core.controller import BuildingController
 from .core.fast_source import window_allows
 from .core.hp_link import (
+    FlickerDecision,
+    SetpointFlicker,
+    cooling_demand,
     cooling_setpoint_c,
     dhw_option,
     direction_option,
@@ -279,6 +286,14 @@ class HeatPumpRuntime:
         hp_active_configured: Whether an hp-active entity is configured.
         writes_enabled: Whether the link may write this cycle (not parked and
             at least one room is LIVE).
+        flicker: The cooling setpoint-flicker's per-cycle view (issue #7,
+            2026-07-15) as a JSON dict ``{enabled, state, flags, trigger_c,
+            stuck_remaining_s, cooldown_remaining_s, pulses_last_hour,
+            last_pulse_target_c, pulse_target_c, return_c, compressor_freq_hz,
+            outlet_c}`` (``flags`` is this cycle's ``FlickerDecision.flags`` —
+            the panel renders them from ``FLAG_LABELS``), or ``None`` when
+            neither the flicker nor any of its diagnostic entities is
+            configured.
 
     Raises:
         ValueError: If mode sub-fields are set without a mode entity.
@@ -295,6 +310,7 @@ class HeatPumpRuntime:
     hp_active: bool | None
     hp_active_configured: bool
     writes_enabled: bool
+    flicker: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         """Validate internal consistency of the heat-pump payload."""
@@ -319,6 +335,7 @@ class HeatPumpRuntime:
             "hp_active": self.hp_active,
             "hp_active_configured": self.hp_active_configured,
             "writes_enabled": self.writes_enabled,
+            "flicker": dict(self.flicker) if self.flicker is not None else None,
         }
 
 
@@ -534,6 +551,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._hp_divergence_cycles: int = 0
         self._hp_mode_at_last_write: Mode | None = None
         self._hp_last_mode_write_monotonic: float | None = None
+        # Cooling setpoint-flicker state machine (issue #7, 2026-07-15). ONE
+        # per entry, persisted across control cycles beside the other stateful
+        # machines; rebuilt here on every config-entry reload (a knob change)
+        # and NOT on a state-only room change (which never reloads). Reads the
+        # four global flicker knobs off the effective global tuning.
+        self._flicker: SetpointFlicker = SetpointFlicker(self._global_config)
 
         # Source-entity read path (stale cache + plausibility gates) and the
         # actuator write path (thresholds + command caches), each with its own
@@ -1019,11 +1042,14 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         outputs_by_room: dict[str, RoomOutputs] = {}
         global_dew: float | None = None
         sensor_lost_rooms = 0
+        # Feed the core the REAL elapsed time since the previous step (clamped),
+        # so an off-cycle debounced recompute integrates honestly instead of
+        # assuming a full nominal cycle. On the first step there is no
+        # reference, so fall back to the nominal cycle length. Computed once
+        # here so the SAME dt advances the core step AND the cooling
+        # setpoint-flicker's tick (issue #7).
+        dt_seconds: float = self._cycle_seconds
         if self._building is not None and inputs:
-            # Feed the core the REAL elapsed time since the previous step
-            # (clamped), so an off-cycle debounced recompute integrates honestly
-            # instead of assuming a full nominal cycle. On the first step there is
-            # no reference, so fall back to the nominal cycle length.
             now_monotonic = time.monotonic()
             if self._last_step_monotonic is None:
                 dt_seconds = self._cycle_seconds
@@ -1113,7 +1139,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # feeds the cooling setpoint. A link failure never breaks the cycle.
         heat_pump: HeatPumpRuntime | None = None
         try:
-            heat_pump = await self._sync_heat_pump(global_dew)
+            heat_pump = await self._sync_heat_pump(
+                global_dew,
+                reports=[out.report for out in outputs_by_room.values()],
+                dt_seconds=dt_seconds,
+            )
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Heat-pump link sync failed")
 
@@ -1354,7 +1384,13 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             self.get_room_state(name) == ROOM_STATE_LIVE for name in self._room_names
         )
 
-    async def _sync_heat_pump(self, global_dew: float | None) -> HeatPumpRuntime | None:
+    async def _sync_heat_pump(
+        self,
+        global_dew: float | None,
+        *,
+        reports: list[RoomReport],
+        dt_seconds: float,
+    ) -> HeatPumpRuntime | None:
         """Compute (and, when gated, write) the heat-pump link's cycle (B2).
 
         Direction sync: ``desired = direction_option(mode, current)`` — the
@@ -1371,8 +1407,19 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         through :meth:`CommandWriter.write_hp_setpoint` (0.5 K threshold +
         45-min re-assert).
 
+        Cooling setpoint-flicker (issue #7): when enabled AND the cooling
+        setpoint entity is configured, the :class:`~tortoise_ufh.hp_link.
+        SetpointFlicker` may drop the WRITTEN cooling setpoint to the dew-safe
+        pulse floor for one cycle to trip the pump's compressor out of its
+        fixed 3 K return deadband, then restore it — a tighter effective
+        deadband (colder average water) while the return stays dew-safe.
+
         Args:
             global_dew: This cycle's global safe dew point [degC], or ``None``.
+            reports: The per-room reports of this cycle (feed the flicker's
+                cooling-demand test).
+            dt_seconds: The real measured control-step interval [s] — the SAME
+                value the core step used, advancing the flicker clock ONCE.
 
         Returns:
             The :class:`HeatPumpRuntime` payload, or ``None`` when the link is
@@ -1433,21 +1480,77 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         dhw_active = "dhw" in current_key
         dhw_only = current_key == "dhw only"
 
-        # -- Cooling water setpoint --------------------------------------------
+        # -- Cooling water setpoint (+ optional setpoint-flicker, #7) ----------
         cooling: dict[str, Any] | None = None
+        flicker_payload: dict[str, Any] | None = None
         if cool_entity:
             base = self._global_config.cooling_supply_base_c
+            # The normal ("dew-safe") cooling target, computed unconditionally
+            # so a mid-pulse restore can write it even when the mode has just
+            # flipped out of COOLING (issue #7).
+            normal_target = cooling_setpoint_c(base, global_dew)
             cool_target: float | None = None
-            if self._mode is Mode.COOLING:
-                cool_target = cooling_setpoint_c(base, global_dew)
+
+            flicker_enabled = bool(cfg.get(CONF_HP_FLICKER_ENABLED, False))
+            return_entity = str(cfg.get(CONF_ENTITY_HP_RETURN_TEMP) or "")
+            freq_entity = str(cfg.get(CONF_ENTITY_HP_COMPRESSOR_FREQ) or "")
+            outlet_entity = str(cfg.get(CONF_ENTITY_HP_OUTLET_TEMP) or "")
+            return_c = self._reader.read_float_state(return_entity or None)
+            freq_hz = self._reader.read_float_state(freq_entity or None)
+            outlet_c = self._reader.read_float_state(outlet_entity or None)
+
+            decision = None
+            if flicker_enabled:
+                # Advance the flicker clock EXACTLY ONCE per cycle with the
+                # SAME real dt the core step used, then decide (issue #7).
+                self._flicker.tick(dt_seconds)
+                decision = self._flicker.step(
+                    cooling_active=(
+                        self._mode is Mode.COOLING and writes_enabled and not dhw_active
+                    ),
+                    demand=cooling_demand(reports),
+                    hp_return_c=return_c,
+                    compressor_freq_hz=freq_hz,
+                    written_target_c=normal_target,
+                    safe_dew_c=global_dew,
+                    step_c=self._writer.hp_setpoint_step(cool_entity),
+                )
+
+            if decision is not None and decision.restore_pending:
+                # A pulse was in flight and the normal cooling write below may
+                # NOT run this cycle — the mode flipped out of COOLING, OR a
+                # whole-home stop landed (mode is STILL COOLING but
+                # writes_enabled is now False, since the mode comes from the
+                # mode entity, not the room states). The restore is therefore
+                # the FIRST branch and UNCONDITIONAL of both mode and
+                # writes_enabled, so the pump is never left parked at the
+                # raw-dew pulse floor (spec §4; mirrors the C5 farewell
+                # philosophy: the safe value must always land).
+                cool_target = normal_target
+                await self._writer.write_hp_setpoint(cool_entity, normal_target)
+            elif self._mode is Mode.COOLING:
+                cool_target = normal_target
                 if writes_enabled:
-                    await self._writer.write_hp_setpoint(cool_entity, cool_target)
+                    # The pulse drop and its restore are each >= one grid step
+                    # (>= 0.5 K on a real pump), so both cross the writer's
+                    # 0.5 K / 45-min skip — no throttle change is required.
+                    value = (
+                        decision.pulse_target_c
+                        if decision is not None and decision.pulse_target_c is not None
+                        else normal_target
+                    )
+                    await self._writer.write_hp_setpoint(cool_entity, value)
+
             cooling = {
                 "entity_id": cool_entity,
                 "target_c": cool_target,
                 "base_c": base,
                 "safe_dew_c": global_dew,
             }
+            if flicker_enabled or return_entity or freq_entity or outlet_entity:
+                flicker_payload = self._flicker_payload(
+                    decision, flicker_enabled, return_c, freq_hz, outlet_c
+                )
 
         # -- Heating water setpoint --------------------------------------------
         heating: dict[str, Any] | None = None
@@ -1485,7 +1588,56 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             hp_active=hp_active,
             hp_active_configured=bool(active_entity),
             writes_enabled=writes_enabled,
+            flicker=flicker_payload,
         )
+
+    @staticmethod
+    def _flicker_payload(
+        decision: FlickerDecision | None,
+        enabled: bool,
+        return_c: float | None,
+        freq_hz: float | None,
+        outlet_c: float | None,
+    ) -> dict[str, Any]:
+        """Build the JSON flicker payload for the runtime / panel (issue #7).
+
+        Args:
+            decision: This cycle's :class:`~tortoise_ufh.hp_link.
+                FlickerDecision`, or ``None`` when the flicker is disabled
+                (only its diagnostic sensors are configured).
+            enabled: Whether the flicker master switch is on.
+            return_c: The pump inlet/return temperature [degC], or ``None``.
+            freq_hz: The compressor frequency [Hz], or ``None``.
+            outlet_c: The pump outlet temperature [degC] (diagnostic only), or
+                ``None``.
+
+        Returns:
+            A JSON-serializable dict of the flicker's cycle view.
+        """
+        return {
+            "enabled": enabled,
+            "state": decision.state if decision is not None else "idle",
+            "flags": list(decision.flags) if decision is not None else [],
+            "trigger_c": decision.trigger_c if decision is not None else None,
+            "stuck_remaining_s": (
+                decision.stuck_remaining_s if decision is not None else None
+            ),
+            "cooldown_remaining_s": (
+                decision.cooldown_remaining_s if decision is not None else None
+            ),
+            "pulses_last_hour": (
+                decision.pulses_last_hour if decision is not None else 0
+            ),
+            "last_pulse_target_c": (
+                decision.last_pulse_target_c if decision is not None else None
+            ),
+            "pulse_target_c": (
+                decision.pulse_target_c if decision is not None else None
+            ),
+            "return_c": return_c,
+            "compressor_freq_hz": freq_hz,
+            "outlet_c": outlet_c,
+        }
 
     async def async_set_hp_dhw(self, want_dhw: bool) -> str:
         """Add/remove the pump's ``+DHW`` flag on the user's request (B2).

@@ -1162,3 +1162,74 @@ points each language at its best existing entry point).
 (Flags + Heat pump) plus a heat-pump-link / quiet-hours feature line; `INSTRUKCJA`/`pl.md` §6 gained
 the `flow_fault` binary sensor; `CLAUDE.md` "Four tabs"→"Six tabs". Merge gate green (unit,
 `mypy` core 22, ruff, format, `node --check`).
+
+## 21. Cooling setpoint-flicker — trip the Panasonic compressor out of its fixed deadband (2026-07-15, v0.13.0, issue #7)
+
+> **Status: additive opt-in hp-link behaviour.** New pure-core state machine (`SetpointFlicker` +
+> `cooling_demand` + `FlickerDecision` in `core/hp_link.py`) and adapter wiring only. **No change to
+> the frozen three-output I/O contract** (the flicker only bends the ONE existing cooling-setpoint
+> write for a single cycle), **no `RoomReport` field, no config migration.** Off by default; the
+> whole feature is inert unless the owner opts in AND maps the pump entities.
+
+**The problem (verified on the owner's live unit).** On a Panasonic Aquarea the cooling compressor is
+gated by a **FIXED 3 K hysteresis on the RETURN (inlet) water**: it STARTS when the inlet reaches
+`cool-setpoint + 3 K` and STOPS at ~setpoint. That band is firmware-baked and cannot be changed over
+HeishaMon. So through long idles the return parks near `setpoint + 3 K` while rooms still call for
+cooling and the high-mass floor under-delivers — the water is, on average, warmer than the dew-safe
+setpoint we wrote.
+
+**The mechanism.** When Tortoise sees the pump **idle in the deadband with genuine unmet demand**, it
+drops the WRITTEN cooling setpoint for ONE cycle to the dew-safe pulse floor `p`, which trips the
+pump's own `+3 K` rule and starts the compressor; the very next cycle it restores the normal
+dew-safe setpoint, so the run finishes at the safe value. Net effect: a **tighter EFFECTIVE deadband
+→ colder AVERAGE water**, while the return floor stays dew-safe. Manually verified on the live pump.
+
+**Settled decisions.**
+
+- **The 3 K START band is a fixed constant** (`FLICKER_START_OFFSET_K = 3.0`), NOT a variable —
+  it is a property of the pump firmware, verified on the owner's unit.
+- **The pulse floor is the RAW worst-room dew point**, ceiled onto the pump's own grid step so it can
+  never land BELOW the dew point. `p = ceil((safe_dew − FLICKER_DEW_RESERVE_K) / step) · step`, with
+  `FLICKER_DEW_RESERVE_K = DEW_MARGIN_DEFAULT_K = 2 K` — the exact margin the global safe dew point
+  adds on top of `max_over_cooled(T_dew)` (kept equal by referencing the shared constant, and equal
+  to `controller.GLOBAL_SAFE_DEW_MARGIN_K`), so the reserve subtraction recovers the raw dew point
+  precisely. `trigger = max(w + band, p + 3)` — the pump arms only once the return has climbed
+  `band` above the written setpoint AND high enough that a pulse to `p` would actually cross the
+  pump's `+3 K` start. If `p` cannot drop even one grid step below `w` (`p > w − step`, e.g. a coarse
+  1–3 K pump grid on a humid day) the pulse is withheld and `flicker_dew_blocked` is flagged —
+  cooling stays dew-safe over cooling harder.
+- **Idle is detected by compressor frequency == 0**, not by a falling-return heuristic. Simpler and
+  unambiguous; a missing inlet/frequency reading disarms the machine and flags `flicker_no_sensor`.
+- **Four global-only knobs, exposed on the Tuning tab + options flow** (rejected per-room like the
+  other HP-water knobs): `hp_flicker_band_k` (1.5, [0.5, 3.0] K), `hp_flicker_stuck_minutes` (10,
+  [5, 120]), `hp_flicker_min_off_minutes` (20, [5, 120] — compressor-protection cooldown between
+  forced starts), `hp_flicker_max_starts_per_h` (2, [1, 6] — a hard cap over a rolling hour). The
+  band must stay below 3 K to actually tighten the deadband.
+- **The outlet/supply entity is DIAGNOSTIC-ONLY in v1** — read and surfaced on the Heat pump tab, no
+  logic consumes it. It is mapped now for a future supply-side condensation guard.
+- **The machine is persistent and ticked EXACTLY ONCE per cycle** with the SAME real measured `dt`
+  the core step used (one `SetpointFlicker` per config entry, rebuilt only on a reload, never
+  re-created or double-ticked — the class of bug fixed in `FastSourceMachine` on 2026-07-10). It
+  starts in `cooldown` with the full gap to run so an HA restart never pulses immediately; the
+  adapter's empty write cache makes the first cooling cycle write the normal target — self-healing.
+- **The restore is unconditional** (`FlickerDecision.restore_pending`): if the mode flips out of
+  COOLING one step after a pulse, the adapter still writes the normal target so the pump is never
+  left parked at the low pulse floor (mirrors the C5 farewell philosophy). Because both the drop and
+  the restore are ≥ one grid step (≥ 0.5 K on a real pump), they cross the writer's existing 0.5 K /
+  45-min skip with no throttle change.
+- **Tooltips (ⓘ) in PL/EN/DE** for every new entity, knob and diagnostic label (panel `STR` tables +
+  options-flow `data_description` across `strings.json` and the three `translations/*.json`), plus
+  three new `FLAG_LABELS` rows (`flicker_pulsing` info, `flicker_dew_blocked` info,
+  `flicker_no_sensor` warn — group `assist`).
+
+**Alternatives considered.** (a) Model the 3 K band as a knob — rejected: it is a firmware constant,
+a knob would only invite mis-tuning. (b) Pulse to a fixed low setpoint (e.g. 5 °C) — rejected: it
+would cross the dew point on humid days; pulsing to the raw dew point is the aggressive-but-safe
+choice. (c) A falling-return heuristic for idle — rejected in favour of the unambiguous
+compressor-frequency == 0 reading. (d) Route the pulse through a new forced-write path — rejected: the
+drop/restore magnitudes already clear the existing write threshold, so no writer change was needed.
+
+**Guard.** Pure-core unit tests for the five machine scenarios + `cooling_demand` + the four knob
+validations (`tests/unit/test_flicker.py`, `test_config_models.py`); the panel-i18n parity/knob-count
+guard bumped 21→25 knobs and pinned the flicker STR surfaces. Merge gate green (unit, simulation,
+`mypy` core, ruff, format, `node --check`).

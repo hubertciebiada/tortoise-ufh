@@ -204,6 +204,32 @@ integrator (``RoomInputs.hp_active_for_ufh``). Moved here from the
 coordinator's dead zone (B2, 2026-07-12); the legacy per-room key of the same
 name is still honoured as an override."""
 
+# -- Cooling setpoint-flicker entities (issue #7, 2026-07-15) ----------------
+# All OPTIONAL, stored inside the CONF_HEAT_PUMP options dict. See
+# ``core/hp_link.py::SetpointFlicker`` and ``docs/DECISIONS.md`` §21.
+
+CONF_ENTITY_HP_RETURN_TEMP: str = "entity_hp_return_temp"
+"""Optional pump inlet/return water temperature sensor (issue #7). The MAIN
+flicker signal: the return parks near ``cool-setpoint + 3 K`` through idles.
+Live example: ``sensor.panasonic_heat_pump_main_main_inlet_temp``."""
+
+CONF_ENTITY_HP_COMPRESSOR_FREQ: str = "entity_hp_compressor_freq"
+"""Optional compressor frequency sensor [Hz], ``0`` = off (issue #7). Used for
+idle detection (compressor OFF is the idle signal). Live example:
+``sensor.panasonic_heat_pump_main_compressor_freq``."""
+
+CONF_ENTITY_HP_OUTLET_TEMP: str = "entity_hp_outlet_temp"
+"""Optional pump outlet/supply water temperature sensor (issue #7). DIAGNOSTIC
+ONLY in v1 — read and surfaced in the heat-pump runtime / panel, no logic
+consumes it (mapped for a future supply-side condensation guard). Live
+example: ``sensor.panasonic_heat_pump_main_main_outlet_temp``."""
+
+CONF_HP_FLICKER_ENABLED: str = "hp_flicker_enabled"
+"""Opt-in master switch for the cooling setpoint-flicker (bool, DEFAULT False;
+issue #7). Lives in the ``CONF_HEAT_PUMP`` options dict alongside the entity
+selectors, NOT as a ``ControllerConfig`` field. The flicker only runs when
+this is true AND ``CONF_ENTITY_HP_COOLING_SETPOINT`` is configured."""
+
 CONF_ENTITY_GLOBAL_SUPPLY: str = "entity_global_supply"
 """Optional GLOBAL manifold supply-temperature probe (sensor, temperature;
 top-level ``entry.options`` key set in options -> settings; S6, 2026-07-13).
@@ -299,6 +325,12 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     ("cooling_supply_base_c", 10.0, 25.0, 0.5),
     ("heating_supply_base_c", 20.0, 40.0, 0.5),
     ("heating_supply_slope", 0.0, 2.0, 0.1),
+    # Cooling setpoint-flicker timing (issue #7, 2026-07-15): global-only knobs
+    # read by the opt-in SetpointFlicker; see HP_GLOBAL_ONLY_KNOBS below.
+    ("hp_flicker_band_k", 0.5, 3.0, 0.1),
+    ("hp_flicker_stuck_minutes", 5.0, 120.0, 1.0),
+    ("hp_flicker_min_off_minutes", 5.0, 120.0, 1.0),
+    ("hp_flicker_max_starts_per_h", 1.0, 6.0, 1.0),
     # S6 hydraulic no-flow watchdog (2026-07-13, issue #4). The response
     # window's UI minimum is 30 min — the slab is slow and shorter windows
     # would flap (the CORE accepts any positive value so simulation tests
@@ -343,6 +375,10 @@ CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "cooling_supply_base_c": "°C",
     "heating_supply_base_c": "°C",
     "heating_supply_slope": "K/K",
+    "hp_flicker_band_k": "K",
+    "hp_flicker_stuck_minutes": "min",
+    "hp_flicker_min_off_minutes": "min",
+    "hp_flicker_max_starts_per_h": "1/h",
     "flow_epsilon_k": "K",
     "flow_open_threshold_pct": "%",
     "flow_response_window_min": "min",
@@ -356,14 +392,19 @@ HP_GLOBAL_ONLY_KNOBS: frozenset[str] = frozenset(
         "cooling_supply_base_c",
         "heating_supply_base_c",
         "heating_supply_slope",
+        "hp_flicker_band_k",
+        "hp_flicker_stuck_minutes",
+        "hp_flicker_min_off_minutes",
+        "hp_flicker_max_starts_per_h",
     }
 )
-"""Knobs that exist ONLY in the global tuning scope (B2, 2026-07-12).
+"""Knobs that exist ONLY in the global tuning scope (B2, 2026-07-12; extended
+with the flicker timing, issue #7 2026-07-15).
 
-The heat-pump water setpoints are building-level physics — a per-room
-override could be set but would have zero effect, so it is rejected outright:
-``coerce_tuning_values`` raises for a room scope and the panel does not render
-the group outside the Global scope."""
+The heat-pump water setpoints and the setpoint-flicker timing are
+building-level physics — a per-room override could be set but would have zero
+effect, so it is rejected outright: ``coerce_tuning_values`` raises for a room
+scope and the panel does not render the group outside the Global scope."""
 
 # ---------------------------------------------------------------------------
 # Coordinator / watchdog timing

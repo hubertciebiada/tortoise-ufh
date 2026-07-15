@@ -490,3 +490,36 @@ pompy (§8.10 w mocy). Sprzężenie jest w całości **opt-in** — bez skonfigu
 Zapisy do pompy są dozwolone tylko, gdy ktokolwiek oddał Tortoise stery (≥1 pokój `live`,
 koordynator nie zaparkowany). Komenda pożegnalna (C5/unload) **nie dotyka pompy** — ma
 własną automatykę i limity firmware'u.
+
+### 8.14 Aneks (2026-07-15, v0.13.0) — flicker nastawy chłodzenia (issue #7)
+
+> **To JAWNE, datowane ROZSZERZENIE opt-in sprzężenia z pompą (§8.13)** — bez zmiany
+> zamrożonego kontraktu trzech wyjść, bez nowego pola `RoomReport`, bez migracji konfiguracji.
+> Zgina jedynie JEDYNY istniejący zapis nastawy chłodzenia na jeden cykl. Domyślnie WYŁĄCZONE;
+> rozwiązanie specyficzne dla Panasonica, zweryfikowane na żywej pompie właściciela.
+
+**Problem.** W chłodzeniu sprężarka Panasonic Aquarea jest bramkowana STAŁĄ histerezą 3 K na
+wodzie POWROTNEJ (wlotowej): START przy `nastawa + 3 K`, STOP przy ~`nastawa`. Ta histereza jest
+zaszyta w firmware i nieedytowalna przez HeishaMon. W długich postojach powrót zatrzymuje się
+przy `nastawa + 3 K`, gdy pokoje wciąż wołają o chłód — wysokobezwładna podłoga niedodostarcza,
+a średnia woda jest cieplejsza niż zapisana, bezpieczna dla rosy nastawa.
+
+**Mechanizm.** Gdy pompa stoi w martwej strefie (`compressor_freq == 0`) z realnym
+niezaspokojonym zapotrzebowaniem (`cooling_demand` po raportach pokoi), na JEDEN cykl obniżamy
+zapisaną nastawę chłodzenia do surowego punktu rosy najgorszego pokoju `p` (zaokrąglonego W GÓRĘ
+na siatkę pompy; rezerwa `= DEW_MARGIN_DEFAULT_K = 2 K`, więc `p` ląduje dokładnie na surowym
+punkcie rosy i nigdy poniżej). To wytrąca sprężarkę z jej `+3 K`; następny cykl bezwarunkowo
+przywraca normalną nastawę `w`, więc bieg kończy się na wartości bezpiecznej dla rosy. Efekt:
+zacieśniona EFEKTYWNA martwa strefa → chłodniejsza ŚREDNIA woda, powrót nadal bezpieczny dla rosy.
+`trigger = max(w + band, p + 3)`; gdy siatka jest zbyt zgrubna, by zejść choć o krok poniżej `w`
+(`p > w − step`), impuls jest wstrzymany i zapala się `flicker_dew_blocked`.
+
+**Decyzje (ustalone z właścicielem).** 3 K to STAŁA (`FLICKER_START_OFFSET_K`), nie parametr;
+postój wykrywany po częstotliwości sprężarki == 0 (bez heurystyki spadającego powrotu); cztery
+globalne pokrętła (`hp_flicker_band_k` 1,5 [0,5–3,0] K, `hp_flicker_stuck_minutes` 10 [5–120],
+`hp_flicker_min_off_minutes` 20 [5–120] — ochrona sprężarki, `hp_flicker_max_starts_per_h` 2
+[1–6] — limit na godzinę kroczącą); trzy opcjonalne encje pompy (powrót + częstotliwość napędzają
+logikę, wylot jest tylko diagnostyczny, zmapowany pod przyszłą ochronę przeciwrosową po stronie
+zasilania); maszyna trwała, tik dokładnie raz na cykl realnym `dt`, start w stanie „przerwa"
+(bezpieczne po restarcie); tooltipy PL/EN/DE dla każdej encji i pokrętła. Zapis nadal tylko gdy
+≥1 pokój `live` i koordynator nie zaparkowany.
