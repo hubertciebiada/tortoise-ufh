@@ -1,7 +1,7 @@
 """Controller-knob introspection shared by the tuning surfaces.
 
 Extracted verbatim from ``websocket.py`` (2026-07-10): the helpers that expose
-the :data:`~const.CONTROLLER_NUMBER_KNOBS` / :data:`~const.CONTROLLER_BOOL_KNOB`
+the :data:`~const.CONTROLLER_NUMBER_KNOBS` / :data:`~const.CONTROLLER_BOOL_KNOBS`
 vocabulary — names, ranges, descriptors, per-entry effective values, sparse
 per-room overrides and payload coercion — now live in one adapter module, so
 the websocket handlers (``get_tuning`` / ``set_tuning``) and the options flow
@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from .const import (
     CONF_CONTROLLER,
     CONF_ROOM_TUNING,
-    CONTROLLER_BOOL_KNOB,
+    CONTROLLER_BOOL_KNOBS,
     CONTROLLER_KNOB_UNITS,
     CONTROLLER_NUMBER_KNOBS,
     HP_GLOBAL_ONLY_KNOBS,
@@ -46,14 +46,14 @@ __all__ = [
 
 
 def knob_names() -> list[str]:
-    """Return every exposed knob field name (numeric knobs + the boolean knob)."""
-    return [name for name, _low, _high, _step in CONTROLLER_NUMBER_KNOBS] + [
-        CONTROLLER_BOOL_KNOB
-    ]
+    """Return every exposed knob field name (numeric knobs + boolean knobs)."""
+    return [name for name, _low, _high, _step in CONTROLLER_NUMBER_KNOBS] + list(
+        CONTROLLER_BOOL_KNOBS
+    )
 
 
 def knob_range(field_name: str) -> tuple[float, float] | None:
-    """Return a numeric knob's ``(min, max)``, or ``None`` for the boolean knob.
+    """Return a numeric knob's ``(min, max)``, or ``None`` for a boolean knob.
 
     Args:
         field_name: A candidate knob field name.
@@ -82,13 +82,14 @@ def tuning_fields() -> tuple[dict[str, Any], ...]:
                 "unit": CONTROLLER_KNOB_UNITS.get(name, ""),
             }
         )
-    fields.append(
-        {
-            "name": CONTROLLER_BOOL_KNOB,
-            "type": "bool",
-            "unit": CONTROLLER_KNOB_UNITS.get(CONTROLLER_BOOL_KNOB, ""),
-        }
-    )
+    for name in CONTROLLER_BOOL_KNOBS:
+        fields.append(
+            {
+                "name": name,
+                "type": "bool",
+                "unit": CONTROLLER_KNOB_UNITS.get(name, ""),
+            }
+        )
     return tuple(fields)
 
 
@@ -98,7 +99,8 @@ def knob_values(config: ControllerConfig) -> dict[str, Any]:
         name: float(getattr(config, name))
         for name, _low, _high, _step in CONTROLLER_NUMBER_KNOBS
     }
-    values[CONTROLLER_BOOL_KNOB] = bool(getattr(config, CONTROLLER_BOOL_KNOB))
+    for name in CONTROLLER_BOOL_KNOBS:
+        values[name] = bool(getattr(config, name))
     return values
 
 
@@ -196,7 +198,7 @@ def coerce_tuning_values(
                 raise ValueError(msg)
             coerced[field_name] = None
             continue
-        if field_name == CONTROLLER_BOOL_KNOB:
+        if field_name in CONTROLLER_BOOL_KNOBS:
             if not isinstance(value, bool):
                 msg = f"{field_name} must be a boolean, got {value!r}"
                 raise ValueError(msg)

@@ -61,10 +61,11 @@
           "cooling_supply_base_c": "Bazowa temperatura wody chłodzenia (°C, globalne)",
           "heating_supply_base_c": "Bazowa temperatura wody grzania (°C, globalne)",
           "heating_supply_slope": "Nachylenie krzywej wody grzania (K/K, globalne)",
-          "hp_flicker_band_k": "Flicker: docelowa martwa strefa chłodzenia (K, globalne)",
-          "hp_flicker_stuck_minutes": "Flicker: czas utknięcia przed impulsem (min, globalne)",
-          "hp_flicker_min_off_minutes": "Flicker: min. czas między wymuszonymi startami (min, globalne)",
-          "hp_flicker_max_starts_per_h": "Flicker: maks. wymuszonych startów na godzinę (globalne)",
+          "hp_flicker_enabled": "Wymuszanie startu chłodzenia (Panasonic Aquarea)",
+          "hp_flicker_band_k": "Wymuszanie startu chłodzenia: docelowa histereza (K, globalne)",
+          "hp_flicker_stuck_minutes": "Wymuszanie startu chłodzenia: zwłoka przed wymuszeniem (min, globalne)",
+          "hp_flicker_min_off_minutes": "Wymuszanie startu chłodzenia: min. przerwa między startami (min, globalne)",
+          "hp_flicker_max_starts_per_h": "Wymuszanie startu chłodzenia: maks. startów na godzinę (globalne)",
           "ff_neutral_c": "Temperatura neutralna sprzężenia pogodowego (°C)",
           "ff_gain_pct_per_k": "Wzmocnienie sprzężenia pogodowego (%/K)",
           "ff_max_pct": "Limit sprzężenia pogodowego (%)",
@@ -130,10 +131,11 @@
           "cooling_supply_base_c": "Bazowa temperatura wody chłodzenia (°C, globalne)",
           "heating_supply_base_c": "Bazowa temperatura wody grzania (°C, globalne)",
           "heating_supply_slope": "Nachylenie krzywej wody grzania (K/K, globalne)",
-          "hp_flicker_band_k": "Flicker: docelowa martwa strefa chłodzenia (K, globalne)",
-          "hp_flicker_stuck_minutes": "Flicker: czas utknięcia przed impulsem (min, globalne)",
-          "hp_flicker_min_off_minutes": "Flicker: min. czas między wymuszonymi startami (min, globalne)",
-          "hp_flicker_max_starts_per_h": "Flicker: maks. wymuszonych startów na godzinę (globalne)",
+          "hp_flicker_enabled": "Wymuszanie startu chłodzenia (Panasonic Aquarea)",
+          "hp_flicker_band_k": "Wymuszanie startu chłodzenia: docelowa histereza (K, globalne)",
+          "hp_flicker_stuck_minutes": "Wymuszanie startu chłodzenia: zwłoka przed wymuszeniem (min, globalne)",
+          "hp_flicker_min_off_minutes": "Wymuszanie startu chłodzenia: min. przerwa między startami (min, globalne)",
+          "hp_flicker_max_starts_per_h": "Wymuszanie startu chłodzenia: maks. startów na godzinę (globalne)",
           "ff_neutral_c": "Temperatura neutralna sprzężenia pogodowego (°C)",
           "ff_gain_pct_per_k": "Wzmocnienie sprzężenia pogodowego (%/K)",
           "ff_max_pct": "Limit sprzężenia pogodowego (%)",
@@ -220,16 +222,14 @@
           "entity_hp_active": "Encja „pompa dostępna dla podłogówki” (opcjonalna)",
           "entity_hp_return_temp": "Czujnik temperatury wody powrotu/wlotu (opcjonalny, do flickera)",
           "entity_hp_outlet_temp": "Czujnik temperatury wody wylotu/zasilania (opcjonalny, diagnostyczny)",
-          "entity_hp_compressor_freq": "Czujnik częstotliwości sprężarki (opcjonalny, do flickera)",
-          "hp_flicker_enabled": "Włącz flicker nastawy chłodzenia (Panasonic)"
+          "entity_hp_compressor_freq": "Czujnik częstotliwości sprężarki (opcjonalny, do flickera)"
         },
         "data_description": {
           "entity_hp_mode": "Select w stylu HeishaMon z opcjami typu „Heat only” / „Cool only” / „Heat+DHW”. Tortoise pisze tylko kierunek i nigdy nie zdejmuje flagi CWU.",
           "entity_hp_active": "Wyłączona, gdy pompa robi CWU/odszranianie — regulatory pokojów zamrażają wtedy całkę.",
           "entity_hp_return_temp": "Sonda wody powrotu/wlotu pompy. Główny sygnał flickera: w długich postojach powrót zatrzymuje się przy nastawie chłodzenia + 3 K. Przykład Panasonic: sensor.panasonic_heat_pump_main_main_inlet_temp.",
           "entity_hp_outlet_temp": "Sonda wody wylotu/zasilania pompy. W tej wersji tylko diagnostyka — pokazywana w zakładce Pompa ciepła; żadna logika jej jeszcze nie używa (zarezerwowana pod przyszłą ochronę przeciwrosową po stronie zasilania).",
-          "entity_hp_compressor_freq": "Częstotliwość sprężarki w Hz (0 = wyłączona). Służy do wykrycia postoju pompy w martwej strefie. Przykład Panasonic: sensor.panasonic_heat_pump_main_compressor_freq.",
-          "hp_flicker_enabled": "Rozwiązanie specyficzne dla Panasonica: na chwilę obniża zapisaną nastawę chłodzenia, aby wytrącić sprężarkę ze stałej histerezy 3 K wody powrotnej, gdy pokoje wciąż wołają o chłód, po czym przywraca wartość bezpieczną dla punktu rosy. Wymaga encji nastawy chłodzenia, powrotu i częstotliwości sprężarki. Domyślnie wyłączone."
+          "entity_hp_compressor_freq": "Częstotliwość sprężarki w Hz (0 = wyłączona). Służy do wykrycia postoju pompy w martwej strefie. Przykład Panasonic: sensor.panasonic_heat_pump_main_compressor_freq."
         }
       }
     },

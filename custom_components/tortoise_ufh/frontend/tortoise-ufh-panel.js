@@ -623,14 +623,19 @@ const STR = {
       "żeby nie nabijać całki, kiedy woda i tak nie płynie w podłogę.",
     hp_writes_paused:
       "Zapisy wstrzymane — żaden pokój nie steruje (Steruje).",
-    // Flicker nastawy chłodzenia (issue #7, 2026-07-15).
-    tune_grp_flicker: "Flicker nastawy chłodzenia (tylko globalnie)",
-    tune_hp_flicker_band_k: "Flicker: docelowa martwa strefa chłodzenia",
-    tune_hp_flicker_stuck_minutes: "Flicker: czas utknięcia przed impulsem",
-    tune_hp_flicker_min_off_minutes:
-      "Flicker: min. czas między wymuszonymi startami",
-    tune_hp_flicker_max_starts_per_h:
-      "Flicker: maks. wymuszonych startów na godzinę",
+    // Wymuszanie startu chłodzenia (issue #7, 2026-07-15).
+    tune_grp_flicker: "Wymuszanie startu chłodzenia (globalne)",
+    tune_hp_flicker_enabled: "Wymuszanie startu chłodzenia",
+    tune_hp_flicker_band_k: "Docelowa histereza chłodzenia",
+    tune_hp_flicker_stuck_minutes: "Zwłoka przed wymuszeniem",
+    tune_hp_flicker_min_off_minutes: "Min. przerwa między startami",
+    tune_hp_flicker_max_starts_per_h: "Maks. startów na godzinę",
+    tip_knob_hp_flicker_enabled:
+      "Włącza wymuszanie startu sprężarki chłodzenia (tylko Panasonic Aquarea). " +
+      "Gdy pokoje wołają o chłód, a sprężarka stoi, na jeden cykl obniża zapisaną " +
+      "nastawę wody, by przekroczyć stałą histerezę 3 K powrotu i wystartować " +
+      "sprężarkę, po czym przywraca wartość bezpieczną dla rosy. Wymaga encji " +
+      "powrotu i częstotliwości sprężarki. Domyślnie wyłączone. Globalne.",
     tip_knob_hp_flicker_band_k:
       "Docelowa efektywna martwa strefa wody chłodzenia [K]. Musi być poniżej " +
       "stałej histerezy 3 K pompy, by ją zacieśnić — impuls uzbraja się, gdy " +
@@ -643,7 +648,7 @@ const STR = {
       "Globalne.",
     tip_knob_hp_flicker_max_starts_per_h:
       "Twardy limit wymuszonych startów sprężarki na godzinę kroczącą. Globalne.",
-    hp_sec_flicker: "Flicker nastawy chłodzenia",
+    hp_sec_flicker: "Wymuszanie startu chłodzenia",
     tip_hp_flicker:
       "Panasonic: gdy pompa stoi w martwej strefie, a pokoje wciąż chłodzą, " +
       "Tortoise na jeden cykl obniża nastawę chłodzenia, by wytrącić sprężarkę z " +
@@ -1103,12 +1108,19 @@ const STR = {
       "room controllers freeze their integral term so it does not wind up " +
       "while no water reaches the floor.",
     hp_writes_paused: "Writes paused — no room is in control (Live).",
-    // Cooling setpoint-flicker (issue #7, 2026-07-15).
-    tune_grp_flicker: "Cooling setpoint-flicker (global only)",
-    tune_hp_flicker_band_k: "Flicker: target cooling deadband",
-    tune_hp_flicker_stuck_minutes: "Flicker: stuck time before a pulse",
-    tune_hp_flicker_min_off_minutes: "Flicker: min time between forced starts",
-    tune_hp_flicker_max_starts_per_h: "Flicker: max forced starts per hour",
+    // Force cooling start (issue #7, 2026-07-15).
+    tune_grp_flicker: "Force cooling start (global)",
+    tune_hp_flicker_enabled: "Force cooling start",
+    tune_hp_flicker_band_k: "Target cooling deadband",
+    tune_hp_flicker_stuck_minutes: "Delay before forcing a start",
+    tune_hp_flicker_min_off_minutes: "Min time between forced starts",
+    tune_hp_flicker_max_starts_per_h: "Max forced starts per hour",
+    tip_knob_hp_flicker_enabled:
+      "Enables forcing the cooling compressor to start (Panasonic Aquarea only). " +
+      "When rooms call for cooling but the compressor sits idle, it briefly drops " +
+      "the written water setpoint for one cycle to cross the fixed 3 K return " +
+      "hysteresis and start the compressor, then restores the dew-safe value. " +
+      "Needs the return and compressor-frequency entities. Off by default. Global.",
     tip_knob_hp_flicker_band_k:
       "Target effective cooling-water deadband [K]. Must be below the pump's " +
       "fixed 3 K hysteresis to tighten it — a pulse arms once the return climbs " +
@@ -1121,7 +1133,7 @@ const STR = {
       "Global.",
     tip_knob_hp_flicker_max_starts_per_h:
       "Hard cap on forced compressor starts per rolling hour. Global.",
-    hp_sec_flicker: "Cooling setpoint-flicker",
+    hp_sec_flicker: "Force cooling start",
     tip_hp_flicker:
       "Panasonic: when the pump idles in its deadband while rooms still call for " +
       "cooling, Tortoise drops the cooling setpoint for one cycle to trip the " +
@@ -1636,14 +1648,20 @@ const STR = {
       "(WW-Bereitung/Abtauung), frieren die Raumregler ihren Integralanteil ein, " +
       "damit er nicht aufläuft, während kein Wasser den Boden erreicht.",
     hp_writes_paused: "Schreibvorgänge pausiert — kein Raum ist in Regelung (Aktiv).",
-    // Kühl-Sollwert-Flicker (issue #7, 2026-07-15).
-    tune_grp_flicker: "Kühl-Sollwert-Flicker (nur global)",
-    tune_hp_flicker_band_k: "Flicker: angestrebtes Kühl-Totband",
-    tune_hp_flicker_stuck_minutes: "Flicker: Verharrzeit vor einem Impuls",
-    tune_hp_flicker_min_off_minutes:
-      "Flicker: Mindestabstand zwischen erzwungenen Starts",
-    tune_hp_flicker_max_starts_per_h:
-      "Flicker: max. erzwungene Starts pro Stunde",
+    // Kühlstart erzwingen (issue #7, 2026-07-15).
+    tune_grp_flicker: "Kühlstart erzwingen (global)",
+    tune_hp_flicker_enabled: "Kühlstart erzwingen",
+    tune_hp_flicker_band_k: "Angestrebtes Kühl-Totband",
+    tune_hp_flicker_stuck_minutes: "Verzögerung vor dem Erzwingen",
+    tune_hp_flicker_min_off_minutes: "Min. Zeit zwischen erzwungenen Starts",
+    tune_hp_flicker_max_starts_per_h: "Max. erzwungene Starts pro Stunde",
+    tip_knob_hp_flicker_enabled:
+      "Erzwingt den Start des Kühlverdichters (nur Panasonic Aquarea). Wenn " +
+      "Räume kühlen wollen, der Verdichter aber stillsteht, senkt es den " +
+      "geschriebenen Wasser-Sollwert für einen Zyklus, um die feste 3-K-" +
+      "Rücklaufhysterese zu überschreiten und den Verdichter zu starten, und " +
+      "stellt dann den taupunktsicheren Wert wieder her. Benötigt die Rücklauf- " +
+      "und Verdichterfrequenz-Entitäten. Standardmäßig aus. Global.",
     tip_knob_hp_flicker_band_k:
       "Angestrebtes effektives Kühlwasser-Totband [K]. Muss unter der festen " +
       "3-K-Hysterese der Pumpe liegen, um sie zu verengen — ein Impuls wird " +
@@ -1658,7 +1676,7 @@ const STR = {
     tip_knob_hp_flicker_max_starts_per_h:
       "Harte Obergrenze erzwungener Verdichterstarts pro gleitender Stunde. " +
       "Global.",
-    hp_sec_flicker: "Kühl-Sollwert-Flicker",
+    hp_sec_flicker: "Kühlstart erzwingen",
     tip_hp_flicker:
       "Panasonic: Wenn die Pumpe in ihrem Totband stillsteht, während Räume noch " +
       "Kühlung anfordern, senkt Tortoise den Kühl-Sollwert für einen Zyklus, um " +
@@ -2180,6 +2198,7 @@ const KNOB_GROUPS = [
     key: "flicker",
     labelKey: "tune_grp_flicker",
     knobs: [
+      "hp_flicker_enabled",
       "hp_flicker_band_k",
       "hp_flicker_stuck_minutes",
       "hp_flicker_min_off_minutes",

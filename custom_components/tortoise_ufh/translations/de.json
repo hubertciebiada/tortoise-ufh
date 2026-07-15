@@ -61,10 +61,11 @@
           "cooling_supply_base_c": "Basistemperatur Kühlwasser (°C, global)",
           "heating_supply_base_c": "Basistemperatur Heizwasser (°C, global)",
           "heating_supply_slope": "Kurvensteigung Heizwasser (K/K, global)",
-          "hp_flicker_band_k": "Flicker: angestrebtes Kühl-Totband (K, global)",
-          "hp_flicker_stuck_minutes": "Flicker: Verharrzeit vor einem Impuls (min, global)",
-          "hp_flicker_min_off_minutes": "Flicker: Mindestabstand zwischen erzwungenen Starts (min, global)",
-          "hp_flicker_max_starts_per_h": "Flicker: max. erzwungene Starts pro Stunde (global)",
+          "hp_flicker_enabled": "Kühlstart erzwingen (Panasonic Aquarea)",
+          "hp_flicker_band_k": "Kühlstart erzwingen: angestrebtes Totband (K, global)",
+          "hp_flicker_stuck_minutes": "Kühlstart erzwingen: Verzögerung vor dem Erzwingen (min, global)",
+          "hp_flicker_min_off_minutes": "Kühlstart erzwingen: min. Zeit zwischen erzwungenen Starts (min, global)",
+          "hp_flicker_max_starts_per_h": "Kühlstart erzwingen: max. erzwungene Starts pro Stunde (global)",
           "ff_neutral_c": "Neutrale Außentemperatur der Vorsteuerung (°C)",
           "ff_gain_pct_per_k": "Verstärkung der Vorsteuerung (%/K)",
           "ff_max_pct": "Obergrenze der Vorsteuerung (%)",
@@ -130,10 +131,11 @@
           "cooling_supply_base_c": "Basistemperatur Kühlwasser (°C, global)",
           "heating_supply_base_c": "Basistemperatur Heizwasser (°C, global)",
           "heating_supply_slope": "Kurvensteigung Heizwasser (K/K, global)",
-          "hp_flicker_band_k": "Flicker: angestrebtes Kühl-Totband (K, global)",
-          "hp_flicker_stuck_minutes": "Flicker: Verharrzeit vor einem Impuls (min, global)",
-          "hp_flicker_min_off_minutes": "Flicker: Mindestabstand zwischen erzwungenen Starts (min, global)",
-          "hp_flicker_max_starts_per_h": "Flicker: max. erzwungene Starts pro Stunde (global)",
+          "hp_flicker_enabled": "Kühlstart erzwingen (Panasonic Aquarea)",
+          "hp_flicker_band_k": "Kühlstart erzwingen: angestrebtes Totband (K, global)",
+          "hp_flicker_stuck_minutes": "Kühlstart erzwingen: Verzögerung vor dem Erzwingen (min, global)",
+          "hp_flicker_min_off_minutes": "Kühlstart erzwingen: min. Zeit zwischen erzwungenen Starts (min, global)",
+          "hp_flicker_max_starts_per_h": "Kühlstart erzwingen: max. erzwungene Starts pro Stunde (global)",
           "ff_neutral_c": "Neutrale Außentemperatur der Vorsteuerung (°C)",
           "ff_gain_pct_per_k": "Verstärkung der Vorsteuerung (%/K)",
           "ff_max_pct": "Obergrenze der Vorsteuerung (%)",
@@ -220,16 +222,14 @@
           "entity_hp_active": "Entität „Pumpe für Fußbodenheizung verfügbar“ (optional)",
           "entity_hp_return_temp": "Rücklauf-/Eintrittswassertemperatur-Sensor (optional, für Flicker)",
           "entity_hp_outlet_temp": "Vorlauf-/Austrittswassertemperatur-Sensor (optional, Diagnose)",
-          "entity_hp_compressor_freq": "Verdichterfrequenz-Sensor (optional, für Flicker)",
-          "hp_flicker_enabled": "Kühl-Sollwert-Flicker aktivieren (Panasonic)"
+          "entity_hp_compressor_freq": "Verdichterfrequenz-Sensor (optional, für Flicker)"
         },
         "data_description": {
           "entity_hp_mode": "Select im HeishaMon-Stil mit Optionen wie „Heat only“ / „Cool only“ / „Heat+DHW“. Tortoise schreibt nur die Richtung und entfernt niemals das WW-Flag.",
           "entity_hp_active": "Aus, während die Pumpe WW-Bereitung/Abtauung durchführt — die Raumregler frieren dann ihre Integratoren ein.",
           "entity_hp_return_temp": "Rücklauf-/Eintrittswassersonde der Pumpe. Hauptsignal des Flickers: In langen Stillständen bleibt der Rücklauf nahe Kühl-Sollwert + 3 K stehen. Panasonic-Beispiel: sensor.panasonic_heat_pump_main_main_inlet_temp.",
           "entity_hp_outlet_temp": "Vorlauf-/Austrittswassersonde der Pumpe. In dieser Version nur Diagnose — im Wärmepumpen-Tab angezeigt; noch keine Logik nutzt sie (reserviert für einen künftigen vorlaufseitigen Kondensationsschutz).",
-          "entity_hp_compressor_freq": "Verdichterfrequenz in Hz (0 = aus). Dient zur Erkennung, dass die Pumpe in ihrem Totband stillsteht. Panasonic-Beispiel: sensor.panasonic_heat_pump_main_compressor_freq.",
-          "hp_flicker_enabled": "Panasonic-spezifisch: senkt kurz den geschriebenen Kühl-Sollwert, um den Verdichter aus seiner festen 3-K-Hysterese des Rücklaufwassers zu lösen, während Räume noch Kühlung anfordern, und stellt dann den taupunktsicheren Wert wieder her. Benötigt die Entitäten für Kühl-Sollwert, Rücklauf und Verdichterfrequenz. Standardmäßig aus."
+          "entity_hp_compressor_freq": "Verdichterfrequenz in Hz (0 = aus). Dient zur Erkennung, dass die Pumpe in ihrem Totband stillsteht. Panasonic-Beispiel: sensor.panasonic_heat_pump_main_compressor_freq."
         }
       }
     },

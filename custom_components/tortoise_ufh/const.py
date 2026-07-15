@@ -224,12 +224,6 @@ ONLY in v1 — read and surfaced in the heat-pump runtime / panel, no logic
 consumes it (mapped for a future supply-side condensation guard). Live
 example: ``sensor.panasonic_heat_pump_main_main_outlet_temp``."""
 
-CONF_HP_FLICKER_ENABLED: str = "hp_flicker_enabled"
-"""Opt-in master switch for the cooling setpoint-flicker (bool, DEFAULT False;
-issue #7). Lives in the ``CONF_HEAT_PUMP`` options dict alongside the entity
-selectors, NOT as a ``ControllerConfig`` field. The flicker only runs when
-this is true AND ``CONF_ENTITY_HP_COOLING_SETPOINT`` is configured."""
-
 CONF_ENTITY_GLOBAL_SUPPLY: str = "entity_global_supply"
 """Optional GLOBAL manifold supply-temperature probe (sensor, temperature;
 top-level ``entry.options`` key set in options -> settings; S6, 2026-07-13).
@@ -353,9 +347,15 @@ default. The non-tuning bookkeeping fields ``cycle_seconds`` /
 ``valve_write_threshold_pct`` are likewise not user-facing.
 """
 
-CONTROLLER_BOOL_KNOB: str = "outdoor_ff_enabled"
-"""Boolean :class:`~tortoise_ufh.config.ControllerConfig` knob: outdoor-temperature
-feedforward. Exposed alongside :data:`CONTROLLER_NUMBER_KNOBS`."""
+CONTROLLER_BOOL_KNOBS: tuple[str, ...] = (
+    "outdoor_ff_enabled",
+    "hp_flicker_enabled",
+)
+"""Boolean :class:`~tortoise_ufh.config.ControllerConfig` knobs, exposed
+alongside :data:`CONTROLLER_NUMBER_KNOBS`: the outdoor-temperature feedforward
+switch and the opt-in cooling setpoint-flicker master switch (issue #7,
+2026-07-15 — the flicker on/off is a global tuning knob so it renders as a
+toggle in the panel's flicker group and the options-flow settings step)."""
 
 CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "kp": "%/K",
@@ -382,7 +382,8 @@ CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "flow_epsilon_k": "K",
     "flow_open_threshold_pct": "%",
     "flow_response_window_min": "min",
-    CONTROLLER_BOOL_KNOB: "",
+    "outdoor_ff_enabled": "",
+    "hp_flicker_enabled": "",
 }
 """Display unit per controller knob (empty for the boolean knob). Surfaced in the
 ``get_tuning`` payload so the panel labels each stepper with its unit."""
@@ -392,6 +393,7 @@ HP_GLOBAL_ONLY_KNOBS: frozenset[str] = frozenset(
         "cooling_supply_base_c",
         "heating_supply_base_c",
         "heating_supply_slope",
+        "hp_flicker_enabled",
         "hp_flicker_band_k",
         "hp_flicker_stuck_minutes",
         "hp_flicker_min_off_minutes",

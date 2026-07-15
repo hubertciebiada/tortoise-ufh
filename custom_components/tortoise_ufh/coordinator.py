@@ -68,7 +68,6 @@ from .const import (
     CONF_FAST_WINDOW_START,
     CONF_HEAT_PUMP,
     CONF_HOME_SETPOINT,
-    CONF_HP_FLICKER_ENABLED,
     CONF_ROOM_NAME,
     CONF_ROOM_OFFSET,
     CONF_ROOM_STATE,
@@ -1491,7 +1490,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             normal_target = cooling_setpoint_c(base, global_dew)
             cool_target: float | None = None
 
-            flicker_enabled = bool(cfg.get(CONF_HP_FLICKER_ENABLED, False))
+            flicker_enabled = self._global_config.hp_flicker_enabled
             return_entity = str(cfg.get(CONF_ENTITY_HP_RETURN_TEMP) or "")
             freq_entity = str(cfg.get(CONF_ENTITY_HP_COMPRESSOR_FREQ) or "")
             outlet_entity = str(cfg.get(CONF_ENTITY_HP_OUTLET_TEMP) or "")

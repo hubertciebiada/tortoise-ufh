@@ -50,7 +50,9 @@ _FLAG_ENTRY = re.compile(r"(\w+):\s*\{([^{}]*)\}", re.DOTALL)
 # A numeric knob tuple in const.CONTROLLER_NUMBER_KNOBS: ``("name", ...``.
 _KNOB_TUPLE = re.compile(r"\(\s*\"(\w+)\",")
 
-_BOOL_KNOB = re.compile(r"CONTROLLER_BOOL_KNOB:\s*str\s*=\s*\"(\w+)\"")
+_BOOL_KNOBS = re.compile(
+    r"CONTROLLER_BOOL_KNOBS:\s*tuple\[str, \.\.\.\]\s*=\s*\((.*?)\)", re.DOTALL
+)
 
 
 def _extract_block(source: str, marker: str) -> str:
@@ -98,7 +100,7 @@ def _knob_names() -> list[str]:
     """Parse the exposed knob names textually from ``const.py``.
 
     Returns:
-        Numeric knob names in declaration order plus the boolean knob.
+        Numeric knob names in declaration order plus the boolean knobs.
     """
     text = _CONST_PY.read_text(encoding="utf-8")
     start = text.find("CONTROLLER_NUMBER_KNOBS")
@@ -107,9 +109,11 @@ def _knob_names() -> list[str]:
     assert start >= 0 and end > start, "CONTROLLER_NUMBER_KNOBS block not found"
     names = _KNOB_TUPLE.findall(text[start:end])
     assert names, "no numeric knobs parsed from const.py"
-    bool_match = _BOOL_KNOB.search(text)
-    assert bool_match is not None, "CONTROLLER_BOOL_KNOB not found in const.py"
-    return [*names, bool_match.group(1)]
+    bool_block = _BOOL_KNOBS.search(text)
+    assert bool_block is not None, "CONTROLLER_BOOL_KNOBS not found in const.py"
+    bool_names = re.findall(r'"(\w+)"', bool_block.group(1))
+    assert bool_names, "no boolean knobs parsed from const.py"
+    return [*names, *bool_names]
 
 
 def _flatten_keys(node: Any, prefix: str = "") -> set[str]:
@@ -219,7 +223,7 @@ def test_every_knob_has_label_and_tooltip_in_both_languages() -> None:
     """Each exposed knob has tune_<name> and tip_knob_<name> in pl AND en."""
     sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
     knobs = _knob_names()
-    assert len(knobs) == 25, f"expected 25 exposed knobs, parsed {knobs}"
+    assert len(knobs) == 26, f"expected 26 exposed knobs, parsed {knobs}"
     missing: list[str] = []
     for knob in knobs:
         for key in (f"tune_{knob}", f"tip_knob_{knob}"):

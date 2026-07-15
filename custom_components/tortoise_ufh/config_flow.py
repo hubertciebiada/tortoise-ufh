@@ -77,14 +77,13 @@ from .const import (
     CONF_FAST_WINDOW_START,
     CONF_HEAT_PUMP,
     CONF_HOME_SETPOINT,
-    CONF_HP_FLICKER_ENABLED,
     CONF_ROOM_AREA,
     CONF_ROOM_NAME,
     CONF_ROOM_OFFSET,
     CONF_ROOM_STATE,
     CONF_ROOM_TUNING,
     CONF_ROOMS,
-    CONTROLLER_BOOL_KNOB,
+    CONTROLLER_BOOL_KNOBS,
     CONTROLLER_NUMBER_KNOBS,
     DEFAULT_COOLING_ENABLED,
     DEFAULT_FAST_SOURCE_KIND,
@@ -286,9 +285,10 @@ def _controller_schema_dict(defaults: ControllerConfig) -> dict[Any, Any]:
                 min=low, max=high, step=step, mode=NumberSelectorMode.BOX
             )
         )
-    schema[vol.Optional(CONTROLLER_BOOL_KNOB, default=defaults.outdoor_ff_enabled)] = (
-        BooleanSelector()
-    )
+    for field_name in CONTROLLER_BOOL_KNOBS:
+        schema[
+            vol.Optional(field_name, default=bool(getattr(defaults, field_name)))
+        ] = BooleanSelector()
     return schema
 
 
@@ -310,8 +310,9 @@ def _parse_controller(user_input: dict[str, Any]) -> ControllerConfig:
         for field_name, _low, _high, _step in CONTROLLER_NUMBER_KNOBS
         if field_name in user_input
     }
-    if CONTROLLER_BOOL_KNOB in user_input:
-        kwargs[CONTROLLER_BOOL_KNOB] = bool(user_input[CONTROLLER_BOOL_KNOB])
+    for field_name in CONTROLLER_BOOL_KNOBS:
+        if field_name in user_input:
+            kwargs[field_name] = bool(user_input[field_name])
     return ControllerConfig(**kwargs)
 
 
@@ -1056,11 +1057,12 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         Optional entity pickers: the pump-mode select (HeishaMon-style), the
         heating / cooling water-setpoint numbers, the "pump serves the UFH"
         status entity, and — for the cooling setpoint-flicker (issue #7) — the
-        return / outlet water temperature sensors, the compressor-frequency
-        sensor and the flicker master switch. An entirely empty form removes
-        the section — the pre-0.8.0 behaviour (Tortoise never touches the
-        pump). Saving writes ``entry.options[CONF_HEAT_PUMP]`` and reloads the
-        entry.
+        return / outlet water temperature sensors and the compressor-frequency
+        sensor. The flicker's on/off switch and its timing live with the other
+        tuning knobs (the ``settings`` step / the panel Tuning tab), not here.
+        An entirely empty form removes the section — the pre-0.8.0 behaviour
+        (Tortoise never touches the pump). Saving writes
+        ``entry.options[CONF_HEAT_PUMP]`` and reloads the entry.
         """
         entry = self.config_entry
         current: dict[str, Any] = dict(entry.options.get(CONF_HEAT_PUMP, {}) or {})
@@ -1079,10 +1081,6 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 value = str(user_input.get(key, "") or "").strip()
                 if value:
                     hp[key] = value
-            # The flicker toggle is a bool; store it only when ON to keep the
-            # section sparse (an absent key reads as OFF, the safe default).
-            if bool(user_input.get(CONF_HP_FLICKER_ENABLED, False)):
-                hp[CONF_HP_FLICKER_ENABLED] = True
             new_options = {
                 key: value
                 for key, value in entry.options.items()
@@ -1132,10 +1130,6 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 marker(CONF_ENTITY_HP_COMPRESSOR_FREQ): EntitySelector(
                     EntitySelectorConfig(domain=["sensor"])
                 ),
-                vol.Optional(
-                    CONF_HP_FLICKER_ENABLED,
-                    default=bool(current.get(CONF_HP_FLICKER_ENABLED, False)),
-                ): BooleanSelector(),
             }
         )
         return self.async_show_form(step_id="heat_pump", data_schema=schema)

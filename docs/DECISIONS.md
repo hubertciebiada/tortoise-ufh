@@ -1233,3 +1233,31 @@ drop/restore magnitudes already clear the existing write threshold, so no writer
 validations (`tests/unit/test_flicker.py`, `test_config_models.py`); the panel-i18n parity/knob-count
 guard bumped 21→25 knobs and pinned the flicker STR surfaces. Merge gate green (unit, simulation,
 `mypy` core, ruff, format, `node --check`).
+
+## 22. Force-cooling-start UX refinement — on/off becomes a tuning knob, jargon renamed (2026-07-15, v0.13.1)
+
+Owner UI review of the shipped §21 feature found two rough edges on the panel Tuning tab: the labels
+were internal jargon ("Flicker: …" prefixed on every knob) and there was **no on/off control on the
+tab** — the enable lived only in the options-flow "Heat pump" step, so you could tune the feature
+where you could not switch it on.
+
+Two decisions:
+
+- **The flicker on/off is now a global boolean tuning knob** (`ControllerConfig.hp_flicker_enabled`,
+  default `False`), NOT a `CONF_HEAT_PUMP` option. `CONTROLLER_BOOL_KNOB` (a single string) was
+  generalised to `CONTROLLER_BOOL_KNOBS` (a tuple) so the existing tuning machinery — `get_tuning` /
+  `set_tuning`, the options-flow `algorithm`/`settings` schema, and the panel's generic
+  `type:"bool"` toggle — renders it as a toggle at the top of the **"Force cooling start"** group,
+  beside its four timing knobs. The coordinator reads it from `self._global_config.hp_flicker_enabled`.
+  The three flicker ENTITIES (return, compressor-frequency, outlet) stay in the "Heat pump" step (they
+  are I/O), consistent with how the pump's water-setpoint knobs already sit on the Tuning tab while its
+  entities sit in the Heat pump step. No config migration — the feature shipped OFF the same day and
+  was not yet enabled in production; a v0.13.0 install that had toggled it re-enables via the new knob.
+- **User-facing rename (PL/EN/DE):** the group and every knob drop the "Flicker" jargon — group
+  "Force cooling start" / "Wymuszanie startu chłodzenia" / "Kühlstart erzwingen"; knobs become natural
+  phrases ("Target cooling deadband", "Delay before forcing a start", …). The internal code name
+  stays `flicker` everywhere (identifiers, docs, flags). The Heat-pump-tab diagnostics card header is
+  renamed to match.
+
+Panel-only + a bounded adapter/core refactor; no I/O-contract change. Merge gate green (unit 532,
+simulation 39, `mypy` core, ruff, format, `node --check`).

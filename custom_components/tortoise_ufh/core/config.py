@@ -112,6 +112,12 @@ class ControllerConfig:
         heating_supply_slope: Heating-water curve steepness [K_supply per K
             outdoor shortfall below ``ff_neutral_c``] (in [0, 2]; B2
             2026-07-12). GLOBAL knob.
+        hp_flicker_enabled: Master on/off for the opt-in, Panasonic-specific
+            cooling setpoint-flicker (default ``False``; issue #7, 2026-07-15).
+            A GLOBAL boolean knob read only by the adapter — it gates whether
+            the :class:`~tortoise_ufh.hp_link.SetpointFlicker` runs at all; the
+            return / compressor-frequency entities must also be wired for it to
+            act.
         hp_flicker_band_k: Target effective cooling deadband [K] of the opt-in
             setpoint-flicker (in [0.5, 3.0]; issue #7, 2026-07-15). Must be
             below the pump's fixed 3 K return hysteresis to tighten it — a
@@ -192,6 +198,7 @@ class ControllerConfig:
     # compressor out of its fixed 3 K return-water deadband; read only by the
     # adapter's SetpointFlicker (see core/hp_link.py). The room control law
     # never touches them.
+    hp_flicker_enabled: bool = False
     hp_flicker_band_k: float = 1.5
     hp_flicker_stuck_minutes: float = 10.0
     hp_flicker_min_off_minutes: float = 20.0

@@ -514,20 +514,20 @@ Eigentümerin dieses Flags und darf es jederzeit überschreiben — das ist ihr 
 Das Entfernen des Flags, wenn die Pumpe im „DHW only“ ist, ist unmöglich (es gibt keine
 Richtung, zu der zurückgekehrt werden könnte).
 
-**Kühl-Sollwert-Flicker (optional, Panasonic; ab v0.13.0):** Im Kühlbetrieb startet der
+**Kühlstart erzwingen (optional, Panasonic; ab v0.13.0):** Im Kühlbetrieb startet der
 Verdichter einer Panasonic Aquarea erst, wenn der Rücklauf `Sollwert + 3 K` erreicht, und
 stoppt bei `Sollwert` — diese 3-K-Hysterese ist im Firmware fest verdrahtet. In langen
-Stillständen bleibt der Rücklauf daher hoch stehen und der Boden liefert zu wenig. Wenn Sie
-den Flicker aktivieren und die Entitäten für **Rücklauftemperatur** und **Verdichterfrequenz**
-angeben (Optionen → Wärmepumpe), senkt Tortoise — sobald es die Pumpe im Stillstand mit echtem
-Bedarf sieht — den geschriebenen Sollwert für einen Zyklus auf den taupunktsicheren Taupunkt,
-um den Verdichter zu lösen, und stellt danach sofort den normalen Sollwert wieder her. Ergebnis:
-kälteres Durchschnittswasser bei weiterhin taupunktsicherem Rücklauf. Vier globale Regler (Reiter
-Feineinstellung, Gruppe „Flicker“) steuern das angestrebte Totband, die Verharrzeit vor einem
-Impuls, den Abstand zwischen erzwungenen Starts und die Obergrenze der Starts pro Stunde. Die
-**Vorlauf**-Entität ist rein diagnostisch (im Reiter angezeigt). Standardmäßig **deaktiviert**;
-Panasonic-spezifisch. Den Flicker-Zustand (Impuls / Ruhe / Sperrzeit, Schwelle, Messwerte) sehen
-Sie im Reiter Wärmepumpe.
+Stillständen bleibt der Rücklauf daher hoch stehen und der Boden liefert zu wenig. Nach dem
+Aktivieren senkt Tortoise — sobald es die Pumpe im Stillstand mit echtem Bedarf sieht — den
+geschriebenen Sollwert für einen Zyklus auf den taupunktsicheren Taupunkt, um den Verdichter zu
+lösen, und stellt danach sofort den normalen Sollwert wieder her. Ergebnis: kälteres
+Durchschnittswasser bei weiterhin taupunktsicherem Rücklauf. **Aktivieren und einstellen** Sie es
+im Reiter **Feineinstellung**, Gruppe **„Kühlstart erzwingen“**: der Ein/Aus-Schalter plus vier
+globale Regler (angestrebtes Totband, Verzögerung vor dem Erzwingen, Mindestabstand zwischen Starts,
+Obergrenze der Starts pro Stunde). Geben Sie zuvor die Entitäten für **Rücklauftemperatur** und
+**Verdichterfrequenz** unter Optionen → **Wärmepumpe** an (die **Vorlauf**-Entität ist dort rein
+diagnostisch). Standardmäßig **deaktiviert**; Panasonic-spezifisch. Den Zustand (Impuls / Ruhe /
+Sperrzeit, Schwelle, Messwerte) sehen Sie im Reiter Wärmepumpe.
 
 **Wann Tortoise an die Pumpe schreibt:** nur wenn mindestens ein Raum im Zustand
 **Aktiv** ist (das globale Gerät darf nur bewegt werden, wenn irgendjemand die Regelung

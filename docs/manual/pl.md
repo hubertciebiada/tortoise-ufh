@@ -473,19 +473,19 @@ przestań", nie blokada. **Zewnętrzna automatyka CWU jest właścicielem tej fl
 i może ją w każdej chwili nadpisać — to jej prawo.** Zdjęcie flagi, gdy pompa jest
 w „DHW only", jest niemożliwe (nie ma kierunku, do którego można wrócić).
 
-**Flicker nastawy chłodzenia (opcjonalny, Panasonic; od v0.13.0):** w chłodzeniu sprężarka
+**Wymuszanie startu chłodzenia (opcjonalny, Panasonic; od v0.13.0):** w chłodzeniu sprężarka
 Panasonic Aquarea rusza dopiero, gdy powrót osiągnie `nastawa + 3 K`, a zatrzymuje się przy
 `nastawa` — ta histereza 3 K jest zaszyta w firmware. W długich postojach powrót stoi więc
-wysoko, a podłoga niedodostarcza. Gdy włączysz flicker i wskażesz encje **temperatury powrotu**
-oraz **częstotliwości sprężarki** (opcje → Pompa ciepła), Tortoise — widząc pompę w postoju z
-realnym zapotrzebowaniem — na jeden cykl obniża zapisaną nastawę do bezpiecznego dla rosy punktu
-rosy, żeby wytrącić sprężarkę, po czym natychmiast przywraca normalną nastawę. Efekt: chłodniejsza
-średnia woda przy wciąż bezpiecznym dla rosy powrocie. Cztery globalne pokrętła (zakładka
-Strojenie, grupa „Flicker") sterują docelową martwą strefą, czasem utknięcia przed impulsem,
-przerwą między wymuszonymi startami i limitem startów na godzinę. Encja **wylotu** jest tylko
-diagnostyczna (pokazywana w zakładce). Domyślnie **wyłączony**; rozwiązanie specyficzne dla
-Panasonica. Stan flickera (impuls / czuwanie / przerwa, próg, odczyty) widać w zakładce Pompa
-ciepła.
+wysoko, a podłoga niedodostarcza. Po włączeniu Tortoise — widząc pompę w postoju z realnym
+zapotrzebowaniem — na jeden cykl obniża zapisaną nastawę do bezpiecznego dla rosy punktu rosy,
+żeby wytrącić sprężarkę, po czym natychmiast przywraca normalną nastawę. Efekt: chłodniejsza
+średnia woda przy wciąż bezpiecznym dla rosy powrocie. **Włączasz i stroisz** to na zakładce
+**Strojenie**, w grupie **„Wymuszanie startu chłodzenia"**: przełącznik on/off plus cztery
+globalne pokrętła (docelowa histereza, zwłoka przed wymuszeniem, min. przerwa między startami,
+limit startów na godzinę). Wcześniej wskaż encje **temperatury powrotu** i **częstotliwości
+sprężarki** w opcjach → **Pompa ciepła** (encja **wylotu** jest tam tylko diagnostyczna). Domyślnie
+**wyłączone**; rozwiązanie specyficzne dla Panasonica. Stan (impuls / czuwanie / przerwa, próg,
+odczyty) widać w zakładce Pompa ciepła.
 
 **Kiedy Tortoise pisze do pompy:** tylko gdy przynajmniej jeden pokój jest w stanie
 **Steruje** (globalne urządzenie wolno ruszać tylko, gdy ktokolwiek oddał sterowanie)

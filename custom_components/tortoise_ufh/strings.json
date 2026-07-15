@@ -61,10 +61,11 @@
           "cooling_supply_base_c": "Cooling water base temperature (°C, global)",
           "heating_supply_base_c": "Heating water base temperature (°C, global)",
           "heating_supply_slope": "Heating water curve slope (K/K, global)",
-          "hp_flicker_band_k": "Flicker: target cooling deadband (K, global)",
-          "hp_flicker_stuck_minutes": "Flicker: stuck time before a pulse (min, global)",
-          "hp_flicker_min_off_minutes": "Flicker: minimum time between forced starts (min, global)",
-          "hp_flicker_max_starts_per_h": "Flicker: max forced starts per hour (global)",
+          "hp_flicker_enabled": "Force cooling start (Panasonic Aquarea)",
+          "hp_flicker_band_k": "Force cooling start: target deadband (K, global)",
+          "hp_flicker_stuck_minutes": "Force cooling start: delay before forcing a start (min, global)",
+          "hp_flicker_min_off_minutes": "Force cooling start: min time between forced starts (min, global)",
+          "hp_flicker_max_starts_per_h": "Force cooling start: max forced starts per hour (global)",
           "ff_neutral_c": "Feedforward neutral outdoor temperature (°C)",
           "ff_gain_pct_per_k": "Feedforward gain (%/K)",
           "ff_max_pct": "Feedforward cap (%)",
@@ -130,10 +131,11 @@
           "cooling_supply_base_c": "Cooling water base temperature (°C, global)",
           "heating_supply_base_c": "Heating water base temperature (°C, global)",
           "heating_supply_slope": "Heating water curve slope (K/K, global)",
-          "hp_flicker_band_k": "Flicker: target cooling deadband (K, global)",
-          "hp_flicker_stuck_minutes": "Flicker: stuck time before a pulse (min, global)",
-          "hp_flicker_min_off_minutes": "Flicker: minimum time between forced starts (min, global)",
-          "hp_flicker_max_starts_per_h": "Flicker: max forced starts per hour (global)",
+          "hp_flicker_enabled": "Force cooling start (Panasonic Aquarea)",
+          "hp_flicker_band_k": "Force cooling start: target deadband (K, global)",
+          "hp_flicker_stuck_minutes": "Force cooling start: delay before forcing a start (min, global)",
+          "hp_flicker_min_off_minutes": "Force cooling start: min time between forced starts (min, global)",
+          "hp_flicker_max_starts_per_h": "Force cooling start: max forced starts per hour (global)",
           "ff_neutral_c": "Feedforward neutral outdoor temperature (°C)",
           "ff_gain_pct_per_k": "Feedforward gain (%/K)",
           "ff_max_pct": "Feedforward cap (%)",
@@ -220,16 +222,14 @@
           "entity_hp_active": "“Pump available for UFH” entity (optional)",
           "entity_hp_return_temp": "Return/inlet water temperature sensor (optional, for flicker)",
           "entity_hp_outlet_temp": "Outlet/supply water temperature sensor (optional, diagnostic)",
-          "entity_hp_compressor_freq": "Compressor frequency sensor (optional, for flicker)",
-          "hp_flicker_enabled": "Enable cooling setpoint-flicker (Panasonic)"
+          "entity_hp_compressor_freq": "Compressor frequency sensor (optional, for flicker)"
         },
         "data_description": {
           "entity_hp_mode": "HeishaMon-style select with options like “Heat only” / “Cool only” / “Heat+DHW”. Tortoise writes only the direction and never removes the DHW flag.",
           "entity_hp_active": "Off while the pump does DHW/defrost — the room controllers then freeze their integrators.",
           "entity_hp_return_temp": "The pump inlet/return water probe. Main flicker signal: the return parks near cooling setpoint + 3 K through long idles. Panasonic example: sensor.panasonic_heat_pump_main_main_inlet_temp.",
           "entity_hp_outlet_temp": "The pump outlet/supply water probe. Diagnostic only in this version — shown on the Heat pump tab; no logic uses it yet (reserved for a future supply-side condensation guard).",
-          "entity_hp_compressor_freq": "Compressor frequency in Hz (0 = off). Used to detect the pump idling in its deadband. Panasonic example: sensor.panasonic_heat_pump_main_compressor_freq.",
-          "hp_flicker_enabled": "Panasonic-specific: briefly drops the written cooling setpoint to trip the compressor out of its fixed 3 K return-water hysteresis while rooms still call for cooling, then restores the dew-safe value. Needs the cooling-setpoint, return and compressor-frequency entities. Off by default."
+          "entity_hp_compressor_freq": "Compressor frequency in Hz (0 = off). Used to detect the pump idling in its deadband. Panasonic example: sensor.panasonic_heat_pump_main_compressor_freq."
         }
       }
     },
