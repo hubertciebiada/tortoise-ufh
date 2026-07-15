@@ -25,6 +25,7 @@ from homeassistant.components import frontend
 from homeassistant.components.http import StaticPathConfig
 
 from .const import DOMAIN
+from .core import __version__
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -132,6 +133,13 @@ class PanelRegistration:
     def panel_config(self) -> dict[str, object]:
         """Return the ``config`` dict for the custom frontend panel.
 
+        The ``module_url`` carries a ``?v={integration version}`` cache-buster:
+        the JS is served from a fixed static path, so without it a browser (or
+        HA) keeps serving the previously cached ``panel.js`` after an update and
+        the new panel never loads. Bumping the integration version changes the
+        URL, forcing a fresh fetch. The static route itself ignores the query
+        string (it still serves the same file).
+
         Returns:
             The ``{"_panel_custom": {...}}`` descriptor consumed by
             :func:`frontend.async_register_built_in_panel`.
@@ -139,7 +147,7 @@ class PanelRegistration:
         return {
             "_panel_custom": {
                 "name": self.custom_element_name,
-                "module_url": self.static_url_path,
+                "module_url": f"{self.static_url_path}?v={__version__}",
                 "embed_iframe": self.embed_iframe,
             }
         }

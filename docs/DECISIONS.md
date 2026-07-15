@@ -1261,3 +1261,13 @@ Two decisions:
 
 Panel-only + a bounded adapter/core refactor; no I/O-contract change. Merge gate green (unit 532,
 simulation 39, `mypy` core, ruff, format, `node --check`).
+
+**Follow-up (v0.13.2, 2026-07-15) — panel JS cache-busting.** The v0.13.1 rename was correct in code
+(tests proved it) but a live install still showed the OLD panel: the JS is served from a fixed static
+path (`/tortoise_ufh_panel/panel.js`) with no version, so the browser/HA kept serving the cached file
+and the new panel never loaded — the symptom was the new `hp_flicker_enabled` toggle appearing under
+the fallback "Pozostałe / Other" group with a raw, untranslated label (new backend + stale front-end).
+Fix: `panel_config()` now appends `?v={integration version}` to `module_url`, so every version bump
+changes the URL and forces a fresh fetch (the static route ignores the query string). This is why
+earlier panel-only releases sometimes "looked wrong" until a manual hard-refresh — now updates
+self-bust. `tests/ha/test_panel.py` asserts the versioned URL still points at the static route.

@@ -43,7 +43,11 @@ async def test_panel_registered(
     assert panel.sidebar_icon == "mdi:tortoise"
     assert panel.frontend_url_path == _PANEL_URL
     assert panel.require_admin is True
-    assert panel.config["_panel_custom"]["module_url"] == _STATIC_URL
+    # The module_url carries a ?v=<version> cache-buster (so a browser reloads
+    # the JS after an update) but still points at the same static route.
+    module_url = panel.config["_panel_custom"]["module_url"]
+    assert module_url.split("?", 1)[0] == _STATIC_URL
+    assert "?v=" in module_url
 
 
 async def test_static_path_registered(
