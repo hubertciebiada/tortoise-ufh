@@ -180,6 +180,7 @@ const STR = {
     tab_assist: "Wspomaganie",
     tab_hp: "Pompa ciepła",
     manage_rooms: "Zarządzaj pokojami",
+    menu_btn: "Menu boczne",
     loading: "Ładowanie…",
     no_rooms: "Brak skonfigurowanych pokoi.",
     th_room: "Pokój",
@@ -717,6 +718,7 @@ const STR = {
     tab_assist: "Assist",
     tab_hp: "Heat pump",
     manage_rooms: "Manage rooms",
+    menu_btn: "Sidebar menu",
     loading: "Loading…",
     no_rooms: "No rooms configured.",
     th_room: "Room",
@@ -1261,6 +1263,7 @@ const STR = {
     tab_assist: "Zusatzquelle",
     tab_hp: "Wärmepumpe",
     manage_rooms: "Räume verwalten",
+    menu_btn: "Seitenmenü",
     loading: "Wird geladen…",
     no_rooms: "Keine Räume konfiguriert.",
     th_room: "Raum",
@@ -2579,6 +2582,7 @@ class TortoiseUfhPanel extends HTMLElement {
     this._ageTimer = null;
     this._onVisibility = () => this._handleVisibility();
     this._hasHaIcon = false;
+    this._narrow = false; // HA layout flag; drives the sidebar hamburger
 
     // Shared "i" tooltip: ONE positioned element serves every info button.
     this._tipEl = null; // the floating bubble (built with the skeleton)
@@ -2603,6 +2607,7 @@ class TortoiseUfhPanel extends HTMLElement {
     // If a host set `hass` before this element's definition was registered,
     // the own property shadows the setter; re-apply it through the setter.
     this._upgradeProperty("hass");
+    this._upgradeProperty("narrow");
   }
 
   /** Canonical custom-element property-upgrade guard (see MDN). */
@@ -2619,6 +2624,7 @@ class TortoiseUfhPanel extends HTMLElement {
     const first = this._hass === null;
     this._hass = hass;
     this._lang = this._resolveLang(hass);
+    this._updateMenuBtn();
     if (first) {
       this._loadConfig();
       this._poll();
@@ -2631,6 +2637,36 @@ class TortoiseUfhPanel extends HTMLElement {
 
   get hass() {
     return this._hass;
+  }
+
+  /** HA assigns this on layout changes (mobile <-> desktop). */
+  set narrow(value) {
+    this._narrow = !!value;
+    this._updateMenuBtn();
+  }
+
+  get narrow() {
+    return this._narrow;
+  }
+
+  /**
+   * Show the sidebar hamburger only when HA gives the user no other way in:
+   * the panel is a bare custom element (``embed_iframe: false``), so HA
+   * renders NO toolbar around it — on a narrow (phone) layout or with the
+   * sidebar set to "always hidden" the menu would be unreachable without it.
+   */
+  _updateMenuBtn() {
+    const btn = this._hero && this._hero.menuBtn;
+    if (!btn) {
+      return;
+    }
+    const alwaysHidden =
+      !!this._hass && this._hass.dockedSidebar === "always_hidden";
+    const display = this._narrow || alwaysHidden ? "" : "none";
+    // `set hass` fires on every state change — only touch the CSSOM on a flip.
+    if (btn.style.display !== display) {
+      btn.style.display = display;
+    }
   }
 
   connectedCallback() {
@@ -3904,6 +3940,29 @@ class TortoiseUfhPanel extends HTMLElement {
   _buildHero() {
     const H = {};
 
+    // Sidebar hamburger: opens the HA menu via the standard bubbled
+    // `hass-toggle-menu` event. Hidden on wide layouts (`_updateMenuBtn`).
+    H.menuBtn = h(
+      "button",
+      {
+        class: "ghost-btn icon-only",
+        type: "button",
+        style: "display:none",
+        title: this._t("menu_btn"),
+        "aria-label": this._t("menu_btn"),
+        on: {
+          click: () =>
+            this.dispatchEvent(
+              new CustomEvent("hass-toggle-menu", {
+                bubbles: true,
+                composed: true,
+              }),
+            ),
+        },
+      },
+      [this._icon("mdi:menu", "☰")],
+    );
+
     // Brand mark. The mark is the served brand icon; on load failure (e.g. dev
     // preview without the static path) it swaps itself for the mdi/glyph mark.
     const brandImg = h("img", { class: "brand-img", src: BRAND_ICON_URL, alt: "" });
@@ -4007,7 +4066,9 @@ class TortoiseUfhPanel extends HTMLElement {
     );
 
     this._hero = H;
+    this._updateMenuBtn();
     return h("header", { class: "hero" }, [
+      H.menuBtn,
       brand,
       H.pill,
       liveMetric,
