@@ -480,9 +480,17 @@ wysoko, a podłoga niedodostarcza. Po włączeniu Tortoise — widząc pompę w 
 zapotrzebowaniem — na jeden cykl obniża zapisaną nastawę do bezpiecznego dla rosy punktu rosy,
 żeby wytrącić sprężarkę, po czym natychmiast przywraca normalną nastawę. Efekt: chłodniejsza
 średnia woda przy wciąż bezpiecznym dla rosy powrocie. **Włączasz i stroisz** to na zakładce
-**Strojenie**, w grupie **„Wymuszanie startu chłodzenia"**: przełącznik on/off plus cztery
-globalne pokrętła (docelowa histereza, zwłoka przed wymuszeniem, min. przerwa między startami,
-limit startów na godzinę). Wcześniej wskaż encje **temperatury powrotu** i **częstotliwości
+**Strojenie**, w grupie **„Wymuszanie startu chłodzenia"**: przełącznik on/off plus pięć
+globalnych pokręteł (docelowa histereza, min. suma otwarcia pętli, zwłoka przed wymuszeniem,
+min. przerwa między startami, limit startów na godzinę). Od v0.14.0 działa **bramka popytu**:
+start jest wymuszany tylko, gdy pokoje wołające o chłód razem zadają dość otwarcia zaworów —
+suma `zawór % × liczba pętli pokoju` musi osiągnąć próg **„Min. odbiór: suma otwarcia pętli"**
+(domyślnie 250, czyli 2,5 pętli w pełni otwartej; minimum 100 = jedna pętla, maksimum =
+wszystkie pętle × 100). Mniejszy odbiór — np. jeden pokój z jedną pętlą na 100 % — spokojnie
+pokrywa zimna woda z bufora i startu nie wymuszamy: wymuszenie zbiłoby tylko temperaturę
+bufora o 1–2 K i skróciło cykl sprężarki. Bieżącą sumę obok progu widać w zakładce Pompa
+ciepła (wiersz „Odbiór"), także przy wyłączonym wymuszaniu — łatwo dobrać próg przed
+włączeniem. Wcześniej wskaż encje **temperatury powrotu** i **częstotliwości
 sprężarki** w opcjach → **Pompa ciepła** (encja **wylotu** jest tam tylko diagnostyczna). Domyślnie
 **wyłączone**; rozwiązanie specyficzne dla Panasonica. Stan (impuls / czuwanie / przerwa, próg,
 odczyty) widać w zakładce Pompa ciepła.

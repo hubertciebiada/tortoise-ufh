@@ -1281,3 +1281,59 @@ in `docs/manual/{pl,de}.md`, and the README feature blurb. All now use "Force co
 Wymuszanie startu chłodzenia / Kühlstart erzwingen" phrasing. Identifiers stay `flicker_*` per the
 §22 rule — the flag CODES in the manuals' first column and the `hp_flicker_*` JSON keys are code, not
 copy. Text-only; no logic change.
+
+## 23. Force-cooling-start demand gate — loop-weighted valve opening vs the buffer tank (2026-07-16, v0.14.0)
+
+**Problem (owner observation, first cooling nights on v0.13.x):** the flicker armed whenever ANY
+cooled room sat >= 0.3 K above its setpoint — ~7 forced compressor starts in one night for
+essentially ONE room ~1 K over a low 21.5 °C setpoint, every other room at/below setpoint. The
+hydraulic context the gate ignored: the installation has a **100 l parallel buffer tank**. A small
+draw — even a single loop commanded 100 % — is comfortably covered by the cold water already
+stored; a forced start in that situation merely knocks the buffer down 1–2 K (~0.3 kWh of cold)
+and short-cycles the compressor. Pure wear, no comfort.
+
+**Decision: the demand gate becomes loop-weighted and thresholded.** A room "calls" exactly as
+before (dew-eligible, `error_c <= -0.3 K`, dew throttle >= 0.5, no `sensor_lost`), but demand is
+real only when the calling rooms together command enough opening:
+
+    demand = (any room calls) AND (sum over calling rooms of valve_pct x loop_count >= threshold)
+
+- **Metric: percent-loops** (`valve % x number of the room's loops`), owner-confirmed over a plain
+  room count — the PI valve already integrates error magnitude x persistence (and the S2 throttle
+  shrinks a dew-limited room's contribution), and weighting by loops makes the sum a true
+  hydraulic-draw proxy: a 3-loop living room fully open draws 3x a single-loop bath.
+- **New global-only knob `hp_flicker_min_open_pct`** — default **250** (2.5 fully open loops),
+  minimum **100** (one full loop), UI maximum **dynamic = total configured loops x 100**
+  (`tuning.flicker_open_max_pct`, threaded into `get_tuning`/`set_tuning` and both options-flow
+  steps; the core validates a loose static [100, 10000] since it cannot know the loop count; the
+  panel needs no range logic — it renders min/max straight from the websocket payload). Step 25.
+- **Loop count travels inside the core report:** `len(RoomReport.loop_flow_status)` — the S6
+  wrapper stamps exactly one entry per configured loop every cycle; an unstamped report degrades
+  to weight 1. `cooling_demand` therefore moved from `Iterable[RoomReport]` to
+  `Iterable[RoomOutputs]` (it needs the FINAL commanded valve, not `raw_valve_pct`) and returns a
+  `CoolingDemand` dataclass (`open_pct`, `threshold_pct`, `demand`) instead of a bare bool.
+- **Diagnostics:** the heat-pump runtime flicker payload gains `demand_open_pct` /
+  `demand_threshold_pct`, rendered as the "Demand (sum loop opening)" row on the Heat-pump tab —
+  computed even while the flicker is DISABLED, so the threshold can be tuned against the live sum
+  before switching the feature on.
+
+**Deliberately NOT added (simplicity mandate):** no persistence knob — `hp_flicker_stuck_minutes`
+already requires the armed condition (demand included) to hold uninterrupted, so the sum must sit
+above the threshold for the whole window, and flapping around it resets the timer in the SAFE
+direction (fewer starts). No hysteresis on the sum, no per-room weights beyond the loop count, no
+new flags. The 0.3 K calling margin stays a constant (`FLICKER_DEMAND_ERROR_K`). The return
+trigger, cooldown and starts-per-hour cap are untouched — the fix is purely "stop forcing at
+trivial demand"; the pump's own `setpoint + 3 K` return rule still handles a warming buffer.
+
+No config migration (the new field has a default). Effect on the observed night: the single
+caller sums to <= 100 < 250 — zero forced starts; the widespread-demand evening (e.g. 2.5+
+loop-equivalents calling) still forces exactly as designed.
+
+**Review finding folded in before release (the shrinking-ceiling trap):** the dynamic ceiling can
+DROP below an already-persisted value when rooms/loops are removed. Left alone, that broke both
+write-back paths: the panel's global save resends EVERY global knob, so `set_tuning` would reject
+the whole batch over a knob the user never touched, and the options `settings` form clamped the
+prefill, silently overwriting the stored value on any unrelated save. Rule adopted: **the effective
+ceiling is floored by the stored/prefill value** (`flicker_open_max_pct(..., current_value=...)` +
+the schema helper widens `max` to the prefill) — an over-ceiling value always round-trips
+unchanged; the user may keep or LOWER it, never raise it further.

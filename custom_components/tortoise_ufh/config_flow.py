@@ -104,7 +104,7 @@ from .const import (
 from .core.config import ControllerConfig
 from .device import room_slug
 from .entity_validator import EntityValidator
-from .tuning import global_controller
+from .tuning import flicker_open_max_pct, global_controller
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -267,11 +267,17 @@ class RoomDefinition:
 # ---------------------------------------------------------------------------
 
 
-def _controller_schema_dict(defaults: ControllerConfig) -> dict[Any, Any]:
+def _controller_schema_dict(
+    defaults: ControllerConfig, *, open_max_pct: float | None = None
+) -> dict[Any, Any]:
     """Build the advanced controller-knob schema fragment.
 
     Args:
         defaults: The :class:`ControllerConfig` supplying the field defaults.
+        open_max_pct: The dynamic ceiling for ``hp_flicker_min_open_pct``
+            (total configured loops x 100; see
+            :func:`~tortoise_ufh.tuning.flicker_open_max_pct`). ``None`` keeps
+            the loose static spec maximum.
 
     Returns:
         A voluptuous schema dict of optional number / boolean selectors, one per
@@ -280,6 +286,11 @@ def _controller_schema_dict(defaults: ControllerConfig) -> dict[Any, Any]:
     schema: dict[Any, Any] = {}
     for field_name, low, high, step in CONTROLLER_NUMBER_KNOBS:
         default_val = float(getattr(defaults, field_name))
+        if field_name == "hp_flicker_min_open_pct" and open_max_pct is not None:
+            # Never below the prefill: a stored value above a SHRUNKEN dynamic
+            # ceiling (rooms/loops were removed) must round-trip unchanged —
+            # the user may keep or lower it, never be silently pulled down.
+            high = max(low, open_max_pct, default_val)
         schema[vol.Optional(field_name, default=default_val)] = NumberSelector(
             NumberSelectorConfig(
                 min=low, max=high, step=step, mode=NumberSelectorMode.BOX
@@ -953,7 +964,11 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._controller = asdict(controller)
                 return await self.async_step_confirm()
 
-        schema = vol.Schema(_controller_schema_dict(ControllerConfig()))
+        schema = vol.Schema(
+            _controller_schema_dict(
+                ControllerConfig(), open_max_pct=flicker_open_max_pct(self._rooms)
+            )
+        )
         return self.async_show_form(
             step_id="algorithm", data_schema=schema, errors=errors
         )
@@ -1218,7 +1233,15 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         schema_dict[global_supply_marker] = EntitySelector(
             EntitySelectorConfig(domain=["sensor", "input_number", "number"])
         )
-        schema_dict.update(_controller_schema_dict(current_defaults))
+        schema_dict.update(
+            _controller_schema_dict(
+                current_defaults,
+                open_max_pct=flicker_open_max_pct(
+                    entry.data.get(CONF_ROOMS, []),
+                    current_value=current_defaults.hp_flicker_min_open_pct,
+                ),
+            )
+        )
 
         return self.async_show_form(
             step_id="settings", data_schema=vol.Schema(schema_dict), errors=errors

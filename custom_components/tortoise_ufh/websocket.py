@@ -74,6 +74,7 @@ from .core.config import ControllerConfig
 from .core.models import Mode
 from .tuning import (
     coerce_tuning_values,
+    flicker_open_max_pct,
     global_controller,
     global_controller_dict,
     knob_names,
@@ -761,9 +762,14 @@ def ws_get_tuning(
         return
 
     entry = coordinator.config_entry
+    effective = global_controller(entry)
+    open_max = flicker_open_max_pct(
+        entry.data.get(CONF_ROOMS, []),
+        current_value=effective.hp_flicker_min_open_pct,
+    )
     result = TuningResult(
-        fields=tuning_fields(),
-        global_values=knob_values(global_controller(entry)),
+        fields=tuning_fields(open_max_pct=open_max),
+        global_values=knob_values(effective),
         rooms=room_overrides(entry),
         defaults=knob_values(ControllerConfig()),
     )
@@ -1032,8 +1038,17 @@ def ws_set_tuning(
         return
 
     raw_values: dict[str, Any] = dict(msg["values"])
+    # The ceiling is floored by the STORED value: the panel's global save
+    # resends every knob, so a loop count shrunken by a room removal must not
+    # reject the whole batch over an untouched (now over-ceiling) threshold.
+    open_max = flicker_open_max_pct(
+        entry.data.get(CONF_ROOMS, []),
+        current_value=global_controller(entry).hp_flicker_min_open_pct,
+    )
     try:
-        coerced = coerce_tuning_values(raw_values, allow_delete=not is_global)
+        coerced = coerce_tuning_values(
+            raw_values, allow_delete=not is_global, open_max_pct=open_max
+        )
     except ValueError as err:
         connection.send_error(msg["id"], _ERR_INVALID_TUNING, str(err))
         return
@@ -1070,7 +1085,7 @@ def ws_set_tuning(
     hass.config_entries.async_update_entry(entry, options=new_options)
 
     result = TuningResult(
-        fields=tuning_fields(),
+        fields=tuning_fields(open_max_pct=open_max),
         global_values=knob_values(global_controller(entry)),
         rooms=room_overrides(entry),
         defaults=knob_values(ControllerConfig()),

@@ -22,6 +22,9 @@ from typing import TYPE_CHECKING, Any
 
 from .const import (
     CONF_CONTROLLER,
+    CONF_ENTITY_RETURN,
+    CONF_ENTITY_SUPPLY,
+    CONF_ENTITY_VALVES,
     CONF_ROOM_TUNING,
     CONTROLLER_BOOL_KNOBS,
     CONTROLLER_KNOB_UNITS,
@@ -35,6 +38,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "coerce_tuning_values",
+    "flicker_open_max_pct",
     "global_controller",
     "global_controller_dict",
     "knob_names",
@@ -43,6 +47,53 @@ __all__ = [
     "room_overrides",
     "tuning_fields",
 ]
+
+_FLICKER_OPEN_KNOB = "hp_flicker_min_open_pct"
+"""The one knob whose UI maximum is dynamic (total loops x 100)."""
+
+
+def flicker_open_max_pct(
+    rooms: list[dict[str, Any]], *, current_value: float | None = None
+) -> float:
+    """The effective ceiling of ``hp_flicker_min_open_pct``.
+
+    The physical ceiling is ``total loop count x 100``; a room's loop count
+    mirrors the coordinator's ``_build_loops``: ``max(len(valves),
+    len(supplies), len(returns))``, at least 1 (the config flow enforces one
+    valve per room). Takes the raw room-config dicts — not the entry — so the
+    setup wizard can pass its in-flight room list before an entry exists.
+
+    The ceiling never shrinks below ``current_value`` (the stored knob value):
+    after removing rooms/loops the persisted value may exceed the new physical
+    ceiling, and it must still round-trip — the panel's global save resends
+    EVERY global knob, so a suddenly-too-low ceiling would reject the whole
+    batch over a knob the user never touched, and the options form would
+    silently pull the stored value down. Widening to the stored value keeps
+    both paths lossless while still only allowing the user to KEEP or LOWER
+    an over-ceiling value, never raise it further.
+
+    Args:
+        rooms: The per-room config dicts (``entry.data[CONF_ROOMS]`` shape).
+        current_value: The currently persisted ``hp_flicker_min_open_pct``,
+            or ``None`` when there is none to protect (setup wizard).
+
+    Returns:
+        ``max(total loop count, 1) x 100`` [%], floored by ``current_value``.
+    """
+    total_loops = 0
+    for room_cfg in rooms:
+        if not isinstance(room_cfg, dict):
+            continue
+        total_loops += max(
+            1,
+            len(room_cfg.get(CONF_ENTITY_VALVES) or []),
+            len(room_cfg.get(CONF_ENTITY_SUPPLY) or []),
+            len(room_cfg.get(CONF_ENTITY_RETURN) or []),
+        )
+    ceiling = float(max(1, total_loops)) * 100.0
+    if current_value is not None:
+        ceiling = max(ceiling, float(current_value))
+    return ceiling
 
 
 def knob_names() -> list[str]:
@@ -68,10 +119,21 @@ def knob_range(field_name: str) -> tuple[float, float] | None:
     return None
 
 
-def tuning_fields() -> tuple[dict[str, Any], ...]:
-    """Build the ordered knob descriptors for the ``get_tuning`` payload."""
+def tuning_fields(*, open_max_pct: float | None = None) -> tuple[dict[str, Any], ...]:
+    """Build the ordered knob descriptors for the ``get_tuning`` payload.
+
+    Args:
+        open_max_pct: The dynamic ceiling for ``hp_flicker_min_open_pct``
+            (total configured loops x 100; see :func:`flicker_open_max_pct`).
+            ``None`` keeps the loose static spec maximum.
+
+    Returns:
+        One descriptor dict per exposed knob, numeric knobs first.
+    """
     fields: list[dict[str, Any]] = []
     for name, low, high, step in CONTROLLER_NUMBER_KNOBS:
+        if name == _FLICKER_OPEN_KNOB and open_max_pct is not None:
+            high = max(low, open_max_pct)
         fields.append(
             {
                 "name": name,
@@ -160,7 +222,10 @@ def room_overrides(entry: ConfigEntry) -> dict[str, dict[str, Any]]:
 
 
 def coerce_tuning_values(
-    raw_values: dict[str, Any], *, allow_delete: bool
+    raw_values: dict[str, Any],
+    *,
+    allow_delete: bool,
+    open_max_pct: float | None = None,
 ) -> dict[str, Any]:
     """Coerce + range-validate submitted knob values.
 
@@ -170,6 +235,9 @@ def coerce_tuning_values(
         allow_delete: Whether ``None`` values are permitted. ``True`` is the
             ROOM scope (the only scope with deletable overrides), so it also
             gates the global-only heat-pump knobs below.
+        open_max_pct: The dynamic ceiling for ``hp_flicker_min_open_pct``
+            (see :func:`flicker_open_max_pct`); ``None`` falls back to the
+            loose static spec maximum.
 
     Returns:
         A ``{field: value}`` dict where numeric knobs are floats, the boolean
@@ -213,8 +281,12 @@ def coerce_tuning_values(
             msg = f"{field_name} must be finite, got {numeric}"
             raise ValueError(msg)
         rng = knob_range(field_name)
-        if rng is not None and not rng[0] <= numeric <= rng[1]:
-            msg = f"{field_name} must be in [{rng[0]}, {rng[1]}], got {numeric}"
-            raise ValueError(msg)
+        if rng is not None:
+            low, high = rng
+            if field_name == _FLICKER_OPEN_KNOB and open_max_pct is not None:
+                high = max(low, open_max_pct)
+            if not low <= numeric <= high:
+                msg = f"{field_name} must be in [{low}, {high}], got {numeric}"
+                raise ValueError(msg)
         coerced[field_name] = numeric
     return coerced

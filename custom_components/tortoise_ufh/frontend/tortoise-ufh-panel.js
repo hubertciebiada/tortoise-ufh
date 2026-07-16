@@ -627,6 +627,7 @@ const STR = {
     tune_grp_flicker: "Wymuszanie startu chłodzenia (globalne)",
     tune_hp_flicker_enabled: "Wymuszanie startu chłodzenia",
     tune_hp_flicker_band_k: "Docelowa histereza chłodzenia",
+    tune_hp_flicker_min_open_pct: "Min. odbiór: suma otwarcia pętli",
     tune_hp_flicker_stuck_minutes: "Zwłoka przed wymuszeniem",
     tune_hp_flicker_min_off_minutes: "Min. przerwa między startami",
     tune_hp_flicker_max_starts_per_h: "Maks. startów na godzinę",
@@ -640,6 +641,12 @@ const STR = {
       "Docelowa efektywna martwa strefa wody chłodzenia [K]. Musi być poniżej " +
       "stałej histerezy 3 K pompy, by ją zacieśnić — impuls uzbraja się, gdy " +
       "powrót wzrośnie o tyle powyżej zapisanej nastawy. Globalne.",
+    tip_knob_hp_flicker_min_open_pct:
+      "Bramka popytu: minimalna suma otwarcia zaworów pokoi wołających o chłód, " +
+      "ważona liczbą ich pętli (zawór % × pętle), zanim start zostanie wymuszony. " +
+      "100 = jedna pętla w pełni otwarta; maksimum = wszystkie pętle × 100. " +
+      "Poniżej progu bufor pokrywa odbiór i start nie jest wymuszany — wymuszenie " +
+      "zbiłoby tylko temperaturę bufora i skróciło cykl sprężarki. Globalne.",
     tip_knob_hp_flicker_stuck_minutes:
       "Jak długo powrót musi tkwić uzbrojony (postój w martwej strefie z realnym " +
       "zapotrzebowaniem), zanim padnie impuls [min]. Globalne.",
@@ -662,6 +669,7 @@ const STR = {
     hp_flicker_st_pulse: "impuls",
     hp_flicker_st_cooldown: "przerwa",
     hp_flicker_trigger: "Próg uzbrojenia",
+    hp_flicker_demand: "Odbiór (Σ otwarcia pętli)",
     hp_flicker_stuck: "Utknięcie do impulsu",
     hp_flicker_cooldown: "Przerwa do końca",
     hp_flicker_pulses: "Wymuszone starty (ost. godz.)",
@@ -1112,6 +1120,7 @@ const STR = {
     tune_grp_flicker: "Force cooling start (global)",
     tune_hp_flicker_enabled: "Force cooling start",
     tune_hp_flicker_band_k: "Target cooling deadband",
+    tune_hp_flicker_min_open_pct: "Min demand: total loop opening",
     tune_hp_flicker_stuck_minutes: "Delay before forcing a start",
     tune_hp_flicker_min_off_minutes: "Min time between forced starts",
     tune_hp_flicker_max_starts_per_h: "Max forced starts per hour",
@@ -1125,6 +1134,13 @@ const STR = {
       "Target effective cooling-water deadband [K]. Must be below the pump's " +
       "fixed 3 K hysteresis to tighten it — a pulse arms once the return climbs " +
       "this far above the written setpoint. Global.",
+    tip_knob_hp_flicker_min_open_pct:
+      "Demand gate: the minimum total valve opening of the rooms calling for " +
+      "cooling, weighted by their loop count (valve % × loops), before a start " +
+      "is forced. 100 = one fully open loop; the maximum = all loops × 100. " +
+      "Below the threshold the buffer tank covers the draw and no start is " +
+      "forced — forcing one would merely knock the buffer down and " +
+      "short-cycle the compressor. Global.",
     tip_knob_hp_flicker_stuck_minutes:
       "How long the return must sit stuck & armed (idle in the deadband with " +
       "genuine demand) before a pulse fires [min]. Global.",
@@ -1148,6 +1164,7 @@ const STR = {
     hp_flicker_st_pulse: "pulse",
     hp_flicker_st_cooldown: "cooldown",
     hp_flicker_trigger: "Arm threshold",
+    hp_flicker_demand: "Demand (Σ loop opening)",
     hp_flicker_stuck: "Stuck to pulse",
     hp_flicker_cooldown: "Cooldown left",
     hp_flicker_pulses: "Forced starts (last h)",
@@ -1652,6 +1669,7 @@ const STR = {
     tune_grp_flicker: "Kühlstart erzwingen (global)",
     tune_hp_flicker_enabled: "Kühlstart erzwingen",
     tune_hp_flicker_band_k: "Angestrebtes Kühl-Totband",
+    tune_hp_flicker_min_open_pct: "Min. Abnahme: Gesamtöffnung der Kreise",
     tune_hp_flicker_stuck_minutes: "Verzögerung vor dem Erzwingen",
     tune_hp_flicker_min_off_minutes: "Min. Zeit zwischen erzwungenen Starts",
     tune_hp_flicker_max_starts_per_h: "Max. erzwungene Starts pro Stunde",
@@ -1667,6 +1685,13 @@ const STR = {
       "3-K-Hysterese der Pumpe liegen, um sie zu verengen — ein Impuls wird " +
       "scharf, sobald der Rücklauf so weit über den geschriebenen Sollwert " +
       "steigt. Global.",
+    tip_knob_hp_flicker_min_open_pct:
+      "Bedarfsschwelle: die minimale Gesamt-Ventilöffnung der kühlenden Räume, " +
+      "gewichtet mit ihrer Kreiszahl (Ventil % × Kreise), bevor ein Start " +
+      "erzwungen wird. 100 = ein voll geöffneter Kreis; Maximum = alle Kreise " +
+      "× 100. Unterhalb der Schwelle deckt der Pufferspeicher die Abnahme und " +
+      "kein Start wird erzwungen — er würde nur den Puffer herunterkühlen und " +
+      "den Verdichter takten lassen. Global.",
     tip_knob_hp_flicker_stuck_minutes:
       "Wie lange der Rücklauf scharf verharren muss (Stillstand im Totband mit " +
       "echtem Bedarf), bevor ein Impuls ausgelöst wird [min]. Global.",
@@ -1691,6 +1716,7 @@ const STR = {
     hp_flicker_st_pulse: "Impuls",
     hp_flicker_st_cooldown: "Sperrzeit",
     hp_flicker_trigger: "Schärfschwelle",
+    hp_flicker_demand: "Abnahme (Σ Kreisöffnung)",
     hp_flicker_stuck: "Verharren bis Impuls",
     hp_flicker_cooldown: "Sperrzeit übrig",
     hp_flicker_pulses: "Erzwungene Starts (letzte h)",
@@ -2200,6 +2226,7 @@ const KNOB_GROUPS = [
     knobs: [
       "hp_flicker_enabled",
       "hp_flicker_band_k",
+      "hp_flicker_min_open_pct",
       "hp_flicker_stuck_minutes",
       "hp_flicker_min_off_minutes",
       "hp_flicker_max_starts_per_h",
@@ -5881,6 +5908,7 @@ class TortoiseUfhPanel extends HTMLElement {
     P.flickerOutlet = h("span", { class: "kv-val" });
     P.flickerFreq = h("span", { class: "kv-val" });
     P.flickerTrigger = h("span", { class: "kv-val" });
+    P.flickerDemand = h("span", { class: "kv-val" });
     P.flickerStuck = h("span", { class: "kv-val" });
     P.flickerCooldown = h("span", { class: "kv-val" });
     P.flickerPulses = h("span", { class: "kv-val" });
@@ -5905,6 +5933,7 @@ class TortoiseUfhPanel extends HTMLElement {
         flickerKv("hp_flicker_outlet", P.flickerOutlet),
         flickerKv("hp_flicker_freq", P.flickerFreq),
         flickerKv("hp_flicker_trigger", P.flickerTrigger),
+        flickerKv("hp_flicker_demand", P.flickerDemand),
         flickerKv("hp_flicker_stuck", P.flickerStuck),
         flickerKv("hp_flicker_cooldown", P.flickerCooldown),
         flickerKv("hp_flicker_pulses", P.flickerPulses),
@@ -6073,6 +6102,13 @@ class TortoiseUfhPanel extends HTMLElement {
       P.flickerOutlet.textContent = fmt(fl.outlet_c, 1, " °C");
       P.flickerFreq.textContent = fmt(fl.compressor_freq_hz, 0, " Hz");
       P.flickerTrigger.textContent = fmt(fl.trigger_c, 1, " °C");
+      // Demand gate (§23): live loop-weighted Σ vs the configured threshold.
+      const demandSum = num(fl.demand_open_pct);
+      const demandThr = num(fl.demand_threshold_pct);
+      P.flickerDemand.textContent =
+        demandSum === null || demandThr === null
+          ? "—"
+          : `${Math.round(demandSum)} / ${Math.round(demandThr)} %`;
       const mins = (s) =>
         num(s) === null
           ? "—"

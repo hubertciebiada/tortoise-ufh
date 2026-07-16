@@ -522,9 +522,18 @@ Aktivieren senkt Tortoise — sobald es die Pumpe im Stillstand mit echtem Bedar
 geschriebenen Sollwert für einen Zyklus auf den taupunktsicheren Taupunkt, um den Verdichter zu
 lösen, und stellt danach sofort den normalen Sollwert wieder her. Ergebnis: kälteres
 Durchschnittswasser bei weiterhin taupunktsicherem Rücklauf. **Aktivieren und einstellen** Sie es
-im Reiter **Feineinstellung**, Gruppe **„Kühlstart erzwingen“**: der Ein/Aus-Schalter plus vier
-globale Regler (angestrebtes Totband, Verzögerung vor dem Erzwingen, Mindestabstand zwischen Starts,
-Obergrenze der Starts pro Stunde). Geben Sie zuvor die Entitäten für **Rücklauftemperatur** und
+im Reiter **Feineinstellung**, Gruppe **„Kühlstart erzwingen“**: der Ein/Aus-Schalter plus fünf
+globale Regler (angestrebtes Totband, min. Gesamtöffnung der Kreise, Verzögerung vor dem
+Erzwingen, Mindestabstand zwischen Starts, Obergrenze der Starts pro Stunde). Ab v0.14.0 greift
+eine **Bedarfsschwelle**: ein Start wird nur erzwungen, wenn die kühlenden Räume zusammen genug
+Ventilöffnung anfordern — die Summe `Ventil % × Kreiszahl des Raums` muss die Schwelle
+**„Min. Abnahme: Gesamtöffnung der Kreise“** erreichen (Standard 250, also 2,5 voll geöffnete
+Kreise; Minimum 100 = ein Kreis, Maximum = alle Kreise × 100). Kleinere Abnahmen — etwa ein
+Raum mit einem Kreis auf 100 % — deckt das kalte Wasser im Pufferspeicher problemlos, und kein
+Start wird erzwungen: Er würde den Puffer nur um 1–2 K herunterkühlen und den Verdichter takten
+lassen. Die aktuelle Summe neben der Schwelle zeigt der Reiter Wärmepumpe (Zeile „Abnahme“),
+auch bei deaktiviertem Erzwingen — so lässt sich die Schwelle vor dem Einschalten abstimmen.
+Geben Sie zuvor die Entitäten für **Rücklauftemperatur** und
 **Verdichterfrequenz** unter Optionen → **Wärmepumpe** an (die **Vorlauf**-Entität ist dort rein
 diagnostisch). Standardmäßig **deaktiviert**; Panasonic-spezifisch. Den Zustand (Impuls / Ruhe /
 Sperrzeit, Schwelle, Messwerte) sehen Sie im Reiter Wärmepumpe.

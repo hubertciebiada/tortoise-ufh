@@ -134,6 +134,15 @@ class ControllerConfig:
             #7). GLOBAL knob.
         hp_flicker_max_starts_per_h: Hard cap on forced compressor starts per
             rolling hour [1/h] (in [1, 6]; issue #7). GLOBAL knob.
+        hp_flicker_min_open_pct: Demand gate of the setpoint-flicker — the
+            minimum loop-weighted valve opening of the CALLING rooms
+            (``sum(valve_pct x loop count)``, in percent-loops) before a
+            compressor start may be forced (in [100, 10000]; 2026-07-16,
+            DECISIONS §23). Below it the parallel buffer tank covers the draw
+            and forcing a start would only knock the buffer down and
+            short-cycle. 100 = one fully open loop; the UI caps the value
+            dynamically at ``total loops x 100`` (the core cannot know the
+            loop count, hence the loose static upper bound). GLOBAL knob.
         flow_epsilon_k: Minimum loop supply-return temperature difference
             counting as flow evidence for the S6 hydraulic no-flow watchdog
             [K] (> 0; 2026-07-13, S6). Below it — and with no probe
@@ -203,6 +212,7 @@ class ControllerConfig:
     hp_flicker_stuck_minutes: float = 10.0
     hp_flicker_min_off_minutes: float = 20.0
     hp_flicker_max_starts_per_h: float = 2.0
+    hp_flicker_min_open_pct: float = 250.0
     # S6 hydraulic no-flow watchdog knobs (2026-07-13): thresholds/windows of
     # the loop-probe actuation witness; see core/flow_watchdog.py.
     flow_epsilon_k: float = 0.3
@@ -231,7 +241,8 @@ class ControllerConfig:
                 out of range (``hp_flicker_band_k`` [0.5, 3.0],
                 ``hp_flicker_stuck_minutes`` [5, 120],
                 ``hp_flicker_min_off_minutes`` [5, 120],
-                ``hp_flicker_max_starts_per_h`` [1, 6]), or an S6 watchdog
+                ``hp_flicker_max_starts_per_h`` [1, 6],
+                ``hp_flicker_min_open_pct`` [100, 10000]), or an S6 watchdog
                 knob is out of range (``flow_epsilon_k`` > 0,
                 ``flow_open_threshold_pct`` [0, 100],
                 ``flow_response_window_min`` > 0).
@@ -328,6 +339,12 @@ class ControllerConfig:
             msg = (
                 "hp_flicker_max_starts_per_h must be in [1, 6], got "
                 f"{self.hp_flicker_max_starts_per_h}"
+            )
+            raise ValueError(msg)
+        if not 100.0 <= self.hp_flicker_min_open_pct <= 10000.0:
+            msg = (
+                "hp_flicker_min_open_pct must be in [100, 10000], got "
+                f"{self.hp_flicker_min_open_pct}"
             )
             raise ValueError(msg)
         if self.flow_epsilon_k <= 0:

@@ -86,6 +86,7 @@ from .core.config import ControllerConfig
 from .core.controller import BuildingController
 from .core.fast_source import window_allows
 from .core.hp_link import (
+    CoolingDemand,
     FlickerDecision,
     SetpointFlicker,
     cooling_demand,
@@ -289,10 +290,11 @@ class HeatPumpRuntime:
             2026-07-15) as a JSON dict ``{enabled, state, flags, trigger_c,
             stuck_remaining_s, cooldown_remaining_s, pulses_last_hour,
             last_pulse_target_c, pulse_target_c, return_c, compressor_freq_hz,
-            outlet_c}`` (``flags`` is this cycle's ``FlickerDecision.flags`` —
-            the panel renders them from ``FLAG_LABELS``), or ``None`` when
-            neither the flicker nor any of its diagnostic entities is
-            configured.
+            outlet_c, demand_open_pct, demand_threshold_pct}`` (``flags`` is
+            this cycle's ``FlickerDecision.flags`` — the panel renders them
+            from ``FLAG_LABELS``; the two ``demand_*`` keys are the §23
+            loop-weighted demand gate), or ``None`` when neither the flicker
+            nor any of its diagnostic entities is configured.
 
     Raises:
         ValueError: If mode sub-fields are set without a mode entity.
@@ -553,8 +555,9 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # Cooling setpoint-flicker state machine (issue #7, 2026-07-15). ONE
         # per entry, persisted across control cycles beside the other stateful
         # machines; rebuilt here on every config-entry reload (a knob change)
-        # and NOT on a state-only room change (which never reloads). Reads the
-        # four global flicker knobs off the effective global tuning.
+        # and NOT on a state-only room change (which never reloads). Reads its
+        # global timing knobs off the effective global tuning (the §23 demand
+        # threshold is read per cycle in _sync_heat_pump).
         self._flicker: SetpointFlicker = SetpointFlicker(self._global_config)
 
         # Source-entity read path (stale cache + plausibility gates) and the
@@ -1140,7 +1143,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         try:
             heat_pump = await self._sync_heat_pump(
                 global_dew,
-                reports=[out.report for out in outputs_by_room.values()],
+                room_outputs=list(outputs_by_room.values()),
                 dt_seconds=dt_seconds,
             )
         except Exception:  # noqa: BLE001
@@ -1387,7 +1390,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self,
         global_dew: float | None,
         *,
-        reports: list[RoomReport],
+        room_outputs: list[RoomOutputs],
         dt_seconds: float,
     ) -> HeatPumpRuntime | None:
         """Compute (and, when gated, write) the heat-pump link's cycle (B2).
@@ -1411,12 +1414,15 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         SetpointFlicker` may drop the WRITTEN cooling setpoint to the dew-safe
         pulse floor for one cycle to trip the pump's compressor out of its
         fixed 3 K return deadband, then restore it — a tighter effective
-        deadband (colder average water) while the return stays dew-safe.
+        deadband (colder average water) while the return stays dew-safe. The
+        flicker acts only when the calling rooms' loop-weighted valve opening
+        clears the ``hp_flicker_min_open_pct`` demand gate (DECISIONS §23) —
+        smaller draws are covered by the buffer tank without a forced start.
 
         Args:
             global_dew: This cycle's global safe dew point [degC], or ``None``.
-            reports: The per-room reports of this cycle (feed the flicker's
-                cooling-demand test).
+            room_outputs: The per-room outputs of this cycle (final valve
+                command + report — both feed the flicker's demand gate).
             dt_seconds: The real measured control-step interval [s] — the SAME
                 value the core step used, advancing the flicker clock ONCE.
 
@@ -1498,6 +1504,13 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             freq_hz = self._reader.read_float_state(freq_entity or None)
             outlet_c = self._reader.read_float_state(outlet_entity or None)
 
+            # Loop-weighted demand gate (§23) — computed even with the flicker
+            # disabled, so the panel shows the live Σ before it is switched on.
+            demand_gate = cooling_demand(
+                room_outputs,
+                min_open_pct=self._global_config.hp_flicker_min_open_pct,
+            )
+
             decision = None
             if flicker_enabled:
                 # Advance the flicker clock EXACTLY ONCE per cycle with the
@@ -1507,7 +1520,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     cooling_active=(
                         self._mode is Mode.COOLING and writes_enabled and not dhw_active
                     ),
-                    demand=cooling_demand(reports),
+                    demand=demand_gate.demand,
                     hp_return_c=return_c,
                     compressor_freq_hz=freq_hz,
                     written_target_c=normal_target,
@@ -1548,7 +1561,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             }
             if flicker_enabled or return_entity or freq_entity or outlet_entity:
                 flicker_payload = self._flicker_payload(
-                    decision, flicker_enabled, return_c, freq_hz, outlet_c
+                    decision, flicker_enabled, return_c, freq_hz, outlet_c, demand_gate
                 )
 
         # -- Heating water setpoint --------------------------------------------
@@ -1597,6 +1610,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         return_c: float | None,
         freq_hz: float | None,
         outlet_c: float | None,
+        demand_gate: CoolingDemand,
     ) -> dict[str, Any]:
         """Build the JSON flicker payload for the runtime / panel (issue #7).
 
@@ -1609,6 +1623,9 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             freq_hz: The compressor frequency [Hz], or ``None``.
             outlet_c: The pump outlet temperature [degC] (diagnostic only), or
                 ``None``.
+            demand_gate: This cycle's loop-weighted demand aggregate (§23) —
+                surfaced even when the flicker is disabled, so the threshold
+                can be tuned against the live Σ before switching it on.
 
         Returns:
             A JSON-serializable dict of the flicker's cycle view.
@@ -1636,6 +1653,8 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             "return_c": return_c,
             "compressor_freq_hz": freq_hz,
             "outlet_c": outlet_c,
+            "demand_open_pct": demand_gate.open_pct,
+            "demand_threshold_pct": demand_gate.threshold_pct,
         }
 
     async def async_set_hp_dhw(self, want_dhw: bool) -> str:

@@ -44,7 +44,7 @@ from dataclasses import dataclass
 
 from .config import ControllerConfig
 from .const import DEW_MARGIN_DEFAULT_K
-from .models import Mode, RoomReport
+from .models import Mode, RoomOutputs
 from .weather_comp import WeatherCompCurve
 
 __all__ = [
@@ -55,6 +55,7 @@ __all__ = [
     "HEATING_SUPPLY_MAX_C",
     "HEATING_SUPPLY_MIN_C",
     "HEISHAMON_MODE_OPTIONS",
+    "CoolingDemand",
     "FlickerDecision",
     "SetpointFlicker",
     "cooling_demand",
@@ -332,11 +333,36 @@ not help it.
 """
 
 
-def cooling_demand(reports: Iterable[RoomReport]) -> bool:
-    """Whether any cooled room genuinely calls for more cooling (issue #7).
+@dataclass(frozen=True)
+class CoolingDemand:
+    """Loop-weighted cooling demand seen by the flicker gate (2026-07-16, §23).
 
-    True iff at least one report is a genuinely-cooling room, above its
-    setpoint, with valid readings and not condensation-limited:
+    ``open_pct`` is a hydraulic-draw proxy in "percent-loops": one loop
+    commanded fully open contributes 100. It answers "can the calling rooms
+    actually absorb the cold a forced compressor start would produce, faster
+    than the parallel buffer tank covers them?" — below the threshold the
+    buffer (plus the pump's own return trigger) handles the demand and no
+    start is forced.
+
+    Attributes:
+        open_pct: Sum over CALLING rooms of ``valve_position_pct x loop count``
+            [% x loops].
+        threshold_pct: The ``hp_flicker_min_open_pct`` knob value [% x loops].
+        demand: ``True`` when at least one room calls AND ``open_pct >=
+            threshold_pct`` — only then may the flicker force a start.
+    """
+
+    open_pct: float
+    threshold_pct: float
+    demand: bool
+
+
+def cooling_demand(
+    outputs: Iterable[RoomOutputs], *, min_open_pct: float
+) -> CoolingDemand:
+    """Aggregate the loop-weighted cooling demand (issue #7; gate §23).
+
+    A room CALLS for cooling iff its report satisfies all of:
 
     * ``report.dew_excluded_reason is None`` — the room IS eligible for the
       global safe dew point (COOLING, ``cooling_enabled`` and usable
@@ -348,14 +374,27 @@ def cooling_demand(reports: Iterable[RoomReport]) -> bool:
       is not already mostly throttled shut by its local dew defence;
     * ``"sensor_lost" not in report.flags`` — the room is not degraded.
 
+    Each calling room contributes its FINAL commanded valve position times its
+    loop count (``len(report.loop_flow_status)``, stamped by the S6 wrapper to
+    exactly the configured loop count; a report without the stamp counts as
+    one loop). Demand is real only when the total meets ``min_open_pct``: a
+    single loop trickling from the buffer tank must not force a compressor
+    start that would merely knock the buffer down a few kelvin and short-cycle
+    (owner decision 2026-07-16, 100 l parallel buffer).
+
     Args:
-        reports: The per-room :class:`~tortoise_ufh.models.RoomReport`s of one
-            control cycle.
+        outputs: The per-room :class:`~tortoise_ufh.models.RoomOutputs` of one
+            control cycle (final valve command + report).
+        min_open_pct: The ``hp_flicker_min_open_pct`` knob — minimum
+            loop-weighted opening [% x loops] for the flicker to act.
 
     Returns:
-        ``True`` when the flicker has a real reason to trip the compressor.
+        The :class:`CoolingDemand` aggregate for this cycle.
     """
-    for report in reports:
+    open_pct = 0.0
+    calling = False
+    for out in outputs:
+        report = out.report
         if (
             report.dew_excluded_reason is None
             and report.error_c is not None
@@ -363,8 +402,13 @@ def cooling_demand(reports: Iterable[RoomReport]) -> bool:
             and report.dew_throttle_factor >= FLICKER_DEMAND_THROTTLE_MIN
             and "sensor_lost" not in report.flags
         ):
-            return True
-    return False
+            calling = True
+            open_pct += out.valve_position_pct * max(1, len(report.loop_flow_status))
+    return CoolingDemand(
+        open_pct=open_pct,
+        threshold_pct=min_open_pct,
+        demand=calling and open_pct >= min_open_pct,
+    )
 
 
 _FLICKER_STATES: frozenset[str] = frozenset({"idle", "pulse", "cooldown"})
@@ -537,7 +581,8 @@ class SetpointFlicker:
         Args:
             cooling_active: Whether the home is actively cooling AND the link
                 may write (COOLING mode, writes enabled, not doing DHW).
-            demand: Whether any cooled room genuinely calls for cooling (see
+            demand: Whether the calling rooms' loop-weighted valve opening
+                clears the demand gate (``CoolingDemand.demand`` — see
                 :func:`cooling_demand`).
             hp_return_c: The pump inlet/return water temperature [degC], or
                 ``None`` when unreadable.

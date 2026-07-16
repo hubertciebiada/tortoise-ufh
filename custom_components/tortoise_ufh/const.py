@@ -322,6 +322,11 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     # Cooling setpoint-flicker timing (issue #7, 2026-07-15): global-only knobs
     # read by the opt-in SetpointFlicker; see HP_GLOBAL_ONLY_KNOBS below.
     ("hp_flicker_band_k", 0.5, 3.0, 0.1),
+    # Demand gate (2026-07-16, DECISIONS §23): min loop-weighted valve opening
+    # of the calling rooms before a start may be forced. The static max here is
+    # a loose fallback — every UI surface overrides it with the REAL ceiling
+    # (total configured loops x 100) via tuning.flicker_open_max_pct.
+    ("hp_flicker_min_open_pct", 100.0, 10000.0, 25.0),
     ("hp_flicker_stuck_minutes", 5.0, 120.0, 1.0),
     ("hp_flicker_min_off_minutes", 5.0, 120.0, 1.0),
     ("hp_flicker_max_starts_per_h", 1.0, 6.0, 1.0),
@@ -376,6 +381,7 @@ CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "heating_supply_base_c": "°C",
     "heating_supply_slope": "K/K",
     "hp_flicker_band_k": "K",
+    "hp_flicker_min_open_pct": "%",
     "hp_flicker_stuck_minutes": "min",
     "hp_flicker_min_off_minutes": "min",
     "hp_flicker_max_starts_per_h": "1/h",
@@ -395,6 +401,7 @@ HP_GLOBAL_ONLY_KNOBS: frozenset[str] = frozenset(
         "heating_supply_slope",
         "hp_flicker_enabled",
         "hp_flicker_band_k",
+        "hp_flicker_min_open_pct",
         "hp_flicker_stuck_minutes",
         "hp_flicker_min_off_minutes",
         "hp_flicker_max_starts_per_h",

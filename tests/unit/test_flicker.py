@@ -8,8 +8,11 @@ Exercises the pure core added in :mod:`tortoise_ufh.hp_link`:
   the dew-safe value. Covered: the happy path (a single pulse + restore + a
   cooldown before the next), the real-demand gate, the rate / short-cycle cap,
   the dew clamp, and the interrupted / restart safety.
-* :func:`~tortoise_ufh.hp_link.cooling_demand` — the "any room genuinely calls
-  for cooling" helper the adapter feeds the machine.
+* :func:`~tortoise_ufh.hp_link.cooling_demand` — the loop-weighted demand gate
+  (DECISIONS §23) the adapter feeds the machine: rooms genuinely calling for
+  cooling must together command enough loop-weighted valve opening
+  (``sum(valve_pct x loops) >= hp_flicker_min_open_pct``) before a compressor
+  start may be forced.
 
 Everything here is seed-independent and never imports ``homeassistant``. Time is
 driven purely by :meth:`SetpointFlicker.tick` (dt in seconds); the machine reads
@@ -29,7 +32,11 @@ from custom_components.tortoise_ufh.core.hp_link import (
     SetpointFlicker,
     cooling_demand,
 )
-from custom_components.tortoise_ufh.core.models import RoomReport
+from custom_components.tortoise_ufh.core.models import (
+    FastSourceCommand,
+    RoomOutputs,
+    RoomReport,
+)
 
 _DT: float = 300.0  # nominal 5-min control cycle [s]
 
@@ -59,6 +66,22 @@ def _report(**overrides: object) -> RoomReport:
     return RoomReport(**base)  # type: ignore[arg-type]
 
 
+def _output(
+    valve_pct: float = 100.0, loops: int = 1, **report_overrides: object
+) -> RoomOutputs:
+    """Build a RoomOutputs for the demand gate: final valve + loop count.
+
+    The loop count travels as the length of ``report.loop_flow_status`` (the
+    S6 wrapper stamps one entry per configured loop); ``loops=0`` leaves the
+    stamp empty to exercise the gate's one-loop fallback.
+    """
+    return RoomOutputs(
+        valve_position_pct=valve_pct,
+        fast_source=FastSourceCommand(on=False),
+        report=_report(loop_flow_status=("inactive",) * loops, **report_overrides),
+    )
+
+
 def _run_to_idle(machine: SetpointFlicker, **step_kwargs: object) -> None:
     """Advance the machine out of its initial cooldown into ``idle``.
 
@@ -80,17 +103,22 @@ def _run_to_idle(machine: SetpointFlicker, **step_kwargs: object) -> None:
 
 
 class TestCoolingDemand:
-    """The "any room genuinely calls for cooling" gate."""
+    """The loop-weighted "enough rooms genuinely call for cooling" gate (§23)."""
 
     @pytest.mark.unit
     def test_calling_room_yields_demand(self) -> None:
         """An eligible room above setpoint, throttle open, healthy → demand."""
-        assert cooling_demand([_report()]) is True
+        gate = cooling_demand([_output()], min_open_pct=100.0)
+        assert gate.demand is True
+        assert gate.open_pct == 100.0
+        assert gate.threshold_pct == 100.0
 
     @pytest.mark.unit
     def test_empty_reports_have_no_demand(self) -> None:
         """No rooms means no demand."""
-        assert cooling_demand([]) is False
+        gate = cooling_demand([], min_open_pct=100.0)
+        assert gate.demand is False
+        assert gate.open_pct == 0.0
 
     @pytest.mark.unit
     @pytest.mark.parametrize(
@@ -99,47 +127,126 @@ class TestCoolingDemand:
     )
     def test_dew_excluded_room_does_not_call(self, reason: str) -> None:
         """A room excluded from the safe dew point never counts as demand."""
-        assert cooling_demand([_report(dew_excluded_reason=reason)]) is False
+        outputs = [_output(dew_excluded_reason=reason)]
+        assert cooling_demand(outputs, min_open_pct=100.0).demand is False
 
     @pytest.mark.unit
     def test_room_at_or_below_setpoint_does_not_call(self) -> None:
         """The cooling sign: a room at/below its setpoint is not calling."""
         # error_c = setpoint - room_temp; a cool-enough room is >= 0.
-        assert cooling_demand([_report(error_c=0.0)]) is False
-        assert cooling_demand([_report(error_c=0.5)]) is False
+        assert (
+            cooling_demand([_output(error_c=0.0)], min_open_pct=100.0).demand is False
+        )
+        assert (
+            cooling_demand([_output(error_c=0.5)], min_open_pct=100.0).demand is False
+        )
 
     @pytest.mark.unit
     def test_room_just_below_the_error_threshold_does_not_call(self) -> None:
         """Being warmer than setpoint by < the error threshold does not call."""
         just_under = -(FLICKER_DEMAND_ERROR_K - 0.05)
-        assert cooling_demand([_report(error_c=just_under)]) is False
-        assert cooling_demand([_report(error_c=-FLICKER_DEMAND_ERROR_K)]) is True
+        assert (
+            cooling_demand([_output(error_c=just_under)], min_open_pct=100.0).demand
+            is False
+        )
+        assert (
+            cooling_demand(
+                [_output(error_c=-FLICKER_DEMAND_ERROR_K)], min_open_pct=100.0
+            ).demand
+            is True
+        )
 
     @pytest.mark.unit
     def test_none_error_does_not_call(self) -> None:
         """A room with no error reading cannot call for cooling."""
-        assert cooling_demand([_report(error_c=None)]) is False
+        assert (
+            cooling_demand([_output(error_c=None)], min_open_pct=100.0).demand is False
+        )
 
     @pytest.mark.unit
     def test_mostly_throttled_room_does_not_call(self) -> None:
         """A room whose local dew throttle is mostly shut is ignored."""
-        assert cooling_demand([_report(dew_throttle_factor=0.4)]) is False
-        assert cooling_demand([_report(dew_throttle_factor=0.5)]) is True
+        assert (
+            cooling_demand(
+                [_output(dew_throttle_factor=0.4)], min_open_pct=100.0
+            ).demand
+            is False
+        )
+        assert (
+            cooling_demand(
+                [_output(dew_throttle_factor=0.5)], min_open_pct=100.0
+            ).demand
+            is True
+        )
 
     @pytest.mark.unit
     def test_sensor_lost_room_does_not_call(self) -> None:
         """A degraded (sensor-lost) room never counts as demand."""
-        assert cooling_demand([_report(flags=("sensor_lost",))]) is False
+        outputs = [_output(flags=("sensor_lost",))]
+        assert cooling_demand(outputs, min_open_pct=100.0).demand is False
+
+    @pytest.mark.unit
+    def test_single_small_caller_stays_below_the_gate(self) -> None:
+        """The owner's night case: one fully open loop must not force a start.
+
+        One room ~1 K over its setpoint, one loop, valve 100 % → Σ = 100,
+        which sits below the 250 default — the buffer tank covers a single
+        loop's draw, so the flicker must stay quiet.
+        """
+        outputs = [_output(valve_pct=100.0, loops=1, error_c=-1.0)] + [
+            _output(valve_pct=0.0, loops=1, error_c=0.1) for _ in range(10)
+        ]
+        gate = cooling_demand(outputs, min_open_pct=250.0)
+        assert gate.demand is False
+        assert gate.open_pct == 100.0
+
+    @pytest.mark.unit
+    def test_loop_weighting_scales_a_rooms_contribution(self) -> None:
+        """A 3-loop room at 90 % contributes 270 — enough to clear 250 alone."""
+        gate = cooling_demand([_output(valve_pct=90.0, loops=3)], min_open_pct=250.0)
+        assert gate.demand is True
+        assert gate.open_pct == pytest.approx(270.0)
+
+    @pytest.mark.unit
+    def test_calling_rooms_sum_across_the_building(self) -> None:
+        """Σ accumulates over every calling room; the threshold is inclusive."""
+        outputs = [
+            _output(valve_pct=85.0, loops=2),  # 170
+            _output(valve_pct=80.0, loops=1),  # 80 -> 250 exactly
+        ]
+        gate = cooling_demand(outputs, min_open_pct=250.0)
+        assert gate.open_pct == pytest.approx(250.0)
+        assert gate.demand is True  # >= is inclusive
+
+    @pytest.mark.unit
+    def test_non_calling_rooms_never_add_their_valves(self) -> None:
+        """Open valves of rooms NOT calling (at setpoint) stay out of Σ."""
+        outputs = [
+            _output(valve_pct=100.0, loops=1),  # the only caller: 100
+            _output(valve_pct=100.0, loops=3, error_c=0.0),  # satisfied room
+        ]
+        gate = cooling_demand(outputs, min_open_pct=250.0)
+        assert gate.open_pct == 100.0
+        assert gate.demand is False
+
+    @pytest.mark.unit
+    def test_unstamped_loop_status_counts_as_one_loop(self) -> None:
+        """A report without the S6 stamp degrades to a per-room weight of 1."""
+        gate = cooling_demand([_output(valve_pct=100.0, loops=0)], min_open_pct=100.0)
+        assert gate.open_pct == 100.0
+        assert gate.demand is True
 
     @pytest.mark.unit
     def test_any_calling_room_wins(self) -> None:
-        """One genuinely-calling room among excluded ones yields demand."""
-        reports = [
-            _report(dew_excluded_reason="cooling_disabled"),
-            _report(error_c=0.2),
-            _report(),  # the one caller
+        """One genuinely-calling room among excluded ones carries the gate."""
+        outputs = [
+            _output(dew_excluded_reason="cooling_disabled"),
+            _output(error_c=0.2),
+            _output(),  # the one caller: 100
         ]
-        assert cooling_demand(reports) is True
+        gate = cooling_demand(outputs, min_open_pct=100.0)
+        assert gate.demand is True
+        assert gate.open_pct == 100.0
 
 
 # ---------------------------------------------------------------------------

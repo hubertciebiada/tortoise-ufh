@@ -139,7 +139,8 @@ explanation of what it did and why.
   room can restrict its fast source to an allowed time window. An optional, Panasonic-specific
   **force cooling start** (a one-cycle setpoint drop) can trip the compressor out of its fixed
   3 K return-water deadband when rooms still call for cooling, for colder average water at a
-  dew-safe return.
+  dew-safe return — but only when the calling rooms' loop-weighted valve opening clears a
+  configurable demand gate, so a draw small enough for the buffer tank never forces a start.
 - **Per-room control state (off / live)** — one two-state select per room:
   *off* excludes it from control (the core idles it and nothing is ever written),
   *live* drives its hardware. A whole-house "hands off" is simply every room in
