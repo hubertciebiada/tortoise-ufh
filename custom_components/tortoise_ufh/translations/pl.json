@@ -220,14 +220,14 @@
           "entity_hp_heating_setpoint": "Encja nastawy wody grzania (number, opcjonalna)",
           "entity_hp_cooling_setpoint": "Encja nastawy wody chłodzenia (number, opcjonalna)",
           "entity_hp_active": "Encja „pompa dostępna dla podłogówki” (opcjonalna)",
-          "entity_hp_return_temp": "Czujnik temperatury wody powrotu/wlotu (opcjonalny, do flickera)",
+          "entity_hp_return_temp": "Czujnik temperatury wody powrotu/wlotu (opcjonalny, do wymuszania startu chłodzenia)",
           "entity_hp_outlet_temp": "Czujnik temperatury wody wylotu/zasilania (opcjonalny, diagnostyczny)",
-          "entity_hp_compressor_freq": "Czujnik częstotliwości sprężarki (opcjonalny, do flickera)"
+          "entity_hp_compressor_freq": "Czujnik częstotliwości sprężarki (opcjonalny, do wymuszania startu chłodzenia)"
         },
         "data_description": {
           "entity_hp_mode": "Select w stylu HeishaMon z opcjami typu „Heat only” / „Cool only” / „Heat+DHW”. Tortoise pisze tylko kierunek i nigdy nie zdejmuje flagi CWU.",
           "entity_hp_active": "Wyłączona, gdy pompa robi CWU/odszranianie — regulatory pokojów zamrażają wtedy całkę.",
-          "entity_hp_return_temp": "Sonda wody powrotu/wlotu pompy. Główny sygnał flickera: w długich postojach powrót zatrzymuje się przy nastawie chłodzenia + 3 K. Przykład Panasonic: sensor.panasonic_heat_pump_main_main_inlet_temp.",
+          "entity_hp_return_temp": "Sonda wody powrotu/wlotu pompy. Główny sygnał wymuszania startu chłodzenia: w długich postojach powrót zatrzymuje się przy nastawie chłodzenia + 3 K. Przykład Panasonic: sensor.panasonic_heat_pump_main_main_inlet_temp.",
           "entity_hp_outlet_temp": "Sonda wody wylotu/zasilania pompy. W tej wersji tylko diagnostyka — pokazywana w zakładce Pompa ciepła; żadna logika jej jeszcze nie używa (zarezerwowana pod przyszłą ochronę przeciwrosową po stronie zasilania).",
           "entity_hp_compressor_freq": "Częstotliwość sprężarki w Hz (0 = wyłączona). Służy do wykrycia postoju pompy w martwej strefie. Przykład Panasonic: sensor.panasonic_heat_pump_main_compressor_freq."
         }

@@ -1271,3 +1271,13 @@ Fix: `panel_config()` now appends `?v={integration version}` to `module_url`, so
 changes the URL and forces a fresh fetch (the static route ignores the query string). This is why
 earlier panel-only releases sometimes "looked wrong" until a manual hard-refresh — now updates
 self-bust. `tests/ha/test_panel.py` asserts the versioned URL still points at the static route.
+
+**Follow-up (v0.13.3, 2026-07-16) — the rename reaches the last user-facing surfaces.** A review of
+v0.13.1/v0.13.2 found the "Flicker" jargon still visible in four places the rename had missed: the
+panel `FLAG_LABELS` for `flicker_pulsing` / `flicker_dew_blocked` / `flicker_no_sensor` (labels +
+tooltip descriptions, PL/EN/DE), the Heat-pump options step's entity labels ("optional, for flicker")
+and the return-probe description in `strings.json` + all three translation files, the flag-table rows
+in `docs/manual/{pl,de}.md`, and the README feature blurb. All now use "Force cooling start /
+Wymuszanie startu chłodzenia / Kühlstart erzwingen" phrasing. Identifiers stay `flicker_*` per the
+§22 rule — the flag CODES in the manuals' first column and the `hp_flicker_*` JSON keys are code, not
+copy. Text-only; no logic change.

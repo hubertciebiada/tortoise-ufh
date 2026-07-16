@@ -517,9 +517,9 @@ automatycznie. Pełny słownik poniżej:
 | `fast_source_group_conflict` | Pokój przegrał arbitraż kierunku na wspólnym agregacie — jego split przymusowo OFF. | Nic — wróci po zmianie kierunku grupy. Jeśli częste: przemyśl korekty pokoi w grupie. |
 | `fast_source_cannot_cool` | Pokój chce chłodzić, ale jego szybkie źródło nie umie (grzałka). | Informacyjne. |
 | `cooling_disabled` | Pokój nie bierze udziału w chłodzeniu (opcja konfiguracji) — w trybie chłodzenia jest pomijany. | Zamierzone; zmień w opcjach pokoju, jeśli chcesz chłodzić. |
-| `flicker_pulsing` | Flicker nastawy chłodzenia (Panasonic, §11): na ten jeden cykl nastawę obniżono do bezpiecznego dla rosy progu, by wytrącić sprężarkę z jej stałej histerezy 3 K powrotu; następny cykl przywraca normalną nastawę. | Informacyjne (zamierzone). |
-| `flicker_dew_blocked` | Flicker byłby uzbrojony, ale impuls musiałby przekroczyć surowy punkt rosy — brak zapasu na obniżenie nastawy; impuls wstrzymany. | Informacyjne; normalne w wilgotne dni. |
-| `flicker_no_sensor` | Flicker chłodzenia włączony, ale brak odczytu powrotu lub częstotliwości sprężarki (encja nieustawiona lub nieświeża) — impulsy wstrzymane. | Sprawdź encje temperatury powrotu i częstotliwości sprężarki (opcje → Pompa ciepła). |
+| `flicker_pulsing` | Wymuszanie startu chłodzenia (Panasonic, §11): na ten jeden cykl nastawę obniżono do bezpiecznego dla rosy progu, by wytrącić sprężarkę z jej stałej histerezy 3 K powrotu; następny cykl przywraca normalną nastawę. | Informacyjne (zamierzone). |
+| `flicker_dew_blocked` | Wymuszenie startu byłoby uzbrojone, ale impuls musiałby przekroczyć surowy punkt rosy — brak zapasu na obniżenie nastawy; impuls wstrzymany. | Informacyjne; normalne w wilgotne dni. |
+| `flicker_no_sensor` | Wymuszanie startu chłodzenia włączone, ale brak odczytu powrotu lub częstotliwości sprężarki (encja nieustawiona lub nieświeża) — impulsy wstrzymane. | Sprawdź encje temperatury powrotu i częstotliwości sprężarki (opcje → Pompa ciepła). |
 | `s1_floor_overheat` | Zabezpieczenie posadzki: zbyt gorące zasilanie — zawór zamknięty do ostygnięcia. | Sprawdź krzywą grzewczą/temperaturę zasilania pompy ciepła. |
 | `s3_emergency_heat` | Awaryjne grzanie: pokój mocno wychłodzony — wymuszone grzanie wszystkim, co jest. | Sprawdź, czemu pokój tak wystygł (okno? awaria?). |
 | `s4_emergency_cool` | Awaryjne chłodzenie: pokój mocno przegrzany — wymuszone chłodzenie. | Sprawdź źródło przegrzewu (słońce? awaria?). |

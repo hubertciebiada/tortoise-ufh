@@ -137,8 +137,9 @@ explanation of what it did and why.
 - **Optional heat-pump link & quiet hours** — an opt-in link can steer the heat pump's mode
   and cooling/heating water setpoints (always honouring domestic-hot-water priority), and each
   room can restrict its fast source to an allowed time window. An optional, Panasonic-specific
-  **cooling setpoint-flicker** can briefly trip the compressor out of its fixed 3 K return-water
-  deadband when rooms still call for cooling, for colder average water at a dew-safe return.
+  **force cooling start** (a one-cycle setpoint drop) can trip the compressor out of its fixed
+  3 K return-water deadband when rooms still call for cooling, for colder average water at a
+  dew-safe return.
 - **Per-room control state (off / live)** — one two-state select per room:
   *off* excludes it from control (the core idles it and nothing is ever written),
   *live* drives its hardware. A whole-house "hands off" is simply every room in

@@ -2078,52 +2078,52 @@ const FLAG_LABELS = {
       "Der Aktor meldet seit ≥3 Zyklen eine andere Position als der Befehl. Prüfen Sie Aktor / Relais / Entität; vergleichen Sie Befehl vs. Rückmeldung im Reiter Ventile.",
   },
   flicker_pulsing: {
-    pl: "Impuls flickera chłodzenia",
-    en: "Cooling flicker pulse",
-    de: "Kühl-Flicker-Impuls",
+    pl: "Wymuszony start chłodzenia",
+    en: "Forced cooling start",
+    de: "Erzwungener Kühlstart",
     sev: "info", sx: null, group: "assist",
     descPl:
-      "Flicker nastawy chłodzenia (Panasonic): na ten jeden cykl obniżono zapisaną " +
+      "Wymuszanie startu chłodzenia (Panasonic): na ten jeden cykl obniżono zapisaną " +
       "nastawę do bezpiecznego dla rosy progu, aby wytrącić sprężarkę z jej stałej " +
       "3 K histerezy powrotu; następny cykl przywraca normalną nastawę.",
     descEn:
-      "Cooling setpoint-flicker (Panasonic): for this one cycle the written setpoint " +
+      "Force cooling start (Panasonic): for this one cycle the written setpoint " +
       "was dropped to the dew-safe floor to trip the compressor out of its fixed 3 K " +
       "return hysteresis; the next cycle restores the normal setpoint.",
     descDe:
-      "Kühl-Sollwert-Flicker (Panasonic): Für diesen einen Zyklus wurde der geschriebene Sollwert auf den taupunktsicheren Boden gesenkt, um den Verdichter aus seiner festen 3-K-Rücklaufhysterese zu lösen; der nächste Zyklus stellt den normalen Sollwert wieder her.",
+      "Kühlstart erzwingen (Panasonic): Für diesen einen Zyklus wurde der geschriebene Sollwert auf den taupunktsicheren Boden gesenkt, um den Verdichter aus seiner festen 3-K-Rücklaufhysterese zu lösen; der nächste Zyklus stellt den normalen Sollwert wieder her.",
   },
   flicker_dew_blocked: {
-    pl: "Flicker zablokowany punktem rosy",
-    en: "Flicker dew-blocked",
-    de: "Flicker durch Taupunkt blockiert",
+    pl: "Wymuszenie startu zablokowane punktem rosy",
+    en: "Forced start blocked by dew point",
+    de: "Erzwungener Start durch Taupunkt blockiert",
     sev: "info", sx: null, group: "assist",
     descPl:
-      "Flicker byłby uzbrojony, ale impuls musiałby przekroczyć surowy punkt rosy — " +
-      "nie ma zapasu, by obniżyć nastawę. Impuls wstrzymany (chłodzenie pozostaje " +
-      "bezpieczne dla rosy). Normalne w wilgotne dni.",
+      "Wymuszenie startu byłoby uzbrojone, ale impuls musiałby przekroczyć surowy " +
+      "punkt rosy — nie ma zapasu, by obniżyć nastawę. Impuls wstrzymany (chłodzenie " +
+      "pozostaje bezpieczne dla rosy). Normalne w wilgotne dni.",
     descEn:
-      "The flicker would be armed, but a pulse would have to cross the raw dew point — " +
-      "there is no headroom to drop the setpoint. The pulse is withheld (cooling stays " +
-      "dew-safe). Normal on humid days.",
+      "A forced start would be armed, but the pulse would have to cross the raw dew " +
+      "point — there is no headroom to drop the setpoint. The pulse is withheld " +
+      "(cooling stays dew-safe). Normal on humid days.",
     descDe:
-      "Der Flicker wäre scharf, aber ein Impuls müsste den rohen Taupunkt überschreiten — es gibt keinen Spielraum, den Sollwert zu senken. Der Impuls wird zurückgehalten (die Kühlung bleibt taupunktsicher). An feuchten Tagen normal.",
+      "Ein erzwungener Start wäre scharf, aber ein Impuls müsste den rohen Taupunkt überschreiten — es gibt keinen Spielraum, den Sollwert zu senken. Der Impuls wird zurückgehalten (die Kühlung bleibt taupunktsicher). An feuchten Tagen normal.",
   },
   flicker_no_sensor: {
-    pl: "Flicker: brak czujnika pompy",
-    en: "Flicker: pump sensor missing",
-    de: "Flicker: Pumpensensor fehlt",
+    pl: "Wymuszanie startu: brak czujnika pompy",
+    en: "Force cooling start: pump sensor missing",
+    de: "Kühlstart erzwingen: Pumpensensor fehlt",
     sev: "warn", sx: null, group: "assist",
     descPl:
-      "Flicker chłodzenia włączony, ale brakuje odczytu powrotu lub częstotliwości " +
-      "sprężarki (encja nieskonfigurowana lub nieświeża) — impulsy wstrzymane. " +
-      "Sprawdź encje temperatury powrotu i częstotliwości sprężarki.",
+      "Wymuszanie startu chłodzenia włączone, ale brakuje odczytu powrotu lub " +
+      "częstotliwości sprężarki (encja nieskonfigurowana lub nieświeża) — impulsy " +
+      "wstrzymane. Sprawdź encje temperatury powrotu i częstotliwości sprężarki.",
     descEn:
-      "The cooling flicker is enabled but the return-water or compressor-frequency " +
+      "Force cooling start is enabled but the return-water or compressor-frequency " +
       "reading is missing (entity unset or stale) — pulses are withheld. Check the " +
       "return-temperature and compressor-frequency entities.",
     descDe:
-      "Der Kühl-Flicker ist aktiviert, aber der Rücklauf- oder Verdichterfrequenz-Messwert fehlt (Entität nicht gesetzt oder veraltet) — Impulse werden zurückgehalten. Prüfen Sie die Entitäten für Rücklauftemperatur und Verdichterfrequenz.",
+      "Kühlstart erzwingen ist aktiviert, aber der Rücklauf- oder Verdichterfrequenz-Messwert fehlt (Entität nicht gesetzt oder veraltet) — Impulse werden zurückgehalten. Prüfen Sie die Entitäten für Rücklauftemperatur und Verdichterfrequenz.",
   },
 };
 
