@@ -221,11 +221,17 @@ class TestDirectionMismatch:
         assert "fast_source_mismatch" not in out.report.flags
 
     def test_unknown_mode_string_falls_back_to_onoff(self) -> None:
-        """Non-directional strings (auto/dry/...) skip the direction check."""
+        """Non-directional strings (auto/heat_cool/...) skip the direction check.
+
+        Since §24 ``"dry"`` is DIRECTIONAL (cooling side): a unit drying while
+        commanded to HEAT is a real divergence and must flag the mismatch.
+        """
         controller = RoomController(ControllerConfig(), name="salon")
         controller.step(self._heating_split("heat"), dt_seconds=300.0)
-        out = controller.step(self._heating_split("dry"), dt_seconds=300.0)
+        out = controller.step(self._heating_split("auto"), dt_seconds=300.0)
         assert "fast_source_mismatch" not in out.report.flags
+        drying = controller.step(self._heating_split("dry"), dt_seconds=300.0)
+        assert "fast_source_mismatch" in drying.report.flags
 
 
 class TestFarewellSync:
@@ -351,3 +357,64 @@ class TestIncumbentHysteresis:
         modes = self._step_conflict(building, t_heat_room=19.0, t_cool_room=23.3)
         assert modes["south"] is FastSourceMode.COOLING
         assert modes["north"] is None
+
+
+def _dry_grouped(**overrides: object) -> RoomInputs:
+    """COOLING split room in the shared group, at setpoint, muggy air."""
+    base: dict[str, object] = {
+        "mode": Mode.COOLING,
+        "setpoint_c": 24.0,
+        "room_temperature_c": 24.0,
+        "humidity_pct": 70.0,
+        "fast_source_kind": FastSourceKind.SPLIT,
+        "fast_source_group": _GROUP,
+    }
+    base.update(overrides)
+    return make_inputs(**base)  # type: ignore[arg-type]
+
+
+_DRY_ROOM_CFG = ControllerConfig(dry_enabled=True, dry_dew_max_c=15.0)
+
+
+class TestDryGroupArbiter:
+    """§24: DRY counts as the cooling side of a shared outdoor unit."""
+
+    def test_dry_and_cooling_coexist_in_one_group(self) -> None:
+        """A drying room and a boosting cooler share the aggregate conflict-free."""
+        building = BuildingController(
+            {"south": ControllerConfig(), "north": _DRY_ROOM_CFG}
+        )
+        out = building.step(
+            {
+                # South: 1.5 K over setpoint -> a genuine COOLING boost.
+                "south": _dry_grouped(room_temperature_c=25.5, humidity_pct=None),
+                # North: at setpoint but muggy -> DRY.
+                "north": _dry_grouped(),
+            },
+            dt_seconds=300.0,
+        )
+        assert out.rooms["south"].fast_source.mode is FastSourceMode.COOLING
+        assert out.rooms["north"].fast_source.mode is FastSourceMode.DRY
+        for name in ("south", "north"):
+            assert out.rooms[name].fast_source.on is True
+            assert "fast_source_group_conflict" not in out.rooms[name].report.flags
+
+    def test_dry_loses_to_a_heating_claim(self) -> None:
+        """DRY vs HEATING is a real conflict and the dry room (excess 0) loses."""
+        building = BuildingController(
+            {"south": ControllerConfig(), "north": _DRY_ROOM_CFG}
+        )
+        out = building.step(
+            {
+                # South: undercooled TRANSITIONAL room -> wants HEATING
+                # (excess 1.2 K beats the dry room's in-band 0.0).
+                "south": _transitional(room_temperature_c=19.5),
+                # North: at setpoint but muggy -> asks for DRY.
+                "north": _dry_grouped(),
+            },
+            dt_seconds=300.0,
+        )
+        assert out.rooms["south"].fast_source.on is True
+        assert out.rooms["south"].fast_source.mode is FastSourceMode.HEATING
+        assert out.rooms["north"].fast_source.on is False
+        assert "fast_source_group_conflict" in out.rooms["north"].report.flags

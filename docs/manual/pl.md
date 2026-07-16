@@ -393,6 +393,35 @@ udziału w chłodzeniu (kreator to wymusza).
   Przegrany jest przymusowo wyłączony (flaga `fast_source_group_conflict`) i wraca
   dopiero po zmianie kierunku grupy, przechodząc pełny czas postoju.
 
+### Osuszanie wspomagające (opcjonalne; od v0.15.0)
+
+Podłoga chłodzi wyłącznie **jawnie** — nigdy nie wykrapla wilgoci (tego pilnuje
+ochrona rosy, §9). Gdy więc w wilgotny dzień punkt rosy rośnie, robi się parno,
+a podłodze na dodatek **ubywa mocy** (rosnący bezpieczny punkt rosy podnosi wodę
+chłodzącą). Jedynym osuszaczem w systemie jest split — jego tryb **dry** zdejmuje
+wilgoć przy minimalnym schładzaniu. Po włączeniu parametru **„Osuszanie
+wspomagające"** (§8, grupa „Szybkie źródło"; domyślnie wyłączone):
+
+- **Start:** w trybie chłodzenia, gdy **punkt rosy pokoju** przekroczy **„Próg rosy
+  osuszania"** (domyślnie 17 °C — od ok. 17–18 °C rosy powietrze robi się lepkie),
+  split pokoju dostaje komendę **dry** — nawet gdy temperatura niczego nie woła.
+  Raport nosi flagę `dry_assist` (informacyjną).
+- **Stop:** rosa spadnie 1 K poniżej progu (histereza, stała) **albo** pokój
+  przechłodzi się poza strefę nieczułości. Wyłączenie przechodzi przez normalny
+  minimalny czas pracy.
+- **Priorytety:** dogrzew/dochłodzenie temperaturowe zawsze **wygrywa** z osuszaniem
+  (przejście dry→cool następuje od razu, bez cyklu przez OFF — to ta sama strona
+  freonu); ciche godziny i timery dwell obowiązują jak dla dogrzewu; grzałka nigdy
+  nie osusza. W grupie multisplit osuszanie liczy się jako kierunek chłodniczy —
+  współistnieje z chłodzeniem, a przegrywa z realnym żądaniem grzania.
+- **Premia dla podłogi:** osuszenie obniża punkt rosy → obniża globalny bezpieczny
+  punkt rosy → woda chłodząca może zejść niżej → **podłoga odzyskuje moc**. Pętla
+  jest samoograniczająca, a zimniejszej wody pilnuje bramka popytu wymuszania
+  startu (§11).
+- **Wymaganie sprzętowe:** encja climate splita musi zgłaszać tryb `dry`
+  (atrybut `hvac_modes`); bez niego komenda jest degradowana do OFF z flagą
+  ostrzegawczą `dry_unsupported`.
+
 ### Ciche godziny wspomagania
 
 Per pokój możesz ustawić **dozwolone godziny wspomagania** (konfiguracja pokoju,
@@ -524,6 +553,8 @@ automatycznie. Pełny słownik poniżej:
 | `fast_source_quiet_hours` | Ciche godziny wspomagania — pokój jest poza swoim oknem dozwolonych godzin (§10), split się nie załącza (pracujący kończy przez min. czas pracy). | Informacyjne. Okno zmienisz w konfiguracji pokoju. |
 | `fast_source_group_conflict` | Pokój przegrał arbitraż kierunku na wspólnym agregacie — jego split przymusowo OFF. | Nic — wróci po zmianie kierunku grupy. Jeśli częste: przemyśl korekty pokoi w grupie. |
 | `fast_source_cannot_cool` | Pokój chce chłodzić, ale jego szybkie źródło nie umie (grzałka). | Informacyjne. |
+| `dry_assist` | Osuszanie wspomagające (§10): punkt rosy pokoju przekroczył próg — split pracuje w trybie dry, choć temperatura niczego nie woła. | Informacyjne (zamierzone). Próg zmienisz w Strojeniu. |
+| `dry_unsupported` | Osuszanie chciało zadziałać, ale encja splita nie zgłasza trybu `dry` (atrybut `hvac_modes`) — komenda zdegradowana do OFF. | Sprawdź integrację splita albo wyłącz osuszanie dla pokoju. |
 | `cooling_disabled` | Pokój nie bierze udziału w chłodzeniu (opcja konfiguracji) — w trybie chłodzenia jest pomijany. | Zamierzone; zmień w opcjach pokoju, jeśli chcesz chłodzić. |
 | `flicker_pulsing` | Wymuszanie startu chłodzenia (Panasonic, §11): na ten jeden cykl nastawę obniżono do bezpiecznego dla rosy progu, by wytrącić sprężarkę z jej stałej histerezy 3 K powrotu; następny cykl przywraca normalną nastawę. | Informacyjne (zamierzone). |
 | `flicker_dew_blocked` | Wymuszenie startu byłoby uzbrojone, ale impuls musiałby przekroczyć surowy punkt rosy — brak zapasu na obniżenie nastawy; impuls wstrzymany. | Informacyjne; normalne w wilgotne dni. |

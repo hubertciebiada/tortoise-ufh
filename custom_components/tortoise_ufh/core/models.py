@@ -45,11 +45,20 @@ class FastSourceKind(Enum):
 
 
 class FastSourceMode(Enum):
-    """Commanded direction of the fast source."""
+    """Commanded direction of the fast source.
+
+    ``DRY`` (additive, 2026-07-16, DECISIONS §24) is the humidity-assist
+    command: cooling-SIDE refrigerant-wise (a split only), emitted when a
+    room's dew point — not its temperature — calls for the split. The
+    :class:`~tortoise_ufh.fast_source.FastSourceMachine` itself stays
+    three-state (OFF/HEATING/COOLING); DRY is a presentation of the COOLING
+    state chosen by the controller.
+    """
 
     OFF = "off"
     HEATING = "heating"
     COOLING = "cooling"
+    DRY = "dry"
 
 
 @dataclass(frozen=True)

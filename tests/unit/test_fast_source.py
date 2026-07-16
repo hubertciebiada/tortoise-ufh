@@ -778,3 +778,218 @@ class TestQuietHours:
         )
         assert out.fast_source.on is True
         assert "fast_source_quiet_hours" not in out.report.flags
+
+
+# ---------------------------------------------------------------------------
+# Dry assist (2026-07-16, DECISIONS §24)
+# ---------------------------------------------------------------------------
+
+
+def _dry_cfg(**overrides: object) -> ControllerConfig:
+    """A dry-assist config with fast dwells so releases are observable.
+
+    ``dry_dew_max_c = 15`` pairs with the humidity grid used below (room at
+    24 degC): RH 70 % -> dew ~18.2 (engages), RH 56 % -> dew ~14.7 (inside the
+    1 K hysteresis band: holds, never engages fresh), RH 52 % -> dew ~13.5
+    (releases).
+    """
+    base: dict[str, object] = {
+        "dry_enabled": True,
+        "dry_dew_max_c": 15.0,
+        "boost_offset_c": 1.0,
+        "deadband_c": 0.3,
+        "fast_min_on_minutes": 5.0,
+        "fast_min_off_minutes": 5.0,
+    }
+    base.update(overrides)
+    return ControllerConfig(**base)  # type: ignore[arg-type]
+
+
+def _dry_inputs(**overrides: object) -> RoomInputs:
+    """COOLING split room AT its setpoint with muggy air (dew ~18.2 degC)."""
+    base: dict[str, object] = {
+        "mode": Mode.COOLING,
+        "setpoint_c": 24.0,
+        "room_temperature_c": 24.0,
+        "humidity_pct": 70.0,
+        "fast_source_kind": FastSourceKind.SPLIT,
+    }
+    base.update(overrides)
+    return make_inputs(**base)  # type: ignore[arg-type]
+
+
+class TestDryAssist:
+    """Humidity-triggered split DRY: engage/hysteresis/priority (§24)."""
+
+    @pytest.mark.unit
+    def test_dry_engages_above_threshold(self) -> None:
+        """A room AT setpoint with dew above the knob gets ON + DRY."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        out = controller.step(_dry_inputs(), dt_seconds=300.0)
+        assert out.fast_source.on is True
+        assert out.fast_source.mode is FastSourceMode.DRY
+        # Dry mode self-regulates; no temperature target is commanded.
+        assert out.fast_source.target_temperature_c is None
+        assert "dry_assist" in out.report.flags
+
+    @pytest.mark.unit
+    def test_dry_is_off_by_default(self) -> None:
+        """Without the opt-in knob the muggy room commands nothing."""
+        controller = RoomController(_dry_cfg(dry_enabled=False), name="salon")
+        out = controller.step(_dry_inputs(), dt_seconds=300.0)
+        assert out.fast_source.on is False
+        assert "dry_assist" not in out.report.flags
+
+    @pytest.mark.unit
+    def test_heater_never_dries(self) -> None:
+        """A heater-kind fast source cannot dehumidify (nor cool)."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        out = controller.step(
+            _dry_inputs(fast_source_kind=FastSourceKind.HEATER), dt_seconds=300.0
+        )
+        assert out.fast_source.on is False
+        assert "dry_assist" not in out.report.flags
+
+    @pytest.mark.unit
+    def test_dry_only_in_cooling_mode(self) -> None:
+        """HEATING and TRANSITIONAL never emit a DRY command."""
+        for mode in (Mode.HEATING, Mode.TRANSITIONAL):
+            controller = RoomController(_dry_cfg(), name="salon")
+            out = controller.step(_dry_inputs(mode=mode), dt_seconds=300.0)
+            assert out.fast_source.mode is not FastSourceMode.DRY
+            assert "dry_assist" not in out.report.flags
+
+    @pytest.mark.unit
+    def test_no_humidity_blocks_dry(self) -> None:
+        """Without a dew point (no humidity) the dry assist stays quiet."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        out = controller.step(_dry_inputs(humidity_pct=None), dt_seconds=300.0)
+        assert out.fast_source.on is False
+
+    @pytest.mark.unit
+    def test_quiet_hours_block_dry(self) -> None:
+        """The B1 quiet-hours verdict also gates the dry assist."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        out = controller.step(_dry_inputs(fast_source_allowed=False), dt_seconds=300.0)
+        assert out.fast_source.on is False
+        assert "fast_source_quiet_hours" in out.report.flags
+
+    @pytest.mark.unit
+    def test_hysteresis_holds_then_releases(self) -> None:
+        """Dew inside the 1 K band holds a run; below the band it releases."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        engaged = controller.step(_dry_inputs(humidity_pct=70.0), dt_seconds=300.0)
+        assert engaged.fast_source.mode is FastSourceMode.DRY
+        # Dew ~14.7: below the 15.0 threshold but above 14.0 -> still drying.
+        held = controller.step(_dry_inputs(humidity_pct=56.0), dt_seconds=300.0)
+        assert held.fast_source.on is True
+        assert held.fast_source.mode is FastSourceMode.DRY
+        # Dew ~13.5: below the hysteresis band -> off (min-ON has elapsed).
+        released = controller.step(_dry_inputs(humidity_pct=52.0), dt_seconds=300.0)
+        assert released.fast_source.on is False
+
+    @pytest.mark.unit
+    def test_band_dew_never_engages_fresh(self) -> None:
+        """Dew inside the hysteresis band does not START a run."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        out = controller.step(_dry_inputs(humidity_pct=56.0), dt_seconds=300.0)
+        assert out.fast_source.on is False
+
+    @pytest.mark.unit
+    def test_overcooled_room_releases_dry(self) -> None:
+        """A room past the deadband BELOW setpoint stops drying."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        engaged = controller.step(_dry_inputs(), dt_seconds=300.0)
+        assert engaged.fast_source.mode is FastSourceMode.DRY
+        # error_c = 24.0 - 23.5 = +0.5 >= deadband 0.3 -> overcool guard.
+        released = controller.step(
+            _dry_inputs(room_temperature_c=23.5), dt_seconds=300.0
+        )
+        assert released.fast_source.on is False
+
+    @pytest.mark.unit
+    def test_boost_preempts_dry_same_cycle(self) -> None:
+        """A temperature boost flips DRY -> COOLING directly (no OFF cycle)."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        engaged = controller.step(_dry_inputs(), dt_seconds=300.0)
+        assert engaged.fast_source.mode is FastSourceMode.DRY
+        boosted = controller.step(
+            _dry_inputs(room_temperature_c=25.5),  # demand 1.5 K > boost 1.0
+            dt_seconds=300.0,
+        )
+        assert boosted.fast_source.on is True
+        assert boosted.fast_source.mode is FastSourceMode.COOLING
+        assert boosted.fast_source.target_temperature_c == pytest.approx(23.0)
+        assert "dry_assist" not in boosted.report.flags
+
+    @pytest.mark.unit
+    def test_dry_run_does_not_hold_a_sub_boost_temperature(self) -> None:
+        """Anti-inversion: a dry run must not lower the boost threshold.
+
+        After the dew releases, a temperature excess between the deadband and
+        the boost offset must NOT keep the split running as a cooler.
+        """
+        controller = RoomController(_dry_cfg(), name="salon")
+        engaged = controller.step(_dry_inputs(), dt_seconds=300.0)
+        assert engaged.fast_source.mode is FastSourceMode.DRY
+        out = controller.step(
+            # Dew released (RH 50 -> ~13.4); demand 0.5 K (deadband < d < boost).
+            _dry_inputs(room_temperature_c=24.5, humidity_pct=50.0),
+            dt_seconds=300.0,
+        )
+        assert out.fast_source.on is False
+
+    @pytest.mark.unit
+    def test_min_on_tail_stays_presented_as_dry(self) -> None:
+        """A dew release inside min-ON keeps the DRY presentation, not COOL."""
+        controller = RoomController(_dry_cfg(fast_min_on_minutes=10.0), name="salon")
+        engaged = controller.step(_dry_inputs(), dt_seconds=300.0)
+        assert engaged.fast_source.mode is FastSourceMode.DRY
+        # 5 min elapsed < 10 min min-ON: the machine re-emits its remembered
+        # COOLING, presented as DRY (gentler than cool-at-target for a
+        # satisfied room).
+        blocked = controller.step(_dry_inputs(humidity_pct=52.0), dt_seconds=300.0)
+        assert blocked.fast_source.on is True
+        assert blocked.fast_source.mode is FastSourceMode.DRY
+        assert "fast_source_min_runtime" in blocked.report.flags
+
+    @pytest.mark.unit
+    def test_mode_flip_mid_dry_drops_the_dry_presentation(self) -> None:
+        """A COOLING->HEATING flip inside min-ON must not keep writing dry.
+
+        Review finding (2026-07-16): the blocked tail re-emits the remembered
+        COOLING direction, and without the mode gate the DRY presentation
+        leaked into HEATING mode for the whole dwell remainder.
+        """
+        controller = RoomController(_dry_cfg(fast_min_on_minutes=10.0), name="salon")
+        engaged = controller.step(_dry_inputs(), dt_seconds=300.0)
+        assert engaged.fast_source.mode is FastSourceMode.DRY
+        # Global mode flips to HEATING 5 min in (< 10 min min-ON): the machine
+        # is dwell-blocked and re-emits its remembered COOLING — which must be
+        # presented as COOLING, never as DRY, outside cooling mode.
+        flipped = controller.step(_dry_inputs(mode=Mode.HEATING), dt_seconds=300.0)
+        assert flipped.fast_source.mode is not FastSourceMode.DRY
+        assert "dry_assist" not in flipped.report.flags
+
+    @pytest.mark.unit
+    def test_dry_feedback_is_not_a_mismatch(self) -> None:
+        """A unit reporting hvac dry (or cool) during a dry run is in sync."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        controller.step(_dry_inputs(), dt_seconds=300.0)
+        for feedback in ("dry", "cool"):
+            out = controller.step(
+                _dry_inputs(fast_source_on=True, fast_source_hvac_mode=feedback),
+                dt_seconds=300.0,
+            )
+            assert "fast_source_mismatch" not in out.report.flags
+
+    @pytest.mark.unit
+    def test_opposite_feedback_during_dry_is_a_mismatch(self) -> None:
+        """A unit physically HEATING while commanded DRY raises the mismatch."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        controller.step(_dry_inputs(), dt_seconds=300.0)
+        out = controller.step(
+            _dry_inputs(fast_source_on=True, fast_source_hvac_mode="heat"),
+            dt_seconds=300.0,
+        )
+        assert "fast_source_mismatch" in out.report.flags

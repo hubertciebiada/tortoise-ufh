@@ -223,7 +223,7 @@ def test_every_knob_has_label_and_tooltip_in_both_languages() -> None:
     """Each exposed knob has tune_<name> and tip_knob_<name> in pl AND en."""
     sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
     knobs = _knob_names()
-    assert len(knobs) == 27, f"expected 27 exposed knobs, parsed {knobs}"
+    assert len(knobs) == 29, f"expected 29 exposed knobs, parsed {knobs}"
     missing: list[str] = []
     for knob in knobs:
         for key in (f"tune_{knob}", f"tip_knob_{knob}"):

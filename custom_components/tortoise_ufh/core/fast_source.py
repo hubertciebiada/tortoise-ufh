@@ -37,8 +37,10 @@ from .models import (
 )
 
 __all__ = [
+    "DRY_HYSTERESIS_K",
     "FAST_TARGET_OFFSET_K",
     "FastSourceMachine",
+    "direction_of",
     "window_allows",
 ]
 
@@ -103,13 +105,45 @@ _HVAC_MODE_TO_DIRECTION: dict[str, FastSourceMode] = {
     "heating": FastSourceMode.HEATING,
     "cool": FastSourceMode.COOLING,
     "cooling": FastSourceMode.COOLING,
+    # DRY is cooling-SIDE refrigerant-wise (dry assist, DECISIONS §24): a unit
+    # reported in "dry" agrees with a commanded COOLING/DRY, conflicts with
+    # HEATING.
+    "dry": FastSourceMode.COOLING,
 }
 """Map of raw HVAC-mode feedback strings to a fast-source DIRECTION (K4).
 
-Only unambiguous single-direction modes are mapped; anything else (``"off"``,
-``"auto"``, ``"heat_cool"``, ``"dry"``, ``"fan_only"``, vendor strings) yields
-no direction and the reconciliation falls back to the plain on/off check.
+Only single-direction modes are mapped (``"dry"`` counts as the cooling side);
+anything else (``"off"``, ``"auto"``, ``"heat_cool"``, ``"fan_only"``, vendor
+strings) yields no direction and the reconciliation falls back to the plain
+on/off check.
 """
+
+DRY_HYSTERESIS_K: float = 1.0
+"""Release hysteresis of the dry assist below ``dry_dew_max_c`` [K] (§24).
+
+A dry run engages when the room dew point exceeds the knob and releases only
+once it falls this far below it. Deliberately a constant, not a knob: RH
+sensors are slow and noisy, and 1 K of dew-point hysteresis absorbs their
+jitter without another parameter.
+"""
+
+
+def direction_of(mode: FastSourceMode | None) -> FastSourceMode | None:
+    """Normalise a command mode to its refrigerant DIRECTION (§24).
+
+    ``DRY`` is the cooling side (a split's dry mode runs the same circuit
+    direction as cool); everything else maps to itself.
+
+    Args:
+        mode: A command mode, or ``None``.
+
+    Returns:
+        ``COOLING`` for ``DRY``, otherwise ``mode`` unchanged.
+    """
+    if mode is FastSourceMode.DRY:
+        return FastSourceMode.COOLING
+    return mode
+
 
 FAST_TARGET_OFFSET_K: float = 1.0
 """Split target offset from the room setpoint in HEATING/COOLING [K].
@@ -200,6 +234,16 @@ class FastSourceMachine:
         """Seconds left on the min ON/OFF lock, or ``None`` once elapsed."""
         return self._dwell_remaining_s
 
+    @property
+    def last_command_mode(self) -> FastSourceMode | None:
+        """Mode of the previously EMITTED command, or ``None`` before any (§24).
+
+        Lets the controller distinguish "the machine runs because of
+        temperature" (COOLING/HEATING) from "it runs because of humidity"
+        (DRY) — the two demands carry separate hysteresis states.
+        """
+        return self._prev_cmd_mode
+
     # -- public API -----------------------------------------------------------
 
     def sync(self, inputs: RoomInputs) -> None:
@@ -280,9 +324,12 @@ class FastSourceMachine:
             and self._prev_cmd_on
             and self._prev_cmd_mode is not None
             and reported is not None
-            and reported is not self._prev_cmd_mode
+            and reported is not direction_of(self._prev_cmd_mode)
         ):
             # On/off agrees but the unit runs the OPPOSITE direction (K4).
+            # Directions are compared refrigerant-side (§24): a commanded DRY
+            # normalises to COOLING, so a unit reporting "dry" or "cool" while
+            # dry-assisting is NOT a mismatch.
             self._mismatch = True
 
     def tick(self, dt_seconds: float) -> None:

@@ -85,6 +85,7 @@ a plausible grid instead of writing a raw curve/dew artefact.
 _HVAC_MODE_BY_FAST_SOURCE: dict[FastSourceMode, str] = {
     FastSourceMode.HEATING: "heat",
     FastSourceMode.COOLING: "cool",
+    FastSourceMode.DRY: "dry",
     FastSourceMode.OFF: "off",
 }
 
@@ -261,7 +262,7 @@ class CommandWriter:
 
     async def write_fast_source(
         self, entity_id: str | None, name: str, outputs: RoomOutputs
-    ) -> None:
+    ) -> bool:
         """Write the fast-source command to the room's climate entity.
 
         Issues ``set_hvac_mode`` and, when the split is on, ``set_temperature``.
@@ -274,17 +275,36 @@ class CommandWriter:
         :data:`_FAST_REASSERT_SECONDS` so a missed write or a manual override
         self-heals: the machine stays the owner.
 
+        Dry assist (§24): before writing a DRY command the entity's advertised
+        ``hvac_modes`` are checked (the same attribute-introspection pattern as
+        :meth:`hp_setpoint_step`). When the list EXISTS and lacks ``"dry"`` the
+        unit cannot dehumidify — ``"off"`` is written instead and ``True`` is
+        returned so the coordinator can flag ``dry_unsupported``. A missing
+        state/attribute assumes support (never block on an unreadable
+        attribute; the S4 mismatch catches a lying unit).
+
         Args:
             entity_id: The fast-source climate entity id, or ``None`` / empty.
             name: The room name (log context).
             outputs: The room's controller outputs.
+
+        Returns:
+            ``True`` when a DRY command was demoted to OFF because the entity
+            does not advertise a dry mode; ``False`` on every other path.
         """
         if not entity_id:
-            return
+            return False
         command = outputs.fast_source
         hvac_mode = (
             _HVAC_MODE_BY_FAST_SOURCE.get(command.mode, "off") if command.on else "off"
         )
+        dry_unsupported = False
+        if hvac_mode == "dry":
+            state = self._hass.states.get(entity_id)
+            supported = state.attributes.get("hvac_modes") if state else None
+            if isinstance(supported, list | tuple) and "dry" not in supported:
+                hvac_mode = "off"
+                dry_unsupported = True
         target = command.target_temperature_c if command.on else None
         cached = self._last_written_fast.get(entity_id)
         now_monotonic = time.monotonic()
@@ -294,7 +314,7 @@ class CommandWriter:
             and cached[1] == target
             and now_monotonic - cached[2] < _FAST_REASSERT_SECONDS
         ):
-            return
+            return dry_unsupported
         try:
             await self._hass.services.async_call(
                 "climate",
@@ -318,6 +338,7 @@ class CommandWriter:
             )
         else:
             self._last_written_fast[entity_id] = (hvac_mode, target, now_monotonic)
+        return dry_unsupported
 
     async def write_hp_mode(self, entity_id: str, option: str) -> bool:
         """Write a pump-mode option via ``select.select_option`` (B2).

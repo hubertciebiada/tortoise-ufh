@@ -225,6 +225,14 @@ Equivalent to ~2 g/kg absolute-humidity rise — a typical steady-state
 occupancy moisture load at normal residential ventilation rates.
 """
 
+_DRY_SENSIBLE_FRACTION: float = 0.3
+"""Sensible cooling delivered by a split's DRY mode, as a fraction of its
+rated power (dry assist, §24).
+
+The twin has no moisture state, so a DRY command's latent removal cannot be
+modelled; only this small sensible side-effect enters the thermal physics.
+"""
+
 
 def _saturation_vapour_pressure_hpa(t_c: float) -> float:
     """Magnus saturation vapour pressure [hPa] over water.
@@ -1048,6 +1056,12 @@ class BuildingSimulator:
                 fast_power = 0.0
             elif fs.mode is FastSourceMode.HEATING:
                 fast_power = r.fast_source_power_w
+            elif fs.mode is FastSourceMode.DRY:
+                # Dry assist (§24): the twin has NO moisture state (RH is a
+                # weather-driven input), so DRY is modelled ONLY as a small
+                # fraction of the split's sensible cooling power; the latent
+                # effect is outside the model.
+                fast_power = -_DRY_SENSIBLE_FRACTION * r.fast_source_power_w
             else:
                 fast_power = -r.fast_source_power_w
             r.apply_actions(

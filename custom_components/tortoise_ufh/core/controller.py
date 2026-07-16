@@ -37,7 +37,12 @@ from dataclasses import replace
 from .config import ControllerConfig
 from .const import DEW_MARGIN_DEFAULT_K
 from .dew_point import cooling_throttle_factor, dew_point
-from .fast_source import FAST_TARGET_OFFSET_K, FastSourceMachine  # noqa: F401
+from .fast_source import (  # noqa: F401
+    DRY_HYSTERESIS_K,
+    FAST_TARGET_OFFSET_K,
+    FastSourceMachine,
+    direction_of,
+)
 from .flow_watchdog import (
     CIRCULATION_DELTA_K,
     GLOBAL_SUPPLY_MARGIN_K,
@@ -1215,6 +1220,7 @@ class RoomController:
         fast = self._coordinate_fast_source(
             inputs=inputs,
             error_c=error_c,
+            room_dew_c=room_dew,
             flags=flags,
         )
 
@@ -1353,6 +1359,7 @@ class RoomController:
         *,
         inputs: RoomInputs,
         error_c: float,
+        room_dew_c: float | None,
         flags: list[str],
     ) -> FastSourceCommand:
         """Decide the fast-source command for HEATING/COOLING (step 14).
@@ -1375,9 +1382,27 @@ class RoomController:
         (:meth:`_apply_safety`) may still force the unit ON in an S3/S4
         emergency: room safety outranks acoustic comfort.
 
+        Dry assist (opt-in, 2026-07-16, DECISIONS §24): in COOLING a SPLIT may
+        also be called by HUMIDITY — the floor cools only sensibly and a
+        rising dew point simultaneously steals its capacity (the safe dew
+        point lifts the cooling water), so the split's latent capacity is the
+        only dehumidifier in the system. When ``config.dry_enabled`` and the
+        room dew point exceeds ``config.dry_dew_max_c`` (release at
+        ``- DRY_HYSTERESIS_K``, or when the room is overcooled past the
+        deadband), the machine is engaged exactly like a boost but the emitted
+        command mode is ``DRY`` (target ``None`` — dry mode self-regulates).
+        The machine itself stays three-state: DRY is a PRESENTATION of the
+        COOLING state, so dwells, group arbitration and the S3/S4 forces work
+        unchanged, and a temperature boost pre-empts DRY -> COOLING in the
+        same cycle without an OFF cycle (same refrigerant side). A dry run
+        does NOT lower the temperature-boost engage threshold: temperature
+        hysteresis stays keyed to a temperature-commanded run.
+
         Args:
             inputs: The room's raw inputs.
             error_c: ``setpoint - room_temp`` [K] (heating convention).
+            room_dew_c: The room dew point [degC], or ``None`` without
+                temperature + humidity (feeds the dry-assist trigger).
             flags: Mutable flag list (appended in place).
 
         Returns:
@@ -1407,17 +1432,61 @@ class RoomController:
                 flags.append("fast_source_cannot_cool")
             return self._fast.force_off()
 
-        want_on = (not quiet) and self._fast.want(
-            demand, engaged=self._fast.state is fs_mode
+        # Was the previous EMITTED command a dry run? Temperature and humidity
+        # carry SEPARATE hysteresis states: a dry run must not lower the
+        # temperature engage threshold to the deadband (anti-inversion), and a
+        # temperature run must not inherit the dry release band.
+        last_dry = (
+            self._fast.state is not FastSourceMode.OFF
+            and self._fast.last_command_mode is FastSourceMode.DRY
         )
+        temp_want = (not quiet) and self._fast.want(
+            demand, engaged=(self._fast.state is fs_mode and not last_dry)
+        )
+        dry_threshold = self._config.dry_dew_max_c - (
+            DRY_HYSTERESIS_K if last_dry else 0.0
+        )
+        dry_want = (
+            self._config.dry_enabled
+            and inputs.mode is Mode.COOLING
+            and inputs.fast_source_kind is FastSourceKind.SPLIT
+            and not quiet
+            and room_dew_c is not None
+            and error_c < self._config.deadband_c  # overcool guard
+            and room_dew_c > dry_threshold
+        )
+
         offset_k = self._config.fast_target_offset_k
-        return self._fast.decide(
-            want_on=want_on,
+        decision = self._fast.decide(
+            want_on=temp_want or dry_want,
             fs_mode=fs_mode,
             target_heating=inputs.setpoint_c + offset_k,
             target_cooling=inputs.setpoint_c - offset_k,
             flags=flags,
         )
+        if (
+            inputs.mode is Mode.COOLING
+            and decision.on
+            and decision.mode is FastSourceMode.COOLING
+            and not temp_want
+            and (dry_want or last_dry)
+        ):
+            # Humidity, not temperature, holds the split: present the COOLING
+            # state as a DRY command. Target None — splits self-regulate in
+            # dry and mostly ignore/reject a temperature there. ``last_dry``
+            # keeps the presentation through a min-ON blocked tail (the dew
+            # released but the dwell has not elapsed): the machine re-emits
+            # its remembered COOLING, and staying in dry is gentler than
+            # flipping a satisfied room to cool-at-target for the remainder.
+            # The whole branch is gated on the CURRENT mode being COOLING —
+            # without it a global flip to HEATING mid-dry would keep writing
+            # "dry" through the blocked tail (review finding, 2026-07-16).
+            decision = FastSourceCommand(
+                on=True, mode=FastSourceMode.DRY, target_temperature_c=None
+            )
+            if "dry_assist" not in flags:
+                flags.append("dry_assist")
+        return decision
 
     @staticmethod
     def _governing_supply(inputs: RoomInputs) -> float | None:
@@ -1857,12 +1926,17 @@ class BuildingController:
 
         for group, members in groups.items():
             on_rooms = [n for n in members if rooms[n].fast_source.on]
-            directions = {rooms[n].fast_source.mode for n in on_rooms}
+            # Directions compare refrigerant-side (§24): a DRY command counts
+            # as the cooling side, so DRY + COOLING coexist on one aggregate
+            # and only DRY vs HEATING is a real conflict.
+            directions = {direction_of(rooms[n].fast_source.mode) for n in on_rooms}
             if len(directions) <= 1:
                 # No conflict; a single running direction still claims the
                 # incumbency (K2) so a later challenger faces the hysteresis.
                 if len(directions) == 1:
-                    self._group_last_winner[group] = next(iter(directions))
+                    winner_dir = next(iter(directions))
+                    if winner_dir is not None:
+                        self._group_last_winner[group] = winner_dir
                 continue
             pinned = {
                 n
@@ -1870,7 +1944,7 @@ class BuildingController:
                 if self._controllers[n].fast_source_locked_on
                 or self._is_safety_forced(rooms[n])
             }
-            pinned_dirs = {rooms[n].fast_source.mode for n in pinned}
+            pinned_dirs = {direction_of(rooms[n].fast_source.mode) for n in pinned}
             if len(pinned_dirs) == 1:
                 winner = next(iter(pinned_dirs))
             elif pinned_dirs:
@@ -1880,9 +1954,10 @@ class BuildingController:
                 continue
             else:
                 winner = self._arbitrate_by_excess(group, inputs, rooms, on_rooms)
-            self._group_last_winner[group] = winner
+            if winner is not None:
+                self._group_last_winner[group] = winner
             for n in on_rooms:
-                if rooms[n].fast_source.mode is not winner:
+                if direction_of(rooms[n].fast_source.mode) is not winner:
                     rooms[n] = self._controllers[n].resolve_group_conflict(rooms[n])
 
     def _arbitrate_by_excess(
@@ -1916,7 +1991,13 @@ class BuildingController:
         """
         best_excess: dict[FastSourceMode, float] = {}
         for n in on_rooms:
-            mode = rooms[n].fast_source.mode
+            # Refrigerant-side normalisation (§24): a DRY room's claim counts
+            # toward the cooling side. Its band excess is ~0 (the room is in
+            # band by definition of a dry run), so a dry-only side is the
+            # weakest possible claimant and loses to any temperature demand.
+            mode = direction_of(rooms[n].fast_source.mode)
+            if mode is None:
+                continue
             excess = self._band_excess_k(inputs[n], n)
             if excess > best_excess.get(mode, -1.0):
                 best_excess[mode] = excess
@@ -1924,7 +2005,7 @@ class BuildingController:
             self._controllers[n].fast_source_entry_direction
             for n in on_rooms
             if self._controllers[n].fast_source_entry_direction
-            is rooms[n].fast_source.mode
+            is direction_of(rooms[n].fast_source.mode)
         } - {FastSourceMode.OFF}
         incumbent: FastSourceMode | None = None
         if len(entry_dirs) == 1:

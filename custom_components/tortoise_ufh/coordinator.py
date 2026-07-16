@@ -1134,7 +1134,22 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 if runtime is None or self.get_room_state(name) != ROOM_STATE_LIVE:
                     continue
                 await self._write_valves(room_cfg, name, runtime.outputs, inputs[name])
-                await self._write_fast_source(room_cfg, name, runtime.outputs)
+                if await self._write_fast_source(room_cfg, name, runtime.outputs):
+                    # Dry assist demoted to OFF: the climate entity does not
+                    # advertise a "dry" hvac mode (§24). Surface it on the
+                    # room like the S8 valve_mismatch merge above.
+                    report = replace(
+                        runtime.report,
+                        flags=tuple(
+                            dict.fromkeys((*runtime.report.flags, "dry_unsupported"))
+                        ),
+                    )
+                    outputs_flagged = replace(runtime.outputs, report=report)
+                    rooms[name] = RoomRuntime(
+                        outputs=outputs_flagged,
+                        report=report,
+                        setpoint_c=runtime.setpoint_c,
+                    )
 
         # Optional heat-pump link (B2): computed AND written (when gated) at
         # the end of the cycle so the freshly computed global safe dew point
@@ -1855,7 +1870,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
     async def _write_fast_source(
         self, room_cfg: dict[str, Any], name: str, outputs: RoomOutputs
-    ) -> None:
+    ) -> bool:
         """Write the room's fast-source command through the writer.
 
         Thin delegate to :meth:`CommandWriter.write_fast_source` (which owns
@@ -1865,8 +1880,13 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             room_cfg: The room's configuration dict.
             name: The room name.
             outputs: The room's controller outputs.
+
+        Returns:
+            ``True`` when a DRY command was demoted to OFF because the climate
+            entity advertises no dry mode (§24) — the caller flags the room
+            with ``dry_unsupported``.
         """
-        await self._writer.write_fast_source(
+        return await self._writer.write_fast_source(
             room_cfg.get(CONF_ENTITY_FAST_SOURCE), name, outputs
         )
 

@@ -428,6 +428,38 @@ das).
   und kehrt erst nach einem Richtungswechsel der Gruppe zurück, wobei er die volle
   Stillstandszeit durchläuft.
 
+### Entfeuchtungs-Assistent (optional; ab v0.15.0)
+
+Der Boden kühlt ausschließlich **sensibel** — er kondensiert nie Feuchte aus
+(dafür sorgt der Taupunktschutz, §9). Steigt an einem schwülen Tag der Taupunkt,
+wird die Luft stickig, und dem Boden geht zusätzlich **Leistung verloren** (der
+steigende sichere Taupunkt hebt das Kühlwasser an). Der einzige Entfeuchter im
+System ist der Split — sein **dry**-Modus entzieht Feuchte bei minimaler
+Abkühlung. Nach dem Aktivieren des Parameters **„Entfeuchtungs-Assistent"**
+(§8, Gruppe „Zusatzquelle"; standardmäßig aus):
+
+- **Start:** Im Kühlbetrieb, sobald der **Taupunkt des Raums** die
+  **„Taupunktschwelle der Entfeuchtung"** überschreitet (Standard 17 °C — ab
+  ~17–18 °C Taupunkt wirkt die Luft klebrig), erhält der Split des Raums den
+  Befehl **dry** — auch ohne jede Temperaturanforderung. Der Bericht trägt die
+  Meldung `dry_assist` (informativ).
+- **Stopp:** Der Taupunkt fällt 1 K unter die Schwelle (feste Hysterese) **oder**
+  der Raum unterkühlt über das Totband hinaus. Das Abschalten durchläuft die
+  normale Mindestlaufzeit.
+- **Prioritäten:** Ein Temperatur-Boost **gewinnt** immer gegen die Entfeuchtung
+  (der Wechsel dry→cool erfolgt sofort, ohne OFF-Zyklus — dieselbe
+  Kältemittelseite); Ruhezeiten und Dwell-Timer gelten wie beim Boost; ein
+  Heizgerät entfeuchtet nie. In einer Multisplit-Gruppe zählt die Entfeuchtung
+  als Kühlrichtung — sie koexistiert mit dem Kühlen und verliert gegen eine
+  echte Heizanforderung.
+- **Bonus für den Boden:** Entfeuchten senkt den Taupunkt → senkt den globalen
+  sicheren Taupunkt → das Kühlwasser darf tiefer → **der Boden gewinnt Leistung
+  zurück**. Die Schleife begrenzt sich selbst; das kältere Wasser überwacht die
+  Bedarfsschwelle des Kühlstart-Erzwingens (§11).
+- **Hardware-Voraussetzung:** Die Climate-Entität des Splits muss den Modus
+  `dry` melden (Attribut `hvac_modes`); fehlt er, wird der Befehl mit der
+  Warnmeldung `dry_unsupported` auf AUS herabgestuft.
+
 ### Ruhezeiten der Zusatzquelle
 
 Je Raum können Sie **erlaubte Zeiten der Zusatzquelle** festlegen (Raumkonfiguration,
@@ -568,6 +600,8 @@ Das vollständige Verzeichnis unten:
 | `fast_source_quiet_hours` | Ruhezeiten der Zusatzquelle — der Raum ist außerhalb seines Fensters erlaubter Zeiten (§10), der Split schaltet sich nicht ein (ein laufender beendet seine Mindestlaufzeit). | Informativ. Das Fenster ändern Sie in der Raumkonfiguration. |
 | `fast_source_group_conflict` | Der Raum hat die Richtungsabwägung am gemeinsamen Außengerät verloren — sein Split zwangsweise AUS. | Nichts — er kehrt nach einem Richtungswechsel der Gruppe zurück. Wenn häufig: Überdenken Sie die Offsets der Räume in der Gruppe. |
 | `fast_source_cannot_cool` | Der Raum möchte kühlen, aber seine Zusatzquelle kann es nicht (Heizgerät). | Informativ. |
+| `dry_assist` | Entfeuchtungs-Assistent (§10): Der Taupunkt des Raums hat die Schwelle überschritten — der Split läuft im dry-Modus, obwohl die Temperatur nichts anfordert. | Informativ (beabsichtigt). Schwelle in der Feineinstellung änderbar. |
+| `dry_unsupported` | Die Entfeuchtung wollte starten, aber die Split-Entität meldet keinen `dry`-Modus (Attribut `hvac_modes`) — Befehl auf AUS herabgestuft. | Prüfen Sie die Split-Integration oder deaktivieren Sie die Entfeuchtung für den Raum. |
 | `cooling_disabled` | Der Raum nimmt nicht an der Kühlung teil (Konfigurationsoption) — im Kühlmodus wird er übersprungen. | Beabsichtigt; ändern Sie es in den Raumoptionen, wenn Sie kühlen möchten. |
 | `flicker_pulsing` | Kühlstart erzwingen (Panasonic, §11): Für diesen einen Zyklus wurde der Sollwert auf den taupunktsicheren Boden gesenkt, um den Verdichter aus seiner festen 3-K-Rücklaufhysterese zu lösen; der nächste Zyklus stellt den normalen Sollwert wieder her. | Informativ (beabsichtigt). |
 | `flicker_dew_blocked` | Ein erzwungener Start wäre scharf, aber ein Impuls müsste den rohen Taupunkt überschreiten — kein Spielraum, den Sollwert zu senken; der Impuls wird zurückgehalten. | Informativ; an feuchten Tagen normal. |

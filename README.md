@@ -136,7 +136,10 @@ explanation of what it did and why.
   the PI loop does the rest.
 - **Optional heat-pump link & quiet hours** — an opt-in link can steer the heat pump's mode
   and cooling/heating water setpoints (always honouring domestic-hot-water priority), and each
-  room can restrict its fast source to an allowed time window. An optional, Panasonic-specific
+  room can restrict its fast source to an allowed time window. An opt-in **dry assist** engages
+  a room's split in its dry mode when the dew point climbs past a comfort threshold — the floor
+  cools only sensibly, so the split's latent capacity is the system's only dehumidifier, and
+  drying the air also lets the cooling water drop, restoring floor capacity on muggy days. An optional, Panasonic-specific
   **force cooling start** (a one-cycle setpoint drop) can trip the compressor out of its fixed
   3 K return-water deadband when rooms still call for cooling, for colder average water at a
   dew-safe return — but only when the calling rooms' loop-weighted valve opening clears a

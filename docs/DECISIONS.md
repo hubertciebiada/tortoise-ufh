@@ -1337,3 +1337,62 @@ prefill, silently overwriting the stored value on any unrelated save. Rule adopt
 ceiling is floored by the stored/prefill value** (`flicker_open_max_pct(..., current_value=...)` +
 the schema helper widens `max` to the prefill) — an over-ceiling value always round-trips
 unchanged; the user may keep or LOWER it, never raise it further.
+
+## 24. Dry assist — humidity-triggered split DRY, presented off the COOLING state (2026-07-16, v0.15.0)
+
+**Problem (owner observation, a muggy non-heatwave day):** rooms at setpoint, floor cooling
+nicely, but humidity — and the dew point — climbing hard; air feels sticky/stale. The system was
+structurally blind to it: every fast-source trigger is temperature-based, and the floor cools only
+SENSIBLY (S2 exists precisely so it never condenses a gram of moisture). Worse, the coupling runs
+backwards: a rising dew point lifts the global safe dew point, which lifts the cooling-water
+floor, which strips the floor of capacity exactly when the air is muggy. The only dehumidifier in
+the system is the split — its DRY mode removes latent heat at minimal sensible cooling. Owner
+calibration: air feels stale from a REAL dew point of ~17-18 degC (safe dew 19-20 observed), so
+the default threshold is 17.0 degC. Ventilation is out of scope (the recuperator manages itself).
+
+**Decision: a latent branch in the fast-source coordination — DRY as a PRESENTATION of the
+COOLING state, not a fourth machine state.** The three-state `FastSourceMachine`
+(OFF/HEATING/COOLING, dwells, direction changes through OFF) is untouched; the controller's
+`_coordinate_fast_source` computes a `dry_want` beside the temperature `want` and, when the
+machine runs ON+COOLING with no temperature demand, emits the command as `FastSourceMode.DRY`
+(additive member on the frozen contract; target `None` — splits self-regulate in dry). Because
+the machine state stays COOLING: dwell timers, S3/S4 forces, `locked_on` and the multisplit
+arbitration all work unchanged, and a temperature boost pre-empts DRY -> COOLING in the same
+cycle with no OFF cycle (same refrigerant side).
+
+- **Trigger/release:** `dry_enabled` (bool, default OFF) + `dry_dew_max_c` (default 17.0, range
+  [12, 22]) — both per-room overridable. Engage when the room dew point exceeds the knob;
+  release `DRY_HYSTERESIS_K` (1 K, a CONSTANT — RH sensors are slow/noisy) below it, or as soon
+  as the room overcools past the deadband. Cooling mode + SPLIT kind + quiet-hours-allowed +
+  usable dew point required; the persistence comes free from the dwell discipline.
+- **Separate hysteresis states:** a dry run must not lower the temperature engage threshold to
+  the deadband (anti-inversion) — temperature `want` is keyed `engaged` only when the previous
+  emitted command was a TEMPERATURE run (`FastSourceMachine.last_command_mode`). A dew release
+  inside min-ON keeps the DRY presentation for the blocked tail (gentler than cool-at-target).
+- **Direction normalisation (`fast_source.direction_of`):** DRY counts as the cooling side
+  everywhere directions are compared — S4 sync (feedback "dry" now maps to COOLING; a unit
+  drying while commanded to HEAT is a real mismatch) and the group arbiter (DRY + COOLING
+  coexist on one aggregate; DRY vs HEATING conflicts and the dry room, band excess 0, is the
+  weakest claimant and loses).
+- **Adapter:** writer maps DRY -> hvac "dry"; before writing it introspects the entity's
+  `hvac_modes` (the `hp_setpoint_step` pattern) — a list without "dry" demotes the command to
+  OFF and the coordinator merges the `dry_unsupported` flag (valve_mismatch pattern). A missing
+  state/attribute assumes support (S4 catches liars). New flag `dry_assist` (info, assist).
+- **Twin:** no moisture state exists, so DRY is modelled ONLY as `_DRY_SENSIBLE_FRACTION = 0.3`
+  of the split's rated power, sensible; the latent effect is outside the model (documented).
+- **System bonus:** drying lowers the room dew point -> lowers the global safe dew point -> the
+  cooling water may drop -> the floor RECOVERS capacity. Self-limiting loop; the colder water's
+  compressor cycling is already guarded by the §23 demand gate.
+
+**Deliberately NOT built:** no humidity PID or RH% control variable (RH is temperature-dependent;
+the dew point measures stickiness directly and is already computed per cycle), no fourth machine
+state, no TRANSITIONAL-mode drying (v1 is COOLING-only), no new dwell knobs, no ventilation
+control. No config migration (both knobs have defaults).
+
+**Review finding folded in before release (the mode-flip leak):** the DRY presentation rode the
+min-ON blocked tail across a global COOLING -> HEATING flip — the machine re-emits its remembered
+COOLING while dwell-blocked, and the presentation branch (keyed on `last_dry`) kept rewriting it
+to "dry" every cycle until the dwell elapsed, in a home already heating. Fix: the presentation
+branch is gated on the CURRENT mode being COOLING; outside it the blocked tail falls back to the
+pre-§24 behaviour (remembered COOLING with its target). Regression-pinned by
+`test_mode_flip_mid_dry_drops_the_dry_presentation`.

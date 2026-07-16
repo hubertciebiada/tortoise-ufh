@@ -88,6 +88,17 @@ class ControllerConfig:
             OUR room sensor (S12, 2026-07-09). ``0`` disables the overdrive
             (the split gets the plain setpoint). TRANSITIONAL always uses the
             plain setpoint regardless of this knob.
+        dry_enabled: Opt-in dry assist (default ``False``; 2026-07-16,
+            DECISIONS §24): in COOLING a SPLIT is engaged in its DRY mode when
+            the room dew point exceeds ``dry_dew_max_c`` even though the
+            temperature calls for nothing — the floor cools only sensibly and
+            a rising dew point steals its capacity, so the split's latent
+            capacity is the system's only dehumidifier. Per-room overridable.
+        dry_dew_max_c: Room dew point above which the dry assist engages
+            [degC] (in [12, 22]; default 17 from the owner's observation —
+            air feels stale from a real dew point of ~17-18 degC). Releases
+            ``DRY_HYSTERESIS_K`` (1 K, a constant) below, or as soon as the
+            room is overcooled past the deadband. Per-room overridable.
         dew_margin_k: Supply-above-dew gap [K] at (and above) which the local
             cooling throttle is fully OPEN (>= 0). Semantics revised
             2026-07-12 (K6): the ramp ENDS here — this is the same design gap
@@ -194,6 +205,9 @@ class ControllerConfig:
     fast_min_on_minutes: float = 10.0
     fast_min_off_minutes: float = 10.0
     fast_target_offset_k: float = 1.0
+    # Dry assist (2026-07-16, DECISIONS §24): humidity-triggered split DRY.
+    dry_enabled: bool = False
+    dry_dew_max_c: float = 17.0
     dew_margin_k: float = 2.0
     dew_ramp_k: float = 2.0
     # Optional heat-pump water setpoints (B2, 2026-07-12): global knobs read
@@ -235,7 +249,8 @@ class ControllerConfig:
                 ``[0, 100]``, a margin/threshold is negative, ``dew_ramp_k`` or
                 ``cycle_seconds`` is non-positive, ``boost_offset_c`` does
                 not exceed ``deadband_c``, ``fast_target_offset_k`` is outside
-                ``[0, 3]``, or a heat-pump water knob is outside its range
+                ``[0, 3]``, ``dry_dew_max_c`` is outside ``[12, 22]``, or a
+                heat-pump water knob is outside its range
                 (``cooling_supply_base_c`` [10, 25], ``heating_supply_base_c``
                 [20, 40], ``heating_supply_slope`` [0, 2]), a flicker knob is
                 out of range (``hp_flicker_band_k`` [0.5, 3.0],
@@ -293,6 +308,9 @@ class ControllerConfig:
                 "fast_target_offset_k must be in [0, 3], got "
                 f"{self.fast_target_offset_k}"
             )
+            raise ValueError(msg)
+        if not 12.0 <= self.dry_dew_max_c <= 22.0:
+            msg = f"dry_dew_max_c must be in [12, 22], got {self.dry_dew_max_c}"
             raise ValueError(msg)
         if self.dew_margin_k < 0:
             msg = f"dew_margin_k must be >= 0, got {self.dew_margin_k}"

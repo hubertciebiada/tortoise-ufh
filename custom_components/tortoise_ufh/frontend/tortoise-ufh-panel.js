@@ -214,6 +214,7 @@ const STR = {
     assist_state_off: "wył.",
     assist_state_heating: "grzeje",
     assist_state_cooling: "chłodzi",
+    assist_state_dry: "osusza",
     kind_split: "Klimatyzator (split)",
     kind_heater: "Grzałka elektryczna",
     detail_close: "Zamknij",
@@ -290,6 +291,8 @@ const STR = {
     tune_fast_min_on_minutes: "Minimalny czas pracy wspomagania",
     tune_fast_min_off_minutes: "Minimalny czas postoju wspomagania",
     tune_fast_target_offset_k: "Podbicie nastawy wspomagania",
+    tune_dry_enabled: "Osuszanie wspomagające",
+    tune_dry_dew_max_c: "Próg rosy osuszania",
     tune_dew_margin_k: "Margines bezpieczeństwa nad punktem rosy",
     tune_dew_ramp_k: "Szerokość rampy dławienia chłodzenia",
     tune_outdoor_ff_enabled: "Człon pogodowy włączony",
@@ -404,6 +407,18 @@ const STR = {
       "cieplej niż czujnik pokojowy — bez podbicia split dławi się przed " +
       "dostarczeniem dogrzewu. O wyłączeniu i tak decyduje czujnik pokojowy. " +
       "0 = bez podbicia (split dostaje dokładnie zadaną). Domyślnie 1 K.",
+    tip_knob_dry_enabled:
+      "W chłodzeniu split (tylko klimatyzator) jest załączany w trybie " +
+      "osuszania, gdy punkt rosy pokoju przekroczy próg — nawet gdy " +
+      "temperatura niczego nie woła. Podłoga chłodzi tylko jawnie i nie umie " +
+      "osuszać, a rosnąca rosa podnosi wodę chłodzącą i zabiera jej moc; " +
+      "osuszenie obniża rosę i uwalnia podłogę. Dogrzew/dochłodzenie " +
+      "temperaturowe ma zawsze pierwszeństwo. Domyślnie wyłączone.",
+    tip_knob_dry_dew_max_c:
+      "Punkt rosy pokoju, powyżej którego startuje osuszanie [°C]. " +
+      "Zwolnienie 1 K poniżej progu (histereza) albo gdy pokój przechłodzi " +
+      "się poza martwą strefę. Domyślnie 17 °C — od ok. 17–18 °C rosy " +
+      "powietrze robi się lepkie.",
     tip_knob_dew_margin_k:
       "Chłodzenie: gdy zasilanie jest co najmniej o tyle K powyżej punktu " +
       "rosy, zawór działa bez ograniczeń; bliżej rosy zaczyna się dławienie " +
@@ -752,6 +767,7 @@ const STR = {
     assist_state_off: "off",
     assist_state_heating: "heating",
     assist_state_cooling: "cooling",
+    assist_state_dry: "drying",
     kind_split: "Air-con (split)",
     kind_heater: "Electric heater",
     detail_close: "Close",
@@ -828,6 +844,8 @@ const STR = {
     tune_fast_min_on_minutes: "Assist minimum run time",
     tune_fast_min_off_minutes: "Assist minimum rest time",
     tune_fast_target_offset_k: "Assist target overdrive",
+    tune_dry_enabled: "Dry assist",
+    tune_dry_dew_max_c: "Dry-assist dew-point threshold",
     tune_dew_margin_k: "Safety margin above the dew point",
     tune_dew_ramp_k: "Cooling throttle ramp width",
     tune_outdoor_ff_enabled: "Weather feedforward enabled",
@@ -925,6 +943,18 @@ const STR = {
       "itself before the boost is delivered. Release is still decided by " +
       "the room sensor. 0 = no overdrive (the split gets the plain " +
       "setpoint). Default 1 K.",
+    tip_knob_dry_enabled:
+      "In cooling, the split (air-con only) is engaged in its dry mode when " +
+      "the room dew point exceeds the threshold — even with no temperature " +
+      "call. The floor cools only sensibly and cannot dehumidify, and a " +
+      "rising dew point lifts the cooling water and steals the floor's " +
+      "capacity; drying lowers the dew point and frees the floor. A " +
+      "temperature boost always takes priority. Off by default.",
+    tip_knob_dry_dew_max_c:
+      "Room dew point above which the dry assist engages [°C]. Releases 1 K " +
+      "below the threshold (hysteresis) or as soon as the room overcools " +
+      "past the deadband. Default 17 °C — air starts feeling sticky from a " +
+      "dew point of ~17–18 °C.",
     tip_knob_dew_margin_k:
       "Cooling: while supply is at least this many K above the dew point the " +
       "valve runs unrestricted; closer to the dew point the flow gets " +
@@ -1297,6 +1327,7 @@ const STR = {
     assist_state_off: "aus",
     assist_state_heating: "heizt",
     assist_state_cooling: "kühlt",
+    assist_state_dry: "entfeuchtet",
     kind_split: "Klimagerät (Split)",
     kind_heater: "Elektroheizung",
     detail_close: "Schließen",
@@ -1373,6 +1404,8 @@ const STR = {
     tune_fast_min_on_minutes: "Mindestlaufzeit der Zusatzquelle",
     tune_fast_min_off_minutes: "Mindeststillstandszeit der Zusatzquelle",
     tune_fast_target_offset_k: "Sollwert-Überhöhung der Zusatzquelle",
+    tune_dry_enabled: "Entfeuchtungs-Assistent",
+    tune_dry_dew_max_c: "Taupunktschwelle der Entfeuchtung",
     tune_dew_margin_k: "Sicherheitsmarge über dem Taupunkt",
     tune_dew_ramp_k: "Rampenbreite der Kühldrosselung",
     tune_outdoor_ff_enabled: "Wettervorsteuerung aktiviert",
@@ -1472,6 +1505,19 @@ const STR = {
       "bevor der Boost geliefert wird. Über das Abschalten entscheidet weiterhin der " +
       "Raumsensor. 0 = keine Überhöhung (der Split erhält den reinen Sollwert). " +
       "Standard 1 K.",
+    tip_knob_dry_enabled:
+      "Beim Kühlen wird der Split (nur Klimagerät) in seinem Entfeuchtungsmodus " +
+      "eingeschaltet, sobald der Taupunkt des Raums die Schwelle überschreitet — " +
+      "auch ohne Temperaturanforderung. Der Boden kühlt nur sensibel und kann " +
+      "nicht entfeuchten; ein steigender Taupunkt hebt das Kühlwasser an und " +
+      "nimmt dem Boden Leistung. Entfeuchten senkt den Taupunkt und gibt dem " +
+      "Boden Leistung zurück. Ein Temperatur-Boost hat immer Vorrang. " +
+      "Standardmäßig aus.",
+    tip_knob_dry_dew_max_c:
+      "Taupunkt des Raums, oberhalb dessen die Entfeuchtung startet [°C]. " +
+      "Freigabe 1 K unter der Schwelle (Hysterese) oder sobald der Raum über " +
+      "das Totband hinaus unterkühlt. Standard 17 °C — ab ~17–18 °C Taupunkt " +
+      "wirkt die Luft stickig.",
     tip_knob_dew_margin_k:
       "Kühlung: solange der Vorlauf mindestens so viele K über dem Taupunkt liegt, " +
       "läuft das Ventil uneingeschränkt; näher am Taupunkt wird der Durchfluss " +
@@ -2033,6 +2079,47 @@ const FLAG_LABELS = {
     descDe:
       "Der Raum möchte kühlen, aber seine Zusatzquelle ist ein Heizgerät (kann nicht kühlen). Informativ.",
   },
+  dry_assist: {
+    pl: "Osuszanie wspomagające",
+    en: "Dry assist",
+    de: "Entfeuchtungs-Assistent",
+    sev: "info", sx: null, group: "assist",
+    descPl:
+      "Punkt rosy pokoju przekroczył próg osuszania — split pracuje w trybie " +
+      "osuszania, choć temperatura niczego nie woła. Obniżenie rosy pozwala " +
+      "też obniżyć wodę chłodzącą i uwalnia moc podłogi. Zamierzony stan; " +
+      "dogrzew/dochłodzenie temperaturowe ma pierwszeństwo.",
+    descEn:
+      "The room dew point exceeded the dry-assist threshold — the split runs " +
+      "in dry mode although temperature calls for nothing. Lowering the dew " +
+      "point also lets the cooling water drop, freeing floor capacity. " +
+      "Intentional; a temperature boost takes priority.",
+    descDe:
+      "Der Taupunkt des Raums hat die Entfeuchtungsschwelle überschritten — " +
+      "der Split läuft im Entfeuchtungsmodus, obwohl die Temperatur nichts " +
+      "anfordert. Ein niedrigerer Taupunkt senkt auch das Kühlwasser und gibt " +
+      "dem Boden Leistung zurück. Beabsichtigt; ein Temperatur-Boost hat " +
+      "Vorrang.",
+  },
+  dry_unsupported: {
+    pl: "Split bez trybu osuszania",
+    en: "Split has no dry mode",
+    de: "Split ohne Entfeuchtungsmodus",
+    sev: "warn", sx: null, group: "assist",
+    descPl:
+      "Osuszanie chciało zadziałać, ale encja climate splita nie zgłasza " +
+      "trybu „dry\" (atrybut hvac_modes) — komenda została zdegradowana do " +
+      "OFF. Sprawdź integrację splita albo wyłącz osuszanie dla tego pokoju.",
+    descEn:
+      "The dry assist wanted to engage but the split's climate entity does " +
+      "not advertise a \"dry\" hvac mode — the command was demoted to OFF. " +
+      "Check the split's integration or disable the dry assist for this room.",
+    descDe:
+      "Der Entfeuchtungs-Assistent wollte starten, aber die Climate-Entität " +
+      "des Splits meldet keinen „dry\"-Modus (Attribut hvac_modes) — der " +
+      "Befehl wurde auf AUS herabgestuft. Prüfen Sie die Split-Integration " +
+      "oder deaktivieren Sie die Entfeuchtung für diesen Raum.",
+  },
   sensor_lost: {
     pl: "Utrata czujnika",
     en: "Sensor lost",
@@ -2197,6 +2284,8 @@ const KNOB_GROUPS = [
       "fast_min_on_minutes",
       "fast_min_off_minutes",
       "fast_target_offset_k",
+      "dry_enabled",
+      "dry_dew_max_c",
     ],
   },
   {
@@ -3509,9 +3598,11 @@ class TortoiseUfhPanel extends HTMLElement {
       return { text: short + ": " + this._t("assist_state_off"), cls: "off" };
     }
     const verb =
-      r.fastMode === "cooling"
-        ? this._t("assist_state_cooling")
-        : this._t("assist_state_heating");
+      r.fastMode === "dry"
+        ? this._t("assist_state_dry")
+        : r.fastMode === "cooling"
+          ? this._t("assist_state_cooling")
+          : this._t("assist_state_heating");
     const target = r.fastTarget !== null ? " → " + fmt(r.fastTarget, 1, " °C") : "";
     return { text: short + ": " + verb + target, cls: "on" };
   }
@@ -3531,9 +3622,11 @@ class TortoiseUfhPanel extends HTMLElement {
       return { text: this._t("assist_state_off"), cls: "off" };
     }
     const verb =
-      r.fastMode === "cooling"
-        ? this._t("assist_state_cooling")
-        : this._t("assist_state_heating");
+      r.fastMode === "dry"
+        ? this._t("assist_state_dry")
+        : r.fastMode === "cooling"
+          ? this._t("assist_state_cooling")
+          : this._t("assist_state_heating");
     return { text: verb, cls: "on" };
   }
 
@@ -5863,6 +5956,8 @@ class TortoiseUfhPanel extends HTMLElement {
       "fast_source_cannot_cool",
       "fast_source_group_conflict",
       "fast_source_mismatch",
+      "dry_assist",
+      "dry_unsupported",
     ]) {
       if (r.flags.includes(f)) {
         p.flags.appendChild(this._chip(f));

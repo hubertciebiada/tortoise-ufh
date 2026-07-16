@@ -307,6 +307,9 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     # A knob since 2026-07-13 (owner request): the S12 boost overdrive of the
     # split target beyond the room setpoint; 0 disables (plain setpoint).
     ("fast_target_offset_k", 0.0, 3.0, 0.5),
+    # Dry assist (2026-07-16, §24): room dew point above which a split is
+    # engaged in DRY; default 17 from the owner's stale-air observation.
+    ("dry_dew_max_c", 12.0, 22.0, 0.5),
     # Lower bound 0.5 K (D4, 2026-07-12): margin 0 degenerates the local
     # dew-point throttle ramp into a hard on/off step at the dew point.
     ("dew_margin_k", 0.5, 10.0, 0.1),
@@ -354,13 +357,15 @@ default. The non-tuning bookkeeping fields ``cycle_seconds`` /
 
 CONTROLLER_BOOL_KNOBS: tuple[str, ...] = (
     "outdoor_ff_enabled",
+    "dry_enabled",
     "hp_flicker_enabled",
 )
 """Boolean :class:`~tortoise_ufh.config.ControllerConfig` knobs, exposed
 alongside :data:`CONTROLLER_NUMBER_KNOBS`: the outdoor-temperature feedforward
-switch and the opt-in cooling setpoint-flicker master switch (issue #7,
-2026-07-15 — the flicker on/off is a global tuning knob so it renders as a
-toggle in the panel's flicker group and the options-flow settings step)."""
+switch, the opt-in dry assist (humidity-triggered split DRY; 2026-07-16, §24)
+and the opt-in cooling setpoint-flicker master switch (issue #7,
+2026-07-15 — each on/off is a tuning knob so it renders as a
+toggle in its panel group and the options-flow settings step)."""
 
 CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "kp": "%/K",
@@ -372,6 +377,8 @@ CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "fast_min_on_minutes": "min",
     "fast_min_off_minutes": "min",
     "fast_target_offset_k": "K",
+    "dry_dew_max_c": "°C",
+    "dry_enabled": "",
     "dew_margin_k": "K",
     "dew_ramp_k": "K",
     "ff_neutral_c": "°C",
