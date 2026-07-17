@@ -156,13 +156,17 @@ def _global_watchdog_status(data: CoordinatorData, _room: str | None) -> str:
 def _global_hp_flicker_state(data: CoordinatorData, _room: str | None) -> str:
     """Return the force-cooling-start state (``idle`` / ``pulse`` / ``cooldown``).
 
-    ``idle`` when the flicker payload is absent (feature disabled and no
-    diagnostic entities configured) — the machine cannot pulse then, so the
-    recorded history stays truthful.
+    The flicker payload lives on the heat-pump runtime
+    (``data.heat_pump.flicker``, issue #8 — reading it off ``data`` directly
+    raised and rendered the sensor permanently unavailable). ``idle`` when the
+    payload is absent (link not configured, or feature disabled with no
+    diagnostic entities) — the machine cannot pulse then, so the recorded
+    history stays truthful.
     """
-    if data.flicker is None:
+    hp = data.heat_pump
+    if hp is None or hp.flicker is None:
         return "idle"
-    return str(data.flicker.get("state", "idle"))
+    return str(hp.flicker.get("state", "idle"))
 
 
 # ---------------------------------------------------------------------------

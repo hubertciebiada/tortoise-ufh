@@ -103,6 +103,65 @@ async def test_global_status_sensors(hass: HomeAssistant, setup_integration) -> 
     assert isinstance(datetime.fromisoformat(last_update.state), datetime)
 
 
+async def test_global_hp_flicker_state_never_unavailable(
+    hass: HomeAssistant, setup_integration
+) -> None:
+    """Issue #8: the flicker-state sensor renders a real state, not unavailable.
+
+    The v0.17.0 extractor read ``data.flicker`` (no such field on
+    ``CoordinatorData``) and the AttributeError left the entity permanently
+    unavailable — with an empty recorder history under the forced-starts-24h
+    panel counter.
+    """
+    entry_id = setup_integration.entry_id
+    coordinator = setup_integration.runtime_data.coordinator
+
+    state = _state(hass, entry_id, f"{entry_id}_hp_flicker_state")
+    assert state.state not in _UNSET
+    hp = coordinator.data.heat_pump
+    expected = (
+        "idle" if hp is None or hp.flicker is None else hp.flicker.get("state", "idle")
+    )
+    assert state.state == expected
+
+
+async def test_global_hp_flicker_state_reads_heat_pump_payload(
+    hass: HomeAssistant, setup_integration
+) -> None:
+    """The sensor mirrors ``data.heat_pump.flicker`` through the REAL runtime.
+
+    A synthetic ``data.flicker`` attribute would mask issue #8 — the payload
+    must travel on :class:`HeatPumpRuntime`, exactly as the coordinator
+    builds it.
+    """
+    from dataclasses import replace
+
+    from custom_components.tortoise_ufh.coordinator import HeatPumpRuntime
+
+    entry_id = setup_integration.entry_id
+    coordinator = setup_integration.runtime_data.coordinator
+
+    runtime = HeatPumpRuntime(
+        mode_entity_id=None,
+        current_option=None,
+        desired_option=None,
+        in_sync=None,
+        dhw_active=False,
+        dhw_only=False,
+        cooling=None,
+        heating=None,
+        hp_active=None,
+        hp_active_configured=False,
+        writes_enabled=False,
+        flicker={"enabled": True, "state": "cooldown"},
+    )
+    coordinator.async_set_updated_data(replace(coordinator.data, heat_pump=runtime))
+    await hass.async_block_till_done()
+
+    state = _state(hass, entry_id, f"{entry_id}_hp_flicker_state")
+    assert state.state == "cooldown"
+
+
 @pytest.mark.parametrize("room", ["salon", "lazienka"])
 async def test_room_pi_term_sensors_reflect_report(
     hass: HomeAssistant, setup_integration, room: str

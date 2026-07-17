@@ -1496,3 +1496,14 @@ exactly when he is saving knobs would quietly lie.
 - The volatile last-hour row STAYS next to the new one: it is the flicker's own live view (and
   feeds the `max_starts_per_h` guard); the 24 h row is the durable statistic. Extending the
   in-memory deque to 24 h was rejected precisely because of the reload-reset problem.
+
+**Post-release fix (v0.18.1, issue #8):** the shipped extractor read `data.flicker`, but
+`CoordinatorData` has no such field — the payload lives on `data.heat_pump.flicker`
+(`HeatPumpRuntime`). The AttributeError inside `native_value` rendered the sensor permanently
+`unavailable` with nothing logged, so the recorder history under the 24 h counter stayed empty
+— the feature was silently dead on the live install. Fixed to read through `heat_pump`
+(mirroring every other consumer); regression-pinned by two `tests/ha` tests, one of which
+routes the payload through the REAL `HeatPumpRuntime` (a synthetic `data.flicker` attribute
+would have masked the bug). Lesson: an extractor added to a description-driven entity family
+must be pinned against the REAL coordinator payload shape — `unavailable` is how a silent
+AttributeError presents.
