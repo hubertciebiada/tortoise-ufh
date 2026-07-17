@@ -1415,9 +1415,9 @@ constants in `WINDOWS`).
   chosen over spline smoothing (which invents values that were never measured and still keeps
   every point) and over epsilon/Douglas-Peucker simplification (which preserves the saw's extremes
   — exactly the noise being removed); it is also what the 7d stats path already does, so the three
-  windows now share one visual language. Buckets with only nulls stay null and a >2-bucket spacing
-  inserts an explicit gap, mirroring the stats-path outage handling. Valve samples are NOT
-  averaged.
+  windows now share one visual language. The series is split at explicit `unavailable` samples
+  FIRST and each run is bucketed independently (one null separator between runs), so real outages
+  keep their gap while sample spacing never creates one. Valve samples are NOT averaged.
 - **Valve draws step-after:** the recorder stores only changes, so a linear ramp between two
   sparse valve commands is fiction; each command now holds flat until the next sample and the last
   one extends to "now" (not across explicit gaps). The tooltip uses a matching `stepAt` lookup
@@ -1439,3 +1439,14 @@ constants in `WINDOWS`).
 - **Flags stay severity-coloured (deliberate):** flag chips (e.g. `dry_assist` = info/blue) encode
   SEVERITY, not direction — recolouring them by mode would break the annunciator's triage
   semantics, so they are intentionally unchanged.
+
+**Post-release fix (v0.16.1):** the shipped `bucketMean` inserted an explicit gap whenever
+bucketed points were spaced more than 2 buckets apart, "mirroring the stats-path outage
+handling". That rule is correct for statistics (a bucket exists for every recorded hour, so a
+missing row IS an outage) but wrong for raw history: the recorder stores only state CHANGES, so
+a temperature that sits still for 20 minutes produces no samples at all — absence means
+"unchanged", not "unknown". On the owner's live data this fabricated broken (dashed-looking)
+temperature and setpoint lines. Fixed by deriving gaps ONLY from explicit `unavailable` samples:
+the series is split via `segments()` before bucketing and each run is bucketed independently.
+The stepped valve rendering was reviewed with the owner and stays (honest for a hold-position
+command; "nie boli").

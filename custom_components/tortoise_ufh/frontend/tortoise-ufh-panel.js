@@ -2601,57 +2601,46 @@ function segments(points) {
  * Down-sample a series to per-bucket means on the absolute epoch grid.
  *
  * Buckets are `Math.floor(t / bucketMs)` (absolute, so consecutive refetches
- * land in the same buckets). A bucket with >= 1 finite sample becomes one
- * point at the mean sample time / mean value; a bucket with only nulls keeps
- * one explicit null (the gap survives). Afterwards an explicit null is
- * inserted between points spaced more than 2x `bucketMs` — mirroring the
- * stats-path gap handling in `_fetchOne` — so `segments()` breaks the line
- * instead of interpolating across the outage. Presentation only; a falsy
- * `bucketMs` returns the series untouched.
+ * land in the same buckets). The series is split at explicit null samples
+ * FIRST (via `segments()`) and each run is bucketed independently, with one
+ * null separator re-inserted between runs — so real `unavailable` outages
+ * keep their gap while sparse sampling never creates one. Recorder history
+ * stores only state CHANGES: a value that sits still for an hour yields no
+ * samples at all, and that absence means "unchanged", not "unknown", so
+ * bucket spacing must NOT be treated as an outage (that fabricated broken
+ * temperature lines). Presentation only; a falsy `bucketMs` returns the
+ * series untouched.
  */
 function bucketMean(points, bucketMs) {
   if (!bucketMs || !points.length) {
     return points;
   }
-  const bucketed = [];
-  let idx = null;
-  let tAll = 0;
-  let nAll = 0;
-  let tFin = 0;
-  let vFin = 0;
-  let nFin = 0;
-  const flush = () => {
-    if (!nAll) {
-      return;
-    }
-    bucketed.push(
-      nFin ? { t: tFin / nFin, v: vFin / nFin } : { t: tAll / nAll, v: null },
-    );
-    tAll = nAll = tFin = vFin = nFin = 0;
-  };
-  for (const p of points) {
-    const i = Math.floor(p.t / bucketMs);
-    if (idx !== null && i !== idx) {
-      flush();
-    }
-    idx = i;
-    tAll += p.t;
-    nAll += 1;
-    if (p.v != null && Number.isFinite(p.v)) {
-      tFin += p.t;
-      vFin += p.v;
-      nFin += 1;
-    }
-  }
-  flush();
   const out = [];
-  let prevT = null;
-  for (const pt of bucketed) {
-    if (prevT !== null && pt.t - prevT > bucketMs * 2) {
-      out.push({ t: prevT + bucketMs, v: null });
+  for (const seg of segments(points)) {
+    if (out.length) {
+      out.push({ t: seg[0].t, v: null });
     }
-    out.push(pt);
-    prevT = pt.t;
+    let idx = null;
+    let tSum = 0;
+    let vSum = 0;
+    let n = 0;
+    const flush = () => {
+      if (n) {
+        out.push({ t: tSum / n, v: vSum / n });
+        tSum = vSum = n = 0;
+      }
+    };
+    for (const p of seg) {
+      const i = Math.floor(p.t / bucketMs);
+      if (idx !== null && i !== idx) {
+        flush();
+      }
+      idx = i;
+      tSum += p.t;
+      vSum += p.v;
+      n += 1;
+    }
+    flush();
   }
   return out;
 }
