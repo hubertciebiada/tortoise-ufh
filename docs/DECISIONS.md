@@ -1455,6 +1455,12 @@ constants in `WINDOWS`).
   SEVERITY, not direction — recolouring them by mode would break the annunciator's triage
   semantics, so they are intentionally unchanged.
 
+**Addendum (v0.18.0):** the chart gained a fourth toggleable series — the room's HUMIDITY
+(`entity_humidity` source entity, already in the panel's config view; no backend change) as a
+thin green line on the EXISTING right % axis shared with the valve, bucket-smoothed like the
+temperature family. The right axis now renders when either the valve or humidity series has
+data.
+
 **Post-release fix (v0.16.1):** the shipped `bucketMean` inserted an explicit gap whenever
 bucketed points were spaced more than 2 buckets apart, "mirroring the stats-path outage
 handling". That rule is correct for statistics (a bucket exists for every recorded hour, so a

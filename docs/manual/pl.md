@@ -189,7 +189,9 @@ czasu biegnie cienkie **pasmo trybu splita** pokazujące, kiedy wspomaganie
 pracowało: **czerwone = grzanie, pomarańczowe = osuszanie, niebieskie =
 chłodzenie**; dymek nad wykresem pokazuje wtedy wiersz „Wspomaganie". Te same
 kolory noszą plakietki trybu wspomagania w tabeli Pokoje, w szczegółach pokoju
-i na zakładce Wspomaganie.
+i na zakładce Wspomaganie. Od v0.18.0 wykres rysuje też **wilgotność pokoju**
+(zielona linia na prawej osi %, tej samej co zawór; wygładzana jak temperatura)
+— pozycję w legendzie można klikać, by ją ukryć, jak każdą serię.
 
 Trudniejsze pola mają ikonę **„i" w kółku** — po najechaniu (komputer) albo
 tapnięciu (telefon) pojawia się dymek z objaśnieniem; Escape lub dotknięcie obok

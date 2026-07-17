@@ -208,7 +208,10 @@ schmales **Band des Split-Modus**, das zeigt, wann die Zusatzquelle lief:
 **Rot = Heizen, Orange = Entfeuchten, Blau = Kühlen**; die Sprechblase über dem
 Diagramm zeigt dann die Zeile „Assistenz“. Dieselben Farben tragen die
 Modus-Plaketten der Zusatzquelle in der Tabelle Räume, in den Raumdetails und
-auf dem Reiter Zusatzquelle.
+auf dem Reiter Zusatzquelle. Seit v0.18.0 zeichnet das Diagramm auch die
+**Luftfeuchte des Raums** (grüne Linie auf der rechten %-Achse, derselben wie
+das Ventil; geglättet wie die Temperatur) — per Klick in der Legende wie jede
+Serie ausblendbar.
 
 Schwierigere Felder haben ein **„i“ im Kreis** — beim Überfahren (Computer) oder
 Tippen (Telefon) erscheint eine Sprechblase mit Erläuterung; Escape oder eine

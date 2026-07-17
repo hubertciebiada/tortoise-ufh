@@ -230,6 +230,7 @@ const STR = {
     chart_temp: "Temperatura",
     chart_setpoint: "Zadana",
     chart_valve: "Zawór",
+    chart_hum: "Wilgotność",
     chart_error: "Uchyb",
     chart_split: "Wspomaganie",
     chart_loading: "Ładowanie historii…",
@@ -786,6 +787,7 @@ const STR = {
     chart_temp: "Temperature",
     chart_setpoint: "Setpoint",
     chart_valve: "Valve",
+    chart_hum: "Humidity",
     chart_error: "Error",
     chart_split: "Assist",
     chart_loading: "Loading history…",
@@ -1349,6 +1351,7 @@ const STR = {
     chart_temp: "Temperatur",
     chart_setpoint: "Sollwert",
     chart_valve: "Ventil",
+    chart_hum: "Luftfeuchte",
     chart_error: "Abweichung",
     chart_split: "Assistenz",
     chart_loading: "Verlauf wird geladen…",
@@ -2837,7 +2840,7 @@ class TortoiseUfhPanel extends HTMLElement {
     this._histInflight = new Map(); // key -> Promise<{at, data}> (dedup in-flight)
     this._chartRO = null; // ResizeObserver redrawing the detail chart on resize
     this._chartWindow = "24h"; // persisted across room switches
-    this._chartVisible = { temp: true, setpoint: true, valve: true };
+    this._chartVisible = { temp: true, setpoint: true, valve: true, hum: true };
 
     // If a host set `hass` before this element's definition was registered,
     // the own property shadows the setter; re-apply it through the setter.
@@ -6947,7 +6950,7 @@ class TortoiseUfhPanel extends HTMLElement {
 
     HI.legItems = {};
     HI.legend = h("div", { class: "chart-legend" });
-    for (const key of ["temp", "setpoint", "valve"]) {
+    for (const key of ["temp", "setpoint", "valve", "hum"]) {
       const val = h("span", { class: "leg-val" });
       const item = h(
         "button",
@@ -7059,6 +7062,7 @@ class TortoiseUfhPanel extends HTMLElement {
     }
     const wk = HI.window;
     const tempId = r.entities ? r.entities.entity_temp_room : null;
+    const humId = r.entities ? r.entities.entity_humidity : null;
     const diag = r.diagnosticEntities || {};
     const errorId = diag.error_c || null;
     const valveId = diag.recommended_valve || null;
@@ -7079,14 +7083,18 @@ class TortoiseUfhPanel extends HTMLElement {
       errorId ? this._series(errorId, wk) : empty,
       valveId ? this._series(valveId, wk) : empty,
       modeId ? this._series(modeId, wk, true) : empty,
+      humId ? this._series(humId, wk) : empty,
     ];
     const token = ++HI.token;
-    Promise.all(jobs).then(([te, ee, ve, me]) => {
+    Promise.all(jobs).then(([te, ee, ve, me, he]) => {
       // Stale guard: the detail was rebuilt or the window changed mid-flight.
       if (!this._detail || this._detail.history !== HI || HI.token !== token) {
         return;
       }
-      const sig = [wk, te.at, ee.at, ve.at, me.at, tempId, errorId, valveId, modeId].join("|");
+      const sig = [
+        wk, te.at, ee.at, ve.at, me.at, he.at,
+        tempId, errorId, valveId, modeId, humId,
+      ].join("|");
       if (!force && HI.sig === sig && HI.data) {
         return;
       }
@@ -7094,11 +7102,12 @@ class TortoiseUfhPanel extends HTMLElement {
 
       const end = Date.now();
       const t0 = end - WINDOWS[wk].hours * 3600 * 1000;
-      // Bucket-mean only the temperature-family series (presentation
+      // Bucket-mean only the measured continuous series (presentation
       // smoothing; the valve keeps every command and the mode is textual).
       const bucketMs = WINDOWS[wk].bucketMs || 0;
       const temp = bucketMean(te.data || [], bucketMs);
       const error = bucketMean(ee.data || [], bucketMs);
+      const hum = bucketMean(he.data || [], bucketMs);
       const valve = ve.data || [];
       const mode = me.data || [];
 
@@ -7124,7 +7133,7 @@ class TortoiseUfhPanel extends HTMLElement {
       // it today, so the band simply does not draw (honest "if available").
       const deadband = num(pick(r.report, ["deadband_c", "deadband"], null));
 
-      HI.data = { t0, t1: end, temp, setpoint, valve, error, deadband, mode };
+      HI.data = { t0, t1: end, temp, setpoint, valve, error, deadband, mode, hum };
       this._drawChart(HI);
     });
   }
@@ -7154,13 +7163,14 @@ class TortoiseUfhPanel extends HTMLElement {
     const hasTemp = this._hasReal(d.temp);
     const hasSp = this._hasReal(d.setpoint);
     const hasValve = this._hasReal(d.valve);
+    const hasHum = this._hasReal(d.hum);
 
-    if (!hasTemp && !hasSp && !hasValve) {
+    if (!hasTemp && !hasSp && !hasValve && !hasHum) {
       HI.ctx = null;
       HI.holder.textContent = "";
       HI.note.textContent = this._t("chart_nodata");
       HI.note.style.display = "";
-      this._updateLegend(HI, hasTemp, hasSp, hasValve);
+      this._updateLegend(HI, hasTemp, hasSp, hasValve, hasHum);
       return;
     }
     HI.note.style.display = "none";
@@ -7236,8 +7246,8 @@ class TortoiseUfhPanel extends HTMLElement {
       }
     }
 
-    // Right axis (valve %).
-    if (hasValve) {
+    // Right axis (valve / humidity %).
+    if (hasValve || hasHum) {
       for (const pct of [0, 25, 50, 75, 100]) {
         const y = yR(pct);
         if (!hasLeft) {
@@ -7373,6 +7383,14 @@ class TortoiseUfhPanel extends HTMLElement {
       }
     }
 
+    // Humidity line (right axis, thin — context behind the temperature pair).
+    if (hasHum && HI.visible.hum) {
+      const parts = this._lineParts(segments(d.hum), xOf, yR);
+      if (parts) {
+        svg.appendChild(s("path", { class: "s-hum", d: parts }));
+      }
+    }
+
     // Setpoint line (dashed).
     if (hasSp && HI.visible.setpoint) {
       const parts = this._lineParts(segments(d.setpoint), xOf, yL);
@@ -7400,7 +7418,7 @@ class TortoiseUfhPanel extends HTMLElement {
     });
     svg.appendChild(guide);
     const dots = {};
-    for (const key of ["valve", "setpoint", "temp"]) {
+    for (const key of ["valve", "hum", "setpoint", "temp"]) {
       const c = s("circle", {
         class: "chart-dot dot-" + key,
         r: "3.5",
@@ -7425,6 +7443,7 @@ class TortoiseUfhPanel extends HTMLElement {
     if (hasTemp && HI.visible.temp) collect(d.temp);
     if (hasSp && HI.visible.setpoint) collect(d.setpoint);
     if (hasValve && HI.visible.valve) collect(d.valve);
+    if (hasHum && HI.visible.hum) collect(d.hum);
     const anchors = [...anchorSet].sort((a, b) => a - b);
 
     HI.ctx = {
@@ -7446,12 +7465,13 @@ class TortoiseUfhPanel extends HTMLElement {
         temp: hasTemp && HI.visible.temp ? d.temp : null,
         setpoint: hasSp && HI.visible.setpoint ? d.setpoint : null,
         valve: hasValve && HI.visible.valve ? d.valve : null,
+        hum: hasHum && HI.visible.hum ? d.hum : null,
       },
       error: d.error && d.error.length ? d.error : null,
       modeRuns: bandRuns,
     };
 
-    this._updateLegend(HI, hasTemp, hasSp, hasValve);
+    this._updateLegend(HI, hasTemp, hasSp, hasValve, hasHum);
   }
 
   /** Build a multi-segment polyline `d` string, or null when nothing to draw. */
@@ -7470,7 +7490,14 @@ class TortoiseUfhPanel extends HTMLElement {
     return parts.length ? parts.join(" ") : null;
   }
 
-  _updateLegend(HI, hasTemp, hasSp, hasValve) {
+  /** Live humidity [%] from the room's configured sensor entity, or null. */
+  _roomHumidityPct(r) {
+    const id = r && r.entities ? r.entities.entity_humidity : null;
+    const st = id && this._hass && this._hass.states ? this._hass.states[id] : null;
+    return st ? parseState(st.state) : null;
+  }
+
+  _updateLegend(HI, hasTemp, hasSp, hasValve, hasHum) {
     const r = this._viewByName.get(HI.room) || {};
     const set = (key, val, digits, suffix, has) => {
       const it = HI.legItems[key];
@@ -7484,6 +7511,7 @@ class TortoiseUfhPanel extends HTMLElement {
     set("temp", r.current, 1, "°", hasTemp);
     set("setpoint", r.setpoint, 1, "°", hasSp);
     set("valve", r.valve, 0, "%", hasValve);
+    set("hum", this._roomHumidityPct(r), 0, "%", hasHum);
   }
 
   /**
@@ -7510,6 +7538,7 @@ class TortoiseUfhPanel extends HTMLElement {
     set("temp", r.current, 1, "°");
     set("setpoint", r.setpoint, 1, "°");
     set("valve", r.valve, 0, "%");
+    set("hum", this._roomHumidityPct(r), 0, "%");
   }
 
   /** Localised axis-tick time formatter for a window. */
@@ -7598,6 +7627,7 @@ class TortoiseUfhPanel extends HTMLElement {
     const tempV = place("temp", "L", 1, "°");
     const spV = place("setpoint", "L", 1, "°");
     place("valve", "R", 0, "%");
+    place("hum", "R", 0, "%");
 
     // Error row: measured error if available, else setpoint − temp.
     let errV = ctx.error ? interpAt(ctx.error, at) : null;
@@ -8231,6 +8261,7 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 .s-setpoint { fill: none; stroke: var(--t-muted); stroke-width: 1.5; stroke-dasharray: 5 3; stroke-linejoin: round; }
 .s-valve { fill: none; stroke: var(--t-accent); stroke-width: 1.5; stroke-linejoin: round; }
 .s-valve-area { fill: var(--t-accent); opacity: .13; stroke: none; }
+.s-hum { fill: none; stroke: var(--t-ok); stroke-width: 1.5; stroke-linejoin: round; opacity: .8; }
 /* Split-mode band under the time axis (fill) + its tooltip swatch (background). */
 .band-heating { fill: var(--t-heat); background: var(--t-heat); opacity: .85; }
 .band-cooling { fill: var(--t-cool); background: var(--t-cool); opacity: .85; }
@@ -8240,6 +8271,7 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 .dot-temp { fill: var(--t-primary); }
 .dot-setpoint { fill: var(--t-muted); }
 .dot-valve { fill: var(--t-accent); }
+.dot-hum { fill: var(--t-ok); }
 
 /* Chart legend (clickable series toggles) */
 .chart-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; }
@@ -8251,6 +8283,7 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 .leg-temp { background: var(--t-primary); }
 .leg-setpoint { background: var(--t-muted); }
 .leg-valve { background: var(--t-accent); }
+.leg-hum { background: var(--t-ok); }
 .leg-lab { font-size: 12px; color: var(--t-muted); }
 .leg-val { font-size: 12px; font-weight: 600; }
 
