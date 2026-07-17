@@ -415,11 +415,15 @@ wspomagające"** (§8, grupa „Szybkie źródło"; domyślnie wyłączone):
 
 - **Start:** w trybie chłodzenia, gdy **punkt rosy pokoju** przekroczy **„Próg rosy
   osuszania"** (domyślnie 17 °C — od ok. 17–18 °C rosy powietrze robi się lepkie),
-  split pokoju dostaje komendę **dry** — nawet gdy temperatura niczego nie woła.
-  Raport nosi flagę `dry_assist` (informacyjną).
+  a pokój jest **na nastawie lub cieplej** (split w dry też chłodzi, więc pokoju
+  już przechłodzonego nie dochładzamy dalej; od v0.17.1), split pokoju dostaje
+  komendę **dry** — nawet gdy temperatura niczego nie woła. Raport nosi flagę
+  `dry_assist` (informacyjną).
 - **Stop:** rosa spadnie 1 K poniżej progu (histereza, stała) **albo** pokój
   przechłodzi się poza strefę nieczułości. Wyłączenie przechodzi przez normalny
-  minimalny czas pracy.
+  minimalny czas pracy, a kolejny start wymaga powrotu temperatury do nastawy —
+  pełna histereza szerokości strefy nieczułości chroni sprężarkę przed
+  taktowaniem dry–pauza–dry.
 - **Priorytety:** dogrzew/dochłodzenie temperaturowe zawsze **wygrywa** z osuszaniem
   (przejście dry→cool następuje od razu, bez cyklu przez OFF — to ta sama strona
   freonu); ciche godziny i timery dwell obowiązują jak dla dogrzewu; grzałka nigdy

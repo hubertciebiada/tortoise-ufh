@@ -452,12 +452,16 @@ Abkühlung. Nach dem Aktivieren des Parameters **„Entfeuchtungs-Assistent"**
 
 - **Start:** Im Kühlbetrieb, sobald der **Taupunkt des Raums** die
   **„Taupunktschwelle der Entfeuchtung"** überschreitet (Standard 17 °C — ab
-  ~17–18 °C Taupunkt wirkt die Luft klebrig), erhält der Split des Raums den
-  Befehl **dry** — auch ohne jede Temperaturanforderung. Der Bericht trägt die
-  Meldung `dry_assist` (informativ).
+  ~17–18 °C Taupunkt wirkt die Luft klebrig) und der Raum **auf oder über dem
+  Sollwert** liegt (ein Split kühlt auch im Entfeuchten — ein bereits
+  unterkühlter Raum wird nicht weiter gekühlt; ab v0.17.1), erhält der Split
+  des Raums den Befehl **dry** — auch ohne jede Temperaturanforderung. Der
+  Bericht trägt die Meldung `dry_assist` (informativ).
 - **Stopp:** Der Taupunkt fällt 1 K unter die Schwelle (feste Hysterese) **oder**
   der Raum unterkühlt über das Totband hinaus. Das Abschalten durchläuft die
-  normale Mindestlaufzeit.
+  normale Mindestlaufzeit; der nächste Start braucht die Rückkehr der Temperatur
+  zum Sollwert — eine volle, totbandbreite Hysterese schützt den Verdichter vor
+  dem Takten dry–Pause–dry.
 - **Prioritäten:** Ein Temperatur-Boost **gewinnt** immer gegen die Entfeuchtung
   (der Wechsel dry→cool erfolgt sofort, ohne OFF-Zyklus — dieselbe
   Kältemittelseite); Ruhezeiten und Dwell-Timer gelten wie beim Boost; ein

@@ -420,10 +420,11 @@ const STR = {
       "osuszenie obniża rosę i uwalnia podłogę. Dogrzew/dochłodzenie " +
       "temperaturowe ma zawsze pierwszeństwo. Domyślnie wyłączone.",
     tip_knob_dry_dew_max_c:
-      "Punkt rosy pokoju, powyżej którego startuje osuszanie [°C]. " +
-      "Zwolnienie 1 K poniżej progu (histereza) albo gdy pokój przechłodzi " +
-      "się poza martwą strefę. Domyślnie 17 °C — od ok. 17–18 °C rosy " +
-      "powietrze robi się lepkie.",
+      "Punkt rosy pokoju, powyżej którego startuje osuszanie [°C]. Start " +
+      "tylko, gdy pokój jest na nastawie lub cieplej (split w dry też " +
+      "chłodzi). Zwolnienie 1 K poniżej progu (histereza) albo gdy pokój " +
+      "przechłodzi się poza martwą strefę. Domyślnie 17 °C — od ok. " +
+      "17–18 °C rosy powietrze robi się lepkie.",
     tip_knob_dew_margin_k:
       "Chłodzenie: gdy zasilanie jest co najmniej o tyle K powyżej punktu " +
       "rosy, zawór działa bez ograniczeń; bliżej rosy zaczyna się dławienie " +
@@ -958,10 +959,11 @@ const STR = {
       "capacity; drying lowers the dew point and frees the floor. A " +
       "temperature boost always takes priority. Off by default.",
     tip_knob_dry_dew_max_c:
-      "Room dew point above which the dry assist engages [°C]. Releases 1 K " +
-      "below the threshold (hysteresis) or as soon as the room overcools " +
-      "past the deadband. Default 17 °C — air starts feeling sticky from a " +
-      "dew point of ~17–18 °C.",
+      "Room dew point above which the dry assist engages [°C]. Engages only " +
+      "while the room is at or above its setpoint (a split cools in dry " +
+      "too). Releases 1 K below the threshold (hysteresis) or as soon as " +
+      "the room overcools past the deadband. Default 17 °C — air starts " +
+      "feeling sticky from a dew point of ~17–18 °C.",
     tip_knob_dew_margin_k:
       "Cooling: while supply is at least this many K above the dew point the " +
       "valve runs unrestricted; closer to the dew point the flow gets " +
@@ -1524,9 +1526,10 @@ const STR = {
       "Standardmäßig aus.",
     tip_knob_dry_dew_max_c:
       "Taupunkt des Raums, oberhalb dessen die Entfeuchtung startet [°C]. " +
-      "Freigabe 1 K unter der Schwelle (Hysterese) oder sobald der Raum über " +
-      "das Totband hinaus unterkühlt. Standard 17 °C — ab ~17–18 °C Taupunkt " +
-      "wirkt die Luft stickig.",
+      "Start nur, wenn der Raum auf oder über dem Sollwert liegt (ein Split " +
+      "kühlt auch im Entfeuchten). Freigabe 1 K unter der Schwelle " +
+      "(Hysterese) oder sobald der Raum über das Totband hinaus unterkühlt. " +
+      "Standard 17 °C — ab ~17–18 °C Taupunkt wirkt die Luft stickig.",
     tip_knob_dew_margin_k:
       "Kühlung: solange der Vorlauf mindestens so viele K über dem Taupunkt liegt, " +
       "läuft das Ventil uneingeschränkt; näher am Taupunkt wird der Durchfluss " +

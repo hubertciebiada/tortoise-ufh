@@ -1397,6 +1397,21 @@ branch is gated on the CURRENT mode being COOLING; outside it the blocked tail f
 pre-§24 behaviour (remembered COOLING with its target). Regression-pinned by
 `test_mode_flip_mid_dry_drops_the_dry_presentation`.
 
+**Post-release fix (v0.17.1, owner-observed short-cycling):** the shipped temperature gate was
+the single condition `error_c < deadband_c` for BOTH engage and keep — a zero-width hysteresis.
+A split blows cold air in dry too, so in a satisfied bedroom (valve ~4 %, dew above threshold)
+the loop flapped: dry engages a hair inside the deadband -> the run overcools past the deadband
+-> release -> min-OFF -> the room warms a hair -> dry again, with a period of just the dwell
+times ("dry..pauza..dry..pauza"). The boost never does this because its gate is
+engage-at-`boost_offset` / release-in-band. Fix (no new knob): the dry gate now mirrors that
+shape using the existing band — ENGAGE only while the room is at or above its setpoint
+(`error_c <= 0`), KEEP until the overcool release (`error_c < deadband_c`) — a full
+deadband-wide hysteresis. After a release the room must warm back TO the setpoint before the
+next run, so cycles are few and long (more latent work per compressor start). Regression-pinned
+by `test_slightly_overcooled_room_does_not_engage_dry`,
+`test_running_dry_keeps_through_sub_deadband_overcool` and
+`test_overcool_release_needs_return_to_setpoint_to_rearm`.
+
 ## 25. Readable history chart + split-mode band + unified mode colours (2026-07-17, v0.16.0)
 
 **Problem (owner):** the panel's 6h/24h history windows fetch raw recorder history (every state

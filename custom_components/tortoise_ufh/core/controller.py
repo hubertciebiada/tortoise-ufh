@@ -1386,11 +1386,14 @@ class RoomController:
         also be called by HUMIDITY — the floor cools only sensibly and a
         rising dew point simultaneously steals its capacity (the safe dew
         point lifts the cooling water), so the split's latent capacity is the
-        only dehumidifier in the system. When ``config.dry_enabled`` and the
+        only dehumidifier in the system. When ``config.dry_enabled``, the room
+        is at or above the setpoint (``error_c <= 0`` — engage side) and the
         room dew point exceeds ``config.dry_dew_max_c`` (release at
         ``- DRY_HYSTERESIS_K``, or when the room is overcooled past the
-        deadband), the machine is engaged exactly like a boost but the emitted
-        command mode is ``DRY`` (target ``None`` — dry mode self-regulates).
+        deadband — the temperature gate is a full deadband-wide hysteresis,
+        2026-07-17), the machine is engaged exactly like a boost but the
+        emitted command mode is ``DRY`` (target ``None`` — dry mode
+        self-regulates).
         The machine itself stays three-state: DRY is a PRESENTATION of the
         COOLING state, so dwells, group arbitration and the S3/S4 forces work
         unchanged, and a temperature boost pre-empts DRY -> COOLING in the
@@ -1446,13 +1449,22 @@ class RoomController:
         dry_threshold = self._config.dry_dew_max_c - (
             DRY_HYSTERESIS_K if last_dry else 0.0
         )
+        # Temperature gate with a REAL hysteresis (2026-07-17, owner-observed
+        # short-cycling): a split blows cold air in dry too, so with the single
+        # `error < deadband` threshold a satisfied room flapped
+        # dry -> overcool -> pause -> dry with a period of just the dwell
+        # times. Engage only when the room is AT or ABOVE the setpoint; a
+        # running dry may then cool it down to the deadband before the
+        # overcool release — a full band of hysteresis, mirroring the boost's
+        # engage-at-offset / release-in-band shape.
+        dry_temp_ok = error_c < self._config.deadband_c if last_dry else error_c <= 0.0
         dry_want = (
             self._config.dry_enabled
             and inputs.mode is Mode.COOLING
             and inputs.fast_source_kind is FastSourceKind.SPLIT
             and not quiet
             and room_dew_c is not None
-            and error_c < self._config.deadband_c  # overcool guard
+            and dry_temp_ok
             and room_dew_c > dry_threshold
         )
 

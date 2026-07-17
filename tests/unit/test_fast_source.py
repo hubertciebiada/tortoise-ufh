@@ -908,6 +908,56 @@ class TestDryAssist:
         assert released.fast_source.on is False
 
     @pytest.mark.unit
+    def test_slightly_overcooled_room_does_not_engage_dry(self) -> None:
+        """A fresh dry engage needs the room AT or ABOVE the setpoint.
+
+        Regression (2026-07-17, owner's bedroom): with the single
+        ``error < deadband`` gate a muggy room sitting a hair inside the
+        deadband re-engaged the moment min-OFF elapsed, short-cycling the
+        split dry -> overcool -> pause -> dry.
+        """
+        controller = RoomController(_dry_cfg(), name="salon")
+        # error_c = 24.0 - 23.8 = +0.2 < deadband 0.3, dew ~18 > 15: the old
+        # gate engaged here; the hysteretic engage side must not.
+        out = controller.step(_dry_inputs(room_temperature_c=23.8), dt_seconds=300.0)
+        assert out.fast_source.on is False
+        assert "dry_assist" not in out.report.flags
+
+    @pytest.mark.unit
+    def test_running_dry_keeps_through_sub_deadband_overcool(self) -> None:
+        """A RUNNING dry keeps drying until the deadband release (keep side)."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        engaged = controller.step(_dry_inputs(), dt_seconds=300.0)
+        assert engaged.fast_source.mode is FastSourceMode.DRY
+        # error_c = +0.2 is inside the keep band (< deadband 0.3): still DRY.
+        held = controller.step(_dry_inputs(room_temperature_c=23.8), dt_seconds=300.0)
+        assert held.fast_source.on is True
+        assert held.fast_source.mode is FastSourceMode.DRY
+
+    @pytest.mark.unit
+    def test_overcool_release_needs_return_to_setpoint_to_rearm(self) -> None:
+        """The owner's bedroom cycle: after an overcool release, dew alone
+        must not re-engage — the room has to warm back TO the setpoint."""
+        controller = RoomController(_dry_cfg(), name="salon")
+        engaged = controller.step(_dry_inputs(), dt_seconds=300.0)
+        assert engaged.fast_source.mode is FastSourceMode.DRY
+        # Overcooled past the deadband after min-ON: releases.
+        released = controller.step(
+            _dry_inputs(room_temperature_c=23.5), dt_seconds=300.0
+        )
+        assert released.fast_source.on is False
+        # min-OFF has elapsed and the air is still muggy, but the room is
+        # still 0.2 K below setpoint: the dwell is NOT what holds it off.
+        still_off = controller.step(
+            _dry_inputs(room_temperature_c=23.8), dt_seconds=300.0
+        )
+        assert still_off.fast_source.on is False
+        # Back at the setpoint: the next dry run may start.
+        rearmed = controller.step(_dry_inputs(), dt_seconds=300.0)
+        assert rearmed.fast_source.on is True
+        assert rearmed.fast_source.mode is FastSourceMode.DRY
+
+    @pytest.mark.unit
     def test_boost_preempts_dry_same_cycle(self) -> None:
         """A temperature boost flips DRY -> COOLING directly (no OFF cycle)."""
         controller = RoomController(_dry_cfg(), name="salon")
