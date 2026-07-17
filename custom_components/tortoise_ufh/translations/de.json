@@ -313,6 +313,9 @@
       },
       "watchdog_status": {
         "name": "Watchdog-Status"
+      },
+      "hp_flicker_state": {
+        "name": "Kühlstart erzwingen – Status"
       }
     },
     "binary_sensor": {

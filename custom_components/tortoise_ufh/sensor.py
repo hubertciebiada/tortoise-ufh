@@ -17,7 +17,7 @@ Per room (``EntityCategory.DIAGNOSTIC``):
     * ``trend_term`` — trend-damping contribution to the valve [percent].
     * ``room_dew_point`` — room dew-point temperature [degrees Celsius].
     * ``fast_source_mode`` — split direction text (``off`` / ``heating`` /
-      ``cooling``).
+      ``cooling`` / ``dry``).
     * ``explanation`` — short "what & why" text.
 
 Global (``EntityCategory.DIAGNOSTIC``):
@@ -28,6 +28,10 @@ Global (``EntityCategory.DIAGNOSTIC``):
     * ``last_update`` — timestamp of the last control cycle (device class
       TIMESTAMP).
     * ``watchdog_status`` — ``ok`` / ``stale``.
+    * ``hp_flicker_state`` — force-cooling-start machine state text (``idle`` /
+      ``pulse`` / ``cooldown``); its recorder history is the durable source the
+      panel counts forced starts from (the in-memory hourly counter resets on
+      every reload).
 
 Units: temperatures in degrees Celsius, valve position in percent, trend in
 kelvin per hour.
@@ -147,6 +151,18 @@ def _global_last_update(data: CoordinatorData, _room: str | None) -> datetime | 
 def _global_watchdog_status(data: CoordinatorData, _room: str | None) -> str:
     """Return the watchdog status (``ok`` / ``stale``)."""
     return data.watchdog_state
+
+
+def _global_hp_flicker_state(data: CoordinatorData, _room: str | None) -> str:
+    """Return the force-cooling-start state (``idle`` / ``pulse`` / ``cooldown``).
+
+    ``idle`` when the flicker payload is absent (feature disabled and no
+    diagnostic entities configured) — the machine cannot pulse then, so the
+    recorded history stays truthful.
+    """
+    if data.flicker is None:
+        return "idle"
+    return str(data.flicker.get("state", "idle"))
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +293,12 @@ GLOBAL_SENSORS: tuple[TortoiseUfhSensorEntityDescription, ...] = (
         translation_key="watchdog_status",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_global_watchdog_status,
+    ),
+    TortoiseUfhSensorEntityDescription(
+        key="hp_flicker_state",
+        translation_key="hp_flicker_state",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_global_hp_flicker_state,
     ),
 )
 

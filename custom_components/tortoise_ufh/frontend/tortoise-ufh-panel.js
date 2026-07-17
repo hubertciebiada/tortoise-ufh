@@ -694,6 +694,7 @@ const STR = {
     hp_flicker_stuck: "Utknięcie do impulsu",
     hp_flicker_cooldown: "Przerwa do końca",
     hp_flicker_pulses: "Wymuszone starty (ost. godz.)",
+    hp_flicker_pulses_24h: "Wymuszone starty (ost. 24 godz.)",
     hp_flicker_last_pulse: "Ostatni cel impulsu",
     hp_flicker_return: "Powrót / wlot",
     hp_flicker_outlet: "Wylot / zasilanie",
@@ -1206,6 +1207,7 @@ const STR = {
     hp_flicker_stuck: "Stuck to pulse",
     hp_flicker_cooldown: "Cooldown left",
     hp_flicker_pulses: "Forced starts (last h)",
+    hp_flicker_pulses_24h: "Forced starts (last 24 h)",
     hp_flicker_last_pulse: "Last pulse target",
     hp_flicker_return: "Return / inlet",
     hp_flicker_outlet: "Outlet / supply",
@@ -1776,6 +1778,7 @@ const STR = {
     hp_flicker_stuck: "Verharren bis Impuls",
     hp_flicker_cooldown: "Sperrzeit übrig",
     hp_flicker_pulses: "Erzwungene Starts (letzte h)",
+    hp_flicker_pulses_24h: "Erzwungene Starts (letzte 24 h)",
     hp_flicker_last_pulse: "Letztes Impulsziel",
     hp_flicker_return: "Rücklauf / Eintritt",
     hp_flicker_outlet: "Vorlauf / Austritt",
@@ -6219,6 +6222,7 @@ class TortoiseUfhPanel extends HTMLElement {
     P.flickerStuck = h("span", { class: "kv-val" });
     P.flickerCooldown = h("span", { class: "kv-val" });
     P.flickerPulses = h("span", { class: "kv-val" });
+    P.flickerPulses24h = h("span", { class: "kv-val" });
     P.flickerLastPulse = h("span", { class: "kv-val" });
     // Active GLOBAL flicker flags (not per-room, so the Rooms-tab annunciator
     // never surfaces them — they live here) rendered from FLAG_LABELS.
@@ -6244,6 +6248,7 @@ class TortoiseUfhPanel extends HTMLElement {
         flickerKv("hp_flicker_stuck", P.flickerStuck),
         flickerKv("hp_flicker_cooldown", P.flickerCooldown),
         flickerKv("hp_flicker_pulses", P.flickerPulses),
+        flickerKv("hp_flicker_pulses_24h", P.flickerPulses24h),
         flickerKv("hp_flicker_last_pulse", P.flickerLastPulse),
       ]),
       P.flickerFlags,
@@ -6427,7 +6432,45 @@ class TortoiseUfhPanel extends HTMLElement {
       P.flickerPulses.textContent =
         num(fl.pulses_last_hour) === null ? "—" : String(fl.pulses_last_hour);
       P.flickerLastPulse.textContent = fmt(fl.last_pulse_target_c, 1, " °C");
+      this._refreshFlickerPulses24h();
     }
+  }
+
+  /**
+   * Count forced compressor starts over the last 24 h and show them in the
+   * flicker card.
+   *
+   * Counted as rising edges into the "pulse" state in the recorder history of
+   * the global `hp_flicker_state` sensor — durable across HA restarts and
+   * entry reloads, unlike the in-memory last-hour counter (which resets on
+   * every tuning save). Cache-gated by `_series`, so the 5 s poll refetches
+   * at most once a minute; fails soft to an em dash.
+   */
+  _refreshFlickerPulses24h() {
+    const P = this._hpEls;
+    if (!P || !P.flickerPulses24h) {
+      return;
+    }
+    const id = this._config && this._config.hp_flicker_state_entity_id;
+    if (!id) {
+      P.flickerPulses24h.textContent = "—";
+      return;
+    }
+    this._series(id, "24h", true).then((entry) => {
+      const Pn = this._hpEls;
+      if (!Pn || !Pn.flickerPulses24h) {
+        return;
+      }
+      let count = 0;
+      let prev = null;
+      for (const p of entry.data || []) {
+        if (p.v === "pulse" && prev !== "pulse") {
+          count += 1;
+        }
+        prev = p.v;
+      }
+      Pn.flickerPulses24h.textContent = String(count);
+    });
   }
 
   /** Toggle the pump's +DHW flag (optimistic patch; the poll reconciles). */

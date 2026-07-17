@@ -130,9 +130,10 @@ _DIAGNOSTIC_SENSOR_KEYS: tuple[str, ...] = (
     "fast_source_mode",
 )
 
-# Global safe dew-point ``sensor`` key (see ``sensor.GLOBAL_SENSORS``); the
-# global unique id carries no room segment.
+# Global ``sensor`` keys (see ``sensor.GLOBAL_SENSORS``); global unique ids
+# carry no room segment.
 _GLOBAL_DEW_POINT_KEY: str = "global_safe_dew_point"
+_GLOBAL_FLICKER_STATE_KEY: str = "hp_flicker_state"
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +239,10 @@ class ConfigResult:
         global_safe_dew_point_entity_id: Registered entity id of the global
             safe dew-point ``sensor`` (the cooling-supply lower limit the owner
             feeds the heat pump), or ``None`` when the registry has no match.
+        hp_flicker_state_entity_id: Registered entity id of the global
+            force-cooling-start state ``sensor`` (``idle``/``pulse``/
+            ``cooldown``) — the panel counts forced starts over the last 24 h
+            from its recorder history — or ``None`` when unregistered.
         heat_pump: The configured heat-pump-link entity ids (B2, 2026-07-12)
             keyed by their ``CONF_ENTITY_HP_*`` names, or ``None`` when the
             section is not configured (the panel shows the empty state).
@@ -251,6 +256,7 @@ class ConfigResult:
     mode: str
     rooms: tuple[RoomConfigView, ...]
     global_safe_dew_point_entity_id: str | None = None
+    hp_flicker_state_entity_id: str | None = None
     heat_pump: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
@@ -269,6 +275,7 @@ class ConfigResult:
             "mode": self.mode,
             "rooms": [room.to_dict() for room in self.rooms],
             "global_safe_dew_point_entity_id": self.global_safe_dew_point_entity_id,
+            "hp_flicker_state_entity_id": self.hp_flicker_state_entity_id,
             "heat_pump": dict(self.heat_pump) if self.heat_pump is not None else None,
         }
 
@@ -525,24 +532,24 @@ def _resolve_diagnostic_entities(
     return resolved
 
 
-def _resolve_global_dew_point_entity(
-    registry: er.EntityRegistry, entry_id: str
+def _resolve_global_sensor_entity(
+    registry: er.EntityRegistry, entry_id: str, key: str
 ) -> str | None:
-    """Resolve the global safe dew-point ``sensor`` entity id, or ``None``.
+    """Resolve a global ``sensor`` entity id by its description key, or ``None``.
 
-    Uses the frozen global unique-id template
-    ``{entry_id}_global_safe_dew_point`` (no room segment; see ``sensor.py``).
+    Uses the frozen global unique-id template ``{entry_id}_{key}`` (no room
+    segment; see ``sensor.py``).
 
     Args:
         registry: The Home Assistant entity registry.
         entry_id: The config entry id that owns the sensor.
+        key: The global sensor description key (e.g.
+            :data:`_GLOBAL_DEW_POINT_KEY`).
 
     Returns:
         The registered ``sensor`` entity id, or ``None`` when unregistered.
     """
-    return registry.async_get_entity_id(
-        "sensor", DOMAIN, f"{entry_id}_{_GLOBAL_DEW_POINT_KEY}"
-    )
+    return registry.async_get_entity_id("sensor", DOMAIN, f"{entry_id}_{key}")
 
 
 # ---------------------------------------------------------------------------
@@ -676,8 +683,11 @@ def ws_get_config(
         home_setpoint_c=coordinator.get_home_temperature(),
         mode=coordinator.get_mode().value,
         rooms=tuple(rooms),
-        global_safe_dew_point_entity_id=_resolve_global_dew_point_entity(
-            registry, entry_id
+        global_safe_dew_point_entity_id=_resolve_global_sensor_entity(
+            registry, entry_id, _GLOBAL_DEW_POINT_KEY
+        ),
+        hp_flicker_state_entity_id=_resolve_global_sensor_entity(
+            registry, entry_id, _GLOBAL_FLICKER_STATE_KEY
         ),
         heat_pump=heat_pump or None,
     )

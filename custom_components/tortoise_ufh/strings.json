@@ -313,6 +313,9 @@
       },
       "watchdog_status": {
         "name": "Watchdog status"
+      },
+      "hp_flicker_state": {
+        "name": "Force cooling start state"
       }
     },
     "binary_sensor": {

@@ -313,6 +313,9 @@
       },
       "watchdog_status": {
         "name": "Status watchdoga"
+      },
+      "hp_flicker_state": {
+        "name": "Stan wymuszania startu chłodzenia"
       }
     },
     "binary_sensor": {

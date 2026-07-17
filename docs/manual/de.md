@@ -580,7 +580,11 @@ auch bei deaktiviertem Erzwingen — so lässt sich die Schwelle vor dem Einscha
 Geben Sie zuvor die Entitäten für **Rücklauftemperatur** und
 **Verdichterfrequenz** unter Optionen → **Wärmepumpe** an (die **Vorlauf**-Entität ist dort rein
 diagnostisch). Standardmäßig **deaktiviert**; Panasonic-spezifisch. Den Zustand (Impuls / Ruhe /
-Sperrzeit, Schwelle, Messwerte) sehen Sie im Reiter Wärmepumpe.
+Sperrzeit, Schwelle, Messwerte) sehen Sie im Reiter Wärmepumpe. Neben dem flüchtigen Zähler
+„Erzwungene Starts (letzte h)" gibt es dort auch den dauerhaften **„Erzwungene Starts
+(letzte 24 h)"** — gezählt aus der Recorder-Historie des globalen Zustandssensors
+(`hp_flicker_state`), er überlebt also HA-Neustarts und Speichern der Feineinstellung (das die
+Integration neu lädt und den Stundenzähler zurücksetzt).
 
 **Wann Tortoise an die Pumpe schreibt:** nur wenn mindestens ein Raum im Zustand
 **Aktiv** ist (das globale Gerät darf nur bewegt werden, wenn irgendjemand die Regelung

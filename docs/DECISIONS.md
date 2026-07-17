@@ -1450,3 +1450,28 @@ temperature and setpoint lines. Fixed by deriving gaps ONLY from explicit `unava
 the series is split via `segments()` before bucketing and each run is bucketed independently.
 The stepped valve rendering was reviewed with the owner and stays (honest for a hold-position
 command; "nie boli").
+
+## 26. Durable "forced starts (last 24 h)" from recorder history (2026-07-17, v0.17.0)
+
+**Problem (owner):** the Heat-pump tab's "Forced starts (last h)" counter is in-memory
+(`SetpointFlicker._pulse_times_s`), so it resets on every HA restart AND on every config-entry
+reload — which a panel tuning save triggers. The owner wants a trustworthy 24-hour count to
+judge whether the §23 demand gate actually stops needless night starts; a counter that zeroes
+exactly when he is saving knobs would quietly lie.
+
+**Decision: derive the 24 h count from recorder history, not from process memory.**
+
+- New GLOBAL diagnostic text sensor `hp_flicker_state` (states `idle | pulse | cooldown`,
+  straight from the flicker payload; `idle` when the payload is absent — the machine cannot
+  pulse then, so the recorded history stays truthful). A pulse lasts exactly one cycle, so each
+  forced start is one recorded `pulse` state change — the recorder becomes the durable store for
+  free.
+- The websocket `get_config` exposes `hp_flicker_state_entity_id` next to
+  `global_safe_dew_point_entity_id` (the dew-point resolver was generalised to
+  `_resolve_global_sensor_entity(key)`), and the panel counts rising edges into `pulse` over
+  `WINDOWS["24h"]` using the v0.16.0 text-history fetch (`_series(id, "24h", true)`, 60 s
+  cache) — no new websocket command, no polling cost beyond one recorder query a minute while
+  the Heat-pump tab is open.
+- The volatile last-hour row STAYS next to the new one: it is the flicker's own live view (and
+  feeds the `max_starts_per_h` guard); the 24 h row is the durable statistic. Extending the
+  in-memory deque to 24 h was rejected precisely because of the reload-reset problem.

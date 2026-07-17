@@ -128,6 +128,14 @@ async def test_get_config_exposes_diagnostic_entity_ids(
     assert global_id == registry.async_get_entity_id(
         "sensor", DOMAIN, f"{entry_id}_global_safe_dew_point"
     )
+
+    # ...and so is the force-cooling-start state sensor id (the panel counts
+    # forced starts over the last 24 h from its recorder history).
+    assert "hp_flicker_state_entity_id" in result
+    flicker_id = result["hp_flicker_state_entity_id"]
+    assert flicker_id == registry.async_get_entity_id(
+        "sensor", DOMAIN, f"{entry_id}_hp_flicker_state"
+    )
     assert global_id is not None
     assert registry.async_get(global_id) is not None
 

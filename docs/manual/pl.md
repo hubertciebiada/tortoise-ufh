@@ -533,7 +533,10 @@ ciepła (wiersz „Odbiór"), także przy wyłączonym wymuszaniu — łatwo dob
 włączeniem. Wcześniej wskaż encje **temperatury powrotu** i **częstotliwości
 sprężarki** w opcjach → **Pompa ciepła** (encja **wylotu** jest tam tylko diagnostyczna). Domyślnie
 **wyłączone**; rozwiązanie specyficzne dla Panasonica. Stan (impuls / czuwanie / przerwa, próg,
-odczyty) widać w zakładce Pompa ciepła.
+odczyty) widać w zakładce Pompa ciepła. Obok ulotnego licznika „Wymuszone starty (ost. godz.)"
+jest tam też trwały **„Wymuszone starty (ost. 24 godz.)"** — liczony z historii recordera
+globalnego sensora stanu wymuszania (`hp_flicker_state`), więc przeżywa restarty HA i zapisy
+strojenia (które przeładowują integrację i zerują licznik godzinny).
 
 **Kiedy Tortoise pisze do pompy:** tylko gdy przynajmniej jeden pokój jest w stanie
 **Steruje** (globalne urządzenie wolno ruszać tylko, gdy ktokolwiek oddał sterowanie)
