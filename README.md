@@ -152,7 +152,9 @@ explanation of what it did and why.
   Tuning, Valves, Assist, Heat pump): a live per-room table (control state, measured
   temperature, setpoint, error, valve %, supply/return water, mode), a flag annunciator,
   controller tuning (global gains plus sparse per-room overrides), the optional heat-pump
-  link, and each room's full report.
+  link, and each room's full report. History charts smooth the temperature series with
+  bucket means, draw the valve as a step line and mark split activity with a colour-coded
+  mode band (red = heating, orange = drying, blue = cooling).
 - **Hardware-agnostic** — you map Home Assistant entities to roles at setup; units are
   validated (°C, %, W), brands are not.
 - **Built-in building simulator** — a digital twin (3R3C RC model per room, ZOH via matrix

@@ -1396,3 +1396,46 @@ to "dry" every cycle until the dwell elapsed, in a home already heating. Fix: th
 branch is gated on the CURRENT mode being COOLING; outside it the blocked tail falls back to the
 pre-§24 behaviour (remembered COOLING with its target). Regression-pinned by
 `test_mode_flip_mid_dry_drops_the_dry_presentation`.
+
+## 25. Readable history chart + split-mode band + unified mode colours (2026-07-17, v0.16.0)
+
+**Problem (owner):** the panel's 6h/24h history windows fetch raw recorder history (every state
+change, `significant_changes_only: false`) and draw it point-to-point, so a pushy 0.1 K
+temperature sensor renders as a saw and the derived "setpoint" series (temp + error) inherits the
+noise; the 7d window (hourly statistics means) was already smooth. Separately, the owner wanted to
+SEE on the chart when the split ran, and the three active split modes shared one identical orange
+badge everywhere in the panel.
+
+**Decision: fix it entirely in the presentation layer.** The recorder, the 5-min cycle, and the
+sensors are untouched; no new tuning knobs (simplicity mandate — the two bucket sizes are JS
+constants in `WINDOWS`).
+
+- **Bucket means, not spline/epsilon:** the 6h/24h temperature-family series are down-sampled to
+  per-bucket means on the absolute epoch grid (2 min / 8 min, ~180 points per chart). A mean is
+  chosen over spline smoothing (which invents values that were never measured and still keeps
+  every point) and over epsilon/Douglas-Peucker simplification (which preserves the saw's extremes
+  — exactly the noise being removed); it is also what the 7d stats path already does, so the three
+  windows now share one visual language. Buckets with only nulls stay null and a >2-bucket spacing
+  inserts an explicit gap, mirroring the stats-path outage handling. Valve samples are NOT
+  averaged.
+- **Valve draws step-after:** the recorder stores only changes, so a linear ramp between two
+  sparse valve commands is fiction; each command now holds flat until the next sample and the last
+  one extends to "now" (not across explicit gaps). The tooltip uses a matching `stepAt` lookup
+  (temperature family stays interpolated via `interpAt`).
+- **Split-mode band from `fast_source_mode` history:** the per-room textual sensor (states
+  `off|heating|cooling|dry`) joins `_DIAGNOSTIC_SENSOR_KEYS`, so the panel resolves its entity id
+  through the EXISTING `diagnostic_entities` path — no new websocket command, no report change,
+  and rooms without the entity simply draw no band. Textual series always fetch in history mode
+  (long-term statistics do not exist for text sensors) under a cache key that carries a `|text`
+  marker. The band is thin rects under the time axis, one per run of consecutive non-off states,
+  always drawn when data exists — no legend entry, no toggle; hovering adds an "Assist" tooltip
+  row. The X axis moved down 10 px (`CHART_MARGIN.b` 26 -> 36, `CHART_H` 240 -> 250) so the plot
+  area is unchanged.
+- **One colour per direction, everywhere:** new theme-derived tokens `--t-heat` (error red),
+  `--t-cool` (info blue), `--t-dry` (accent orange). The badge builders append
+  `mode-heating|mode-cooling|mode-dry` to the active class, which covers all three badge surfaces
+  (Rooms table "Tryb" column, room-detail tile, Assist tab) plus the Assist tab's real
+  `hvac_action` text; the chart band uses the same tokens. A bare `on` stays accent as a fallback.
+- **Flags stay severity-coloured (deliberate):** flag chips (e.g. `dry_assist` = info/blue) encode
+  SEVERITY, not direction — recolouring them by mode would break the annunciator's triage
+  semantics, so they are intentionally unchanged.

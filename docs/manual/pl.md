@@ -180,6 +180,17 @@ Zakładki:
   i sygnał „pompa dostępna dla podłogówki". Bez konfiguracji pokazuje instrukcję,
   gdzie ją włączyć.
 
+Wykres **historii** w szczegółach pokoju (od v0.16.0) wygładza serie temperatury
+i zadanej średnimi kubełkowymi — ok. 2-minutowymi w oknie 6 h i 8-minutowymi
+w 24 h (okno 7 dni korzysta ze średnich godzinnych jak dotąd); to wyłącznie
+prezentacja, recorder zapisuje dane bez zmian. Zawór rysowany jest **schodkowo**:
+komenda obowiązuje do następnej zmiany, a ostatnia — aż do „teraz". Pod osią
+czasu biegnie cienkie **pasmo trybu splita** pokazujące, kiedy wspomaganie
+pracowało: **czerwone = grzanie, pomarańczowe = osuszanie, niebieskie =
+chłodzenie**; dymek nad wykresem pokazuje wtedy wiersz „Wspomaganie". Te same
+kolory noszą plakietki trybu wspomagania w tabeli Pokoje, w szczegółach pokoju
+i na zakładce Wspomaganie.
+
 Trudniejsze pola mają ikonę **„i" w kółku** — po najechaniu (komputer) albo
 tapnięciu (telefon) pojawia się dymek z objaśnieniem; Escape lub dotknięcie obok
 zamyka.

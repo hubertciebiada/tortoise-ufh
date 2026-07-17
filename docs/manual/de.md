@@ -198,6 +198,18 @@ Reiter:
   ihren Bestandteilen und das Signal „Pumpe für Fußbodenheizung verfügbar“. Ohne
   Konfiguration wird eine Anleitung angezeigt, wo man sie aktiviert.
 
+Das **Verlaufs**-Diagramm in den Raumdetails (seit v0.16.0) glättet die Serien
+der Temperatur und des Sollwerts mit Eimer-Mittelwerten — ca. 2-Minuten im
+6-h-Fenster und 8-Minuten bei 24 h (das 7-Tage-Fenster nutzt wie bisher
+Stundenmittel); das ist reine Darstellung, der Recorder zeichnet unverändert
+auf. Das Ventil wird als **Treppenkurve** gezeichnet: Ein Befehl gilt bis zur
+nächsten Änderung, der letzte bis „jetzt“. Unter der Zeitachse verläuft ein
+schmales **Band des Split-Modus**, das zeigt, wann die Zusatzquelle lief:
+**Rot = Heizen, Orange = Entfeuchten, Blau = Kühlen**; die Sprechblase über dem
+Diagramm zeigt dann die Zeile „Assistenz“. Dieselben Farben tragen die
+Modus-Plaketten der Zusatzquelle in der Tabelle Räume, in den Raumdetails und
+auf dem Reiter Zusatzquelle.
+
 Schwierigere Felder haben ein **„i“ im Kreis** — beim Überfahren (Computer) oder
 Tippen (Telefon) erscheint eine Sprechblase mit Erläuterung; Escape oder eine
 Berührung daneben schließt sie.

@@ -100,6 +100,7 @@ async def test_get_config_exposes_diagnostic_entity_ids(
         "room_dew_point",
         "i_term",
         "trend_term",
+        "fast_source_mode",
     }
 
     rooms = {room["name"]: room for room in result["rooms"]}

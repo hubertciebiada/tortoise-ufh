@@ -115,8 +115,9 @@ _TUNING_SCOPE_GLOBAL: str = "global"
 
 # Per-room diagnostic ``sensor`` keys whose registered entity ids ``get_config``
 # resolves so the panel can pull recorder history / statistics for its charts.
-# This is the numeric/chartable subset of ``sensor.ROOM_SENSORS`` (the ``str``
-# sensors ``fast_source_mode`` / ``explanation`` are intentionally excluded).
+# This is the chartable subset of ``sensor.ROOM_SENSORS``: the numeric series
+# plus the textual ``fast_source_mode`` (the chart's split-mode band; the
+# ``str`` sensor ``explanation`` stays intentionally excluded).
 # Kept as a literal tuple here — rather than importing the ``sensor`` platform —
 # to avoid a websocket -> platform import dependency; keys mirror ``sensor.py``.
 _DIAGNOSTIC_SENSOR_KEYS: tuple[str, ...] = (
@@ -126,6 +127,7 @@ _DIAGNOSTIC_SENSOR_KEYS: tuple[str, ...] = (
     "room_dew_point",
     "i_term",
     "trend_term",
+    "fast_source_mode",
 )
 
 # Global safe dew-point ``sensor`` key (see ``sensor.GLOBAL_SENSORS``); the

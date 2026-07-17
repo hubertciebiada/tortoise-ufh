@@ -118,11 +118,14 @@ const WS = {
  * Short windows use per-sample recorder history (`history/history_during_period`,
  * timestamps in epoch SECONDS); the long window uses hourly long-term
  * statistics (`recorder/statistics_during_period`, timestamps in epoch
- * MILLISECONDS) so a week of data stays small.
+ * MILLISECONDS) so a week of data stays small. `bucketMs` down-samples the
+ * drawn temperature series to bucket means (~180 points per chart,
+ * presentation only — the recorder keeps every sample); the 7d window is
+ * already hourly means and needs none.
  */
 const WINDOWS = {
-  "6h": { hours: 6, mode: "history" },
-  "24h": { hours: 24, mode: "history" },
+  "6h": { hours: 6, mode: "history", bucketMs: 2 * 60 * 1000 },
+  "24h": { hours: 24, mode: "history", bucketMs: 8 * 60 * 1000 },
   "7d": { hours: 168, mode: "stats", period: "hour", periodMs: 3600 * 1000 },
 };
 const WINDOW_ORDER = ["6h", "24h", "7d"];
@@ -132,9 +135,10 @@ const SPARK_WINDOW = "24h";
 /** Cached history is reused for this long before a background refetch. */
 const HIST_MAXAGE_MS = 60 * 1000;
 
-/** Detail-chart geometry (pixels; width is measured at draw time). */
-const CHART_H = 240;
-const CHART_MARGIN = { l: 42, r: 46, t: 12, b: 26 };
+/** Detail-chart geometry (pixels; width is measured at draw time). The
+ * bottom margin holds the split-mode band (8 px) above the time labels. */
+const CHART_H = 250;
+const CHART_MARGIN = { l: 42, r: 46, t: 12, b: 36 };
 const CHART_MIN_W = 300;
 const CHART_MAX_W = 900;
 
@@ -227,6 +231,7 @@ const STR = {
     chart_setpoint: "Zadana",
     chart_valve: "Zawór",
     chart_error: "Uchyb",
+    chart_split: "Wspomaganie",
     chart_loading: "Ładowanie historii…",
     chart_nodata: "Brak danych historycznych",
     chart_unavailable: "Brak encji do wykresu",
@@ -780,6 +785,7 @@ const STR = {
     chart_setpoint: "Setpoint",
     chart_valve: "Valve",
     chart_error: "Error",
+    chart_split: "Assist",
     chart_loading: "Loading history…",
     chart_nodata: "No history data",
     chart_unavailable: "No chartable entities",
@@ -1340,6 +1346,7 @@ const STR = {
     chart_setpoint: "Sollwert",
     chart_valve: "Ventil",
     chart_error: "Abweichung",
+    chart_split: "Assistenz",
     chart_loading: "Verlauf wird geladen…",
     chart_nodata: "Keine Verlaufsdaten",
     chart_unavailable: "Keine darstellbaren Entitäten",
@@ -2450,6 +2457,26 @@ function trendArrow(rate) {
 }
 
 /**
+ * CSS mode class for a fast-source mode or climate `hvac_action` string.
+ *
+ * One colour per direction across the whole panel (badges, actual-state
+ * text, chart band): heating red, cooling blue, dry orange. Unknown or
+ * inactive states map to "" so the caller's base styling stays in charge.
+ */
+function fastModeCls(mode) {
+  if (mode === "heating" || mode === "heat") {
+    return "mode-heating";
+  }
+  if (mode === "cooling" || mode === "cool") {
+    return "mode-cooling";
+  }
+  if (mode === "dry" || mode === "drying") {
+    return "mode-dry";
+  }
+  return "";
+}
+
+/**
  * Minimal, safe DOM builder.
  *
  * Text is set via `textContent` and attributes via `setAttribute`, so no
@@ -2535,6 +2562,15 @@ function parseState(raw) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Parse a Home Assistant state to its raw string, or null (gap) when
+ * unavailable/unknown — the textual twin of `parseState`. */
+function parseTextState(raw) {
+  if (raw == null || UNAVAILABLE_STATES.has(String(raw))) {
+    return null;
+  }
+  return String(raw);
+}
+
 /**
  * Split a time series into runs of consecutive real points.
  *
@@ -2559,6 +2595,65 @@ function segments(points) {
     segs.push(cur);
   }
   return segs;
+}
+
+/**
+ * Down-sample a series to per-bucket means on the absolute epoch grid.
+ *
+ * Buckets are `Math.floor(t / bucketMs)` (absolute, so consecutive refetches
+ * land in the same buckets). A bucket with >= 1 finite sample becomes one
+ * point at the mean sample time / mean value; a bucket with only nulls keeps
+ * one explicit null (the gap survives). Afterwards an explicit null is
+ * inserted between points spaced more than 2x `bucketMs` — mirroring the
+ * stats-path gap handling in `_fetchOne` — so `segments()` breaks the line
+ * instead of interpolating across the outage. Presentation only; a falsy
+ * `bucketMs` returns the series untouched.
+ */
+function bucketMean(points, bucketMs) {
+  if (!bucketMs || !points.length) {
+    return points;
+  }
+  const bucketed = [];
+  let idx = null;
+  let tAll = 0;
+  let nAll = 0;
+  let tFin = 0;
+  let vFin = 0;
+  let nFin = 0;
+  const flush = () => {
+    if (!nAll) {
+      return;
+    }
+    bucketed.push(
+      nFin ? { t: tFin / nFin, v: vFin / nFin } : { t: tAll / nAll, v: null },
+    );
+    tAll = nAll = tFin = vFin = nFin = 0;
+  };
+  for (const p of points) {
+    const i = Math.floor(p.t / bucketMs);
+    if (idx !== null && i !== idx) {
+      flush();
+    }
+    idx = i;
+    tAll += p.t;
+    nAll += 1;
+    if (p.v != null && Number.isFinite(p.v)) {
+      tFin += p.t;
+      vFin += p.v;
+      nFin += 1;
+    }
+  }
+  flush();
+  const out = [];
+  let prevT = null;
+  for (const pt of bucketed) {
+    if (prevT !== null && pt.t - prevT > bucketMs * 2) {
+      out.push({ t: prevT + bucketMs, v: null });
+    }
+    out.push(pt);
+    prevT = pt.t;
+  }
+  return out;
 }
 
 /**
@@ -2591,6 +2686,62 @@ function interpAt(points, t) {
     prev = { t: p.t, v };
   }
   return null;
+}
+
+/**
+ * Step-after value of a series at time `t`, matching the stepped valve line.
+ *
+ * The recorder stores only CHANGES, so a sample holds until the next one:
+ * this returns the value of the last real sample <= `t`. Returns null before
+ * the first sample or when an explicit gap (null sample) lies between that
+ * sample and `t`; PAST the last sample it keeps the value — consistent with
+ * the drawn extension to "now".
+ */
+function stepAt(points, t) {
+  if (!points || points.length === 0) {
+    return null;
+  }
+  let last = null;
+  for (const p of points) {
+    if (p.t > t) {
+      break;
+    }
+    last = p.v == null || !Number.isFinite(p.v) ? null : p.v;
+  }
+  return last;
+}
+
+/**
+ * Collapse a textual mode series into runs `{m, t0, t1}` of consecutive
+ * samples with the same non-"off" state.
+ *
+ * A state holds until the NEXT sample (change-only recorder history), so a
+ * run ends where the next differing sample starts; the final run extends to
+ * `tEnd`. A null sample (unavailable) ends the current run without starting
+ * a new one.
+ */
+function modeRuns(points, tEnd) {
+  const runs = [];
+  let cur = null;
+  const close = (t) => {
+    if (cur) {
+      cur.t1 = t;
+      runs.push(cur);
+      cur = null;
+    }
+  };
+  for (const p of points) {
+    const m = p.v != null && p.v !== "off" ? p.v : null;
+    if (cur && cur.m === m) {
+      continue;
+    }
+    close(p.t);
+    if (m != null) {
+      cur = { m, t0: p.t, t1: p.t };
+    }
+  }
+  close(tEnd);
+  return runs;
 }
 
 /** "Nice" round number for axis steps (Heckbert). */
@@ -3221,11 +3372,12 @@ class TortoiseUfhPanel extends HTMLElement {
    *
    * Returns `{ at, data }` where `data` is `[{t: epochMs, v: number|null}]`
    * sorted ascending and `v` is null for unavailable/unknown samples (a gap).
+   * With `text` truthy, `v` is the raw state string instead (mode sensors).
    * Fresh cache hits skip the network entirely, so the 5 s live poll never
    * refetches history; concurrent requests for the same key share one call.
    */
-  _series(entityId, windowKey) {
-    const key = entityId + "|" + windowKey;
+  _series(entityId, windowKey, text) {
+    const key = entityId + "|" + windowKey + (text ? "|text" : "");
     const now = Date.now();
     const cached = this._histCache.get(key);
     if (cached && now - cached.at < HIST_MAXAGE_MS) {
@@ -3235,7 +3387,7 @@ class TortoiseUfhPanel extends HTMLElement {
     if (inflight) {
       return inflight;
     }
-    const p = this._fetchOne(entityId, windowKey)
+    const p = this._fetchOne(entityId, windowKey, text)
       .then((data) => {
         const entry = { at: Date.now(), data };
         this._histCache.set(key, entry);
@@ -3253,11 +3405,14 @@ class TortoiseUfhPanel extends HTMLElement {
   }
 
   /** One recorder round-trip → normalized `[{t, v}]` (see `_series`). */
-  async _fetchOne(entityId, windowKey) {
+  async _fetchOne(entityId, windowKey, text) {
     const w = WINDOWS[windowKey] || WINDOWS[SPARK_WINDOW];
     const end = new Date();
     const start = new Date(end.getTime() - w.hours * 3600 * 1000);
-    if (w.mode === "stats") {
+    // Textual sensors ALWAYS use history mode (long-term statistics do not
+    // exist for them, even on the 7d window); the volume stays tiny because
+    // the recorder stores only mode changes.
+    if (!text && w.mode === "stats") {
       const res = await this._callWSSilent({
         type: WS.statistics,
         start_time: start.toISOString(),
@@ -3306,7 +3461,7 @@ class TortoiseUfhPanel extends HTMLElement {
     return arr
       .map((pt) => ({
         t: num(pt.lu) === null ? null : num(pt.lu) * 1000,
-        v: parseState(pt.s),
+        v: text ? parseTextState(pt.s) : parseState(pt.s),
       }))
       .filter((pt) => pt.t !== null)
       .sort((a, b) => a.t - b.t);
@@ -3584,8 +3739,9 @@ class TortoiseUfhPanel extends HTMLElement {
   /**
    * Localised fast-source (assist) badge for a room view-model.
    *
-   * Returns `{ text, cls }` where `cls` is `on` / `off` / `none`. Composes the
-   * source kind (Split / Heater) with its command state and target, e.g.
+   * Returns `{ text, cls }` where `cls` is `off` / `none` / `on` plus the
+   * mode colour class (`fastModeCls`). Composes the source kind
+   * (Split / Heater) with its command state and target, e.g.
    * "Split: heating → 22.0 °C"; a room with no fast source reads as an em dash.
    */
   _assistLabel(r) {
@@ -3604,7 +3760,10 @@ class TortoiseUfhPanel extends HTMLElement {
           ? this._t("assist_state_cooling")
           : this._t("assist_state_heating");
     const target = r.fastTarget !== null ? " → " + fmt(r.fastTarget, 1, " °C") : "";
-    return { text: short + ": " + verb + target, cls: "on" };
+    return {
+      text: short + ": " + verb + target,
+      cls: ("on " + fastModeCls(r.fastMode)).trim(),
+    };
   }
 
   /**
@@ -3612,7 +3771,8 @@ class TortoiseUfhPanel extends HTMLElement {
    * split-out "Tryb" column. Same on/off/mode reading as `_assistLabel`, minus
    * the source-kind prefix and target temperature.
    *
-   * Returns `{ text, cls }` where `cls` is `on` / `off` / `none`.
+   * Returns `{ text, cls }` where `cls` is `off` / `none` / `on` plus the
+   * mode colour class (`fastModeCls`).
    */
   _assistModeLabel(r) {
     if (r.fastKind === "none") {
@@ -3627,7 +3787,7 @@ class TortoiseUfhPanel extends HTMLElement {
         : r.fastMode === "cooling"
           ? this._t("assist_state_cooling")
           : this._t("assist_state_heating");
-    return { text: verb, cls: "on" };
+    return { text: verb, cls: ("on " + fastModeCls(r.fastMode)).trim() };
   }
 
   /** Aggregated reason why the safe dew point is unavailable (hero subline). */
@@ -5912,6 +6072,8 @@ class TortoiseUfhPanel extends HTMLElement {
       actualText = action;
     }
     p.actual.textContent = actualText;
+    // Colour the real running direction like the command badges do.
+    p.actual.className = ("mono " + fastModeCls(action)).trim();
     // Divergence: commanded ON but idle/off, or commanded OFF but running.
     const cmdOn = r.fastOn && r.fastMode !== "off";
     const acting = action === "heating" || action === "cooling";
@@ -6865,6 +7027,7 @@ class TortoiseUfhPanel extends HTMLElement {
     const diag = r.diagnosticEntities || {};
     const errorId = diag.error_c || null;
     const valveId = diag.recommended_valve || null;
+    const modeId = diag.fast_source_mode || null;
 
     if (!tempId && !errorId && !valveId) {
       HI.data = null;
@@ -6880,14 +7043,15 @@ class TortoiseUfhPanel extends HTMLElement {
       tempId ? this._series(tempId, wk) : empty,
       errorId ? this._series(errorId, wk) : empty,
       valveId ? this._series(valveId, wk) : empty,
+      modeId ? this._series(modeId, wk, true) : empty,
     ];
     const token = ++HI.token;
-    Promise.all(jobs).then(([te, ee, ve]) => {
+    Promise.all(jobs).then(([te, ee, ve, me]) => {
       // Stale guard: the detail was rebuilt or the window changed mid-flight.
       if (!this._detail || this._detail.history !== HI || HI.token !== token) {
         return;
       }
-      const sig = [wk, te.at, ee.at, ve.at, tempId, errorId, valveId].join("|");
+      const sig = [wk, te.at, ee.at, ve.at, me.at, tempId, errorId, valveId, modeId].join("|");
       if (!force && HI.sig === sig && HI.data) {
         return;
       }
@@ -6895,9 +7059,13 @@ class TortoiseUfhPanel extends HTMLElement {
 
       const end = Date.now();
       const t0 = end - WINDOWS[wk].hours * 3600 * 1000;
-      const temp = te.data || [];
-      const error = ee.data || [];
+      // Bucket-mean only the temperature-family series (presentation
+      // smoothing; the valve keeps every command and the mode is textual).
+      const bucketMs = WINDOWS[wk].bucketMs || 0;
+      const temp = bucketMean(te.data || [], bucketMs);
+      const error = bucketMean(ee.data || [], bucketMs);
       const valve = ve.data || [];
+      const mode = me.data || [];
 
       // Setpoint = temp + error (as-of join on the temp timeline); fall back to
       // a flat line at the current live setpoint when no error history exists.
@@ -6921,7 +7089,7 @@ class TortoiseUfhPanel extends HTMLElement {
       // it today, so the band simply does not draw (honest "if available").
       const deadband = num(pick(r.report, ["deadband_c", "deadband"], null));
 
-      HI.data = { t0, t1: end, temp, setpoint, valve, error, deadband };
+      HI.data = { t0, t1: end, temp, setpoint, valve, error, deadband, mode };
       this._drawChart(HI);
     });
   }
@@ -7071,9 +7239,37 @@ class TortoiseUfhPanel extends HTMLElement {
         s("text", {
           class: "axis-label axis-time",
           x: x.toFixed(1),
-          y: (plotY + plotH + 16).toFixed(1),
+          y: (plotY + plotH + 26).toFixed(1),
           "text-anchor": i === 0 ? "start" : i === nTicks - 1 ? "end" : "middle",
           text: fmtTime(new Date(t)),
+        }),
+      );
+    }
+
+    // Split-mode band: one thin rect per run of the fast-source mode history,
+    // between the plot and the time labels. Always drawn when data exists (no
+    // legend entry / toggle); "off" and unknown states draw nothing.
+    const bandRuns =
+      d.mode && d.mode.length
+        ? modeRuns(d.mode, d.t1).filter(
+            (run) => run.m === "heating" || run.m === "cooling" || run.m === "dry",
+          )
+        : [];
+    for (const run of bandRuns) {
+      const rt0 = Math.max(run.t0, d.t0);
+      const rt1 = Math.min(run.t1, d.t1);
+      if (!(rt1 > rt0)) {
+        continue;
+      }
+      const bx = xOf(rt0);
+      svg.appendChild(
+        s("rect", {
+          class: "band-" + run.m,
+          x: bx.toFixed(1),
+          y: (plotY + plotH + 3).toFixed(1),
+          width: Math.max(1, xOf(rt1) - bx).toFixed(1),
+          height: 8,
+          rx: 2,
         }),
       );
     }
@@ -7099,27 +7295,41 @@ class TortoiseUfhPanel extends HTMLElement {
     }
 
     // Valve area + line (right axis), drawn behind the temperature lines.
+    // Step-after: the recorder stores only CHANGES, so a command holds flat
+    // until the next sample; the last run extends to "now" (t1) unless the
+    // series ends in an explicit gap (unavailable sensor).
     if (hasValve && HI.visible.valve) {
+      const segs = segments(d.valve);
+      const rawLast = d.valve[d.valve.length - 1];
+      const extend = rawLast && rawLast.v != null && Number.isFinite(rawLast.v);
+      const base = (plotY + plotH).toFixed(1);
       const areaParts = [];
       const lineParts = [];
-      for (const seg of segments(d.valve)) {
+      segs.forEach((seg, si) => {
         if (!seg.length) {
-          continue;
+          return;
         }
-        let ad = "M" + xOf(seg[0].t).toFixed(1) + " " + (plotY + plotH).toFixed(1);
-        let ld = "";
-        seg.forEach((p, i) => {
-          const x = xOf(p.t).toFixed(1);
-          const y = yR(p.v).toFixed(1);
-          ad += " L" + x + " " + y;
-          ld += (i === 0 ? "M" : "L") + x + " " + y + " ";
-        });
-        ad += " L" + xOf(seg[seg.length - 1].t).toFixed(1) + " " + (plotY + plotH).toFixed(1) + " Z";
-        areaParts.push(ad);
-        if (seg.length > 1) {
-          lineParts.push(ld.trim());
+        let steps = "L" + xOf(seg[0].t).toFixed(1) + " " + yR(seg[0].v).toFixed(1);
+        for (let i = 1; i < seg.length; i++) {
+          const x = xOf(seg[i].t).toFixed(1);
+          steps += " L" + x + " " + yR(seg[i - 1].v).toFixed(1);
+          steps += " L" + x + " " + yR(seg[i].v).toFixed(1);
         }
-      }
+        const held = si === segs.length - 1 && extend;
+        let endX = xOf(seg[seg.length - 1].t);
+        if (held) {
+          endX = xOf(d.t1);
+          steps += " L" + endX.toFixed(1) + " " + yR(seg[seg.length - 1].v).toFixed(1);
+        }
+        areaParts.push(
+          "M" + xOf(seg[0].t).toFixed(1) + " " + base + " " + steps +
+            " L" + endX.toFixed(1) + " " + base + " Z",
+        );
+        // A lone sample has no line unless the hold extends it into one.
+        if (seg.length > 1 || held) {
+          lineParts.push("M" + steps.slice(1));
+        }
+      });
       if (areaParts.length) {
         svg.appendChild(s("path", { class: "s-valve-area", d: areaParts.join(" ") }));
       }
@@ -7203,6 +7413,7 @@ class TortoiseUfhPanel extends HTMLElement {
         valve: hasValve && HI.visible.valve ? d.valve : null,
       },
       error: d.error && d.error.length ? d.error : null,
+      modeRuns: bandRuns,
     };
 
     this._updateLegend(HI, hasTemp, hasSp, hasValve);
@@ -7335,7 +7546,9 @@ class TortoiseUfhPanel extends HTMLElement {
         dot.style.display = "none";
         return null;
       }
-      const v = interpAt(series, at);
+      // The valve draws step-after (held until the next command), so its
+      // readout must step too; the temperature family stays interpolated.
+      const v = key === "valve" ? stepAt(series, at) : interpAt(series, at);
       if (v == null) {
         dot.style.display = "none";
         return null;
@@ -7379,6 +7592,27 @@ class TortoiseUfhPanel extends HTMLElement {
           h("span", { class: "tip-sw tip-sw-blank" }),
           h("span", { class: "tip-lab", text: this._t("chart_error") }),
           h("span", { class: "tip-val", text: signed(errV, 2, " K") }),
+        ]),
+      );
+    }
+    // Assist row: shown only while the hovered time falls inside a run of the
+    // split-mode band (off / no data adds no row).
+    const mrun = ctx.modeRuns.find((b) => b.t0 <= at && at <= b.t1);
+    if (mrun) {
+      HI.tip.appendChild(
+        h("div", { class: "tip-row" }, [
+          h("span", { class: "tip-sw band-" + mrun.m }),
+          h("span", { class: "tip-lab", text: this._t("chart_split") }),
+          h("span", {
+            class: "tip-val",
+            text: this._t(
+              mrun.m === "dry"
+                ? "assist_state_dry"
+                : mrun.m === "cooling"
+                  ? "assist_state_cooling"
+                  : "assist_state_heating",
+            ),
+          }),
         ]),
       );
     }
@@ -7431,6 +7665,9 @@ const STYLE = `
   --t-warn: var(--warning-color, #ffa600);
   --t-ok: var(--success-color, #43a047);
   --t-info: var(--info-color, #039be5);
+  --t-heat: var(--t-error, #db4437);
+  --t-cool: var(--t-info, #039be5);
+  --t-dry: var(--t-accent, #ff9800);
   --t-chip: var(--secondary-background-color, #e5e5e5);
   --t-icon: var(--state-icon-color, #44739e);
   --t-radius: var(--ha-card-border-radius, 12px);
@@ -7730,6 +7967,9 @@ button { font-family: inherit; cursor: pointer; }
 .valve-fill { display: block; height: 100%; width: 0%; background: var(--t-primary); border-radius: 999px; transition: width .3s ease; }
 .fast-badge { font-size: 12px; padding: 4px 10px; border-radius: 8px; display: inline-block; white-space: nowrap; }
 .fast-badge.on { background: color-mix(in srgb, var(--t-accent) 16%, transparent); color: var(--t-accent); border: 1px solid var(--t-accent); }
+.fast-badge.on.mode-heating { background: color-mix(in srgb, var(--t-heat) 16%, transparent); color: var(--t-heat); border-color: var(--t-heat); }
+.fast-badge.on.mode-cooling { background: color-mix(in srgb, var(--t-cool) 16%, transparent); color: var(--t-cool); border-color: var(--t-cool); }
+.fast-badge.on.mode-dry { background: color-mix(in srgb, var(--t-dry) 16%, transparent); color: var(--t-dry); border-color: var(--t-dry); }
 .fast-badge.off { color: var(--t-muted); border: 1px solid var(--t-line); }
 .fast-badge.none { color: var(--t-muted); border: 0; padding-left: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -7823,6 +8063,9 @@ details.flag-legend[open] > summary { margin-bottom: 12px; }
 .valve-row:focus-visible, .assist-row:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; }
 .valve-row.selected, .assist-row.selected { box-shadow: inset 3px 0 0 var(--t-primary); }
 .mono { font-family: ui-monospace, "Roboto Mono", monospace; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.mono.mode-heating { color: var(--t-heat); }
+.mono.mode-cooling { color: var(--t-cool); }
+.mono.mode-dry { color: var(--t-dry); }
 .mono.mismatch { color: var(--t-warn); }
 .loop-caret { border: 0; background: transparent; color: var(--t-muted); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 6px; transition: transform .15s ease; }
 .loop-caret:hover { color: var(--t-fg); background: var(--t-chip); }
@@ -7953,6 +8196,10 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 .s-setpoint { fill: none; stroke: var(--t-muted); stroke-width: 1.5; stroke-dasharray: 5 3; stroke-linejoin: round; }
 .s-valve { fill: none; stroke: var(--t-accent); stroke-width: 1.5; stroke-linejoin: round; }
 .s-valve-area { fill: var(--t-accent); opacity: .13; stroke: none; }
+/* Split-mode band under the time axis (fill) + its tooltip swatch (background). */
+.band-heating { fill: var(--t-heat); background: var(--t-heat); opacity: .85; }
+.band-cooling { fill: var(--t-cool); background: var(--t-cool); opacity: .85; }
+.band-dry { fill: var(--t-dry); background: var(--t-dry); opacity: .85; }
 .chart-guide { stroke: var(--t-muted); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
 .chart-dot { stroke: var(--t-card); stroke-width: 1.5; pointer-events: none; }
 .dot-temp { fill: var(--t-primary); }
