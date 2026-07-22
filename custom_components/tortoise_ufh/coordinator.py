@@ -56,7 +56,6 @@ from .const import (
     CONF_ENTITY_HP_OUTLET_TEMP,
     CONF_ENTITY_HP_RETURN_TEMP,
     CONF_ENTITY_HUMIDITY,
-    CONF_ENTITY_MODE,
     CONF_ENTITY_RETURN,
     CONF_ENTITY_SUPPLY,
     CONF_ENTITY_TEMP_OUTDOOR,
@@ -102,7 +101,7 @@ from .core.models import (
     RoomOutputs,
     RoomReport,
 )
-from .readers import UNAVAILABLE_STATES, SourceReader
+from .readers import SourceReader
 from .writers import CommandWriter
 
 if TYPE_CHECKING:
@@ -445,8 +444,9 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             str(room_cfg[CONF_ROOM_NAME]) for room_cfg in self._room_configs
         ]
 
-        # Global mode input entity (select / input_select). May be unset.
-        self._mode_entity: str = str(entry.data.get(CONF_ENTITY_MODE, "") or "")
+        # The global operating mode. Owned by this coordinator and exposed as
+        # the home-mode select entity (v0.19.0, DECISIONS §27); restored from
+        # the private setpoint Store on the first refresh (S9).
         self._mode: Mode = Mode.HEATING
 
         # Single source of truth for setpoints.
@@ -693,10 +693,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
 
     @callback
     def set_mode(self, mode: Mode) -> None:
-        """Override the global operating mode, persist it and rebroadcast.
+        """Set the global operating mode, persist it and rebroadcast.
 
-        The mode is persisted to the private setpoint Store (S9) so a restart
-        in July does not silently fall back to heating logic. Like
+        The single write path for every mode surface — the home-mode select
+        entity, the panel/websocket and the ``set_mode`` service. The mode is
+        persisted to the private setpoint Store (S9) so a restart in July does
+        not silently fall back to heating logic. Like
         :meth:`set_home_temperature`, the change schedules a debounced
         recompute (fix 2026-07-10) so a panel/service mode change takes effect
         within seconds instead of waiting out the 5-min cycle — an immediate
@@ -847,9 +849,9 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 value = offsets.get(name)
                 if isinstance(value, int | float) and math.isfinite(float(value)):
                     self._room_offsets[name] = float(value)
-        # Restore the persisted global mode (S9). A configured, available mode
-        # entity still wins on the very first refresh (_read_mode); the stored
-        # value is the fallback that keeps a July restart in cooling logic.
+        # Restore the persisted global mode (S9) — the Store is its only
+        # source across a restart (v0.19.0 retired the external mode entity;
+        # DECISIONS §27), so a July restart stays in cooling logic.
         raw_mode = stored.get(_STORE_KEY_MODE)
         if isinstance(raw_mode, str):
             try:
@@ -1023,11 +1025,6 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             The freshly computed :class:`CoordinatorData`.
         """
         await self._ensure_setpoints_loaded()
-        new_mode = self._read_mode()
-        if new_mode is not self._mode:
-            self._mode = new_mode
-            # Persist a mode change sourced from the mode entity too (S9).
-            self._persist_setpoints()
 
         # Assemble one RoomInputs per room from the configured entities.
         inputs: dict[str, RoomInputs] = {}
@@ -1764,28 +1761,6 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 count,
             )
         return count >= _VALVE_MISMATCH_CYCLES
-
-    def _read_mode(self) -> Mode:
-        """Read the global mode entity, holding the last mode on failure.
-
-        Returns:
-            The resolved global :class:`~tortoise_ufh.models.Mode`.
-        """
-        if not self._mode_entity:
-            return self._mode
-        state = self.hass.states.get(self._mode_entity)
-        if state is None or state.state.lower() in UNAVAILABLE_STATES:
-            return self._mode
-        try:
-            return Mode(state.state.lower())
-        except ValueError:
-            _LOGGER.warning(
-                "Mode entity %s has unrecognised state %r; holding %s",
-                self._mode_entity,
-                state.state,
-                self._mode.value,
-            )
-            return self._mode
 
     # -- Internal: watchdog -------------------------------------------------
 

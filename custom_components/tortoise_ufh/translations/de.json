@@ -39,8 +39,7 @@
           "entity_supply": "Vorlauftemperatursensoren (einer pro Heizkreis)",
           "entity_return": "Rücklauftemperatursensoren (einer pro Heizkreis)",
           "entity_fast_source": "Climate-Entität der Zusatzquelle (Split / Heizgerät)",
-          "room_offset": "Raum-Offset gegenüber dem Haus-Sollwert (K)",
-          "entity_mode": "Globale Modus-Entität (Heizung / Übergang / Kühlung / Aus)"
+          "room_offset": "Raum-Offset gegenüber dem Haus-Sollwert (K)"
         }
       },
       "algorithm": {
@@ -261,6 +260,15 @@
   },
   "entity": {
     "select": {
+      "home_mode": {
+        "name": "Hausmodus",
+        "state": {
+          "heating": "Heizung",
+          "transitional": "Übergang",
+          "cooling": "Kühlung",
+          "off": "Aus"
+        }
+      },
       "control_state": {
         "name": "Regelungszustand",
         "state": {

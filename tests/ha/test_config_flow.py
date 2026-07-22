@@ -27,7 +27,6 @@ from custom_components.tortoise_ufh.const import (
     CONF_COOLING_ENABLED,
     CONF_ENTITY_FAST_SOURCE,
     CONF_ENTITY_HUMIDITY,
-    CONF_ENTITY_MODE,
     CONF_ENTITY_RETURN,
     CONF_ENTITY_SUPPLY,
     CONF_ENTITY_TEMP_OUTDOOR,
@@ -83,7 +82,6 @@ _SALON_ENTITIES: dict[str, Any] = {
     CONF_ENTITY_RETURN: ["sensor.salon_return"],
     CONF_ENTITY_FAST_SOURCE: "climate.salon_split",
     CONF_ENTITY_TEMP_OUTDOOR: "sensor.outdoor_temp",
-    CONF_ENTITY_MODE: "input_select.home_mode",
 }
 _LAZIENKA_ENTITIES: dict[str, Any] = {
     CONF_ENTITY_TEMP_ROOM: "sensor.lazienka_temp",
@@ -156,7 +154,6 @@ async def test_full_wizard_creates_entry(
     data = result["data"]
     assert data[CONF_LATITUDE] == _LAT
     assert data[CONF_LONGITUDE] == _LON
-    assert data[CONF_ENTITY_MODE] == "input_select.home_mode"
     assert CONF_CONTROLLER in data
 
     rooms = data[CONF_ROOMS]
@@ -555,7 +552,6 @@ async def test_options_flow_remove_last_room_blocked(
         data={
             CONF_LATITUDE: _LAT,
             CONF_LONGITUDE: _LON,
-            CONF_ENTITY_MODE: "input_select.home_mode",
             CONF_ROOMS: [
                 {
                     CONF_ROOM_NAME: "Salon",

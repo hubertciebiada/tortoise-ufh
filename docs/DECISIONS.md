@@ -1507,3 +1507,41 @@ routes the payload through the REAL `HeatPumpRuntime` (a synthetic `data.flicker
 would have masked the bug). Lesson: an extractor added to a description-driven entity family
 must be pinned against the REAL coordinator payload shape — `unavailable` is how a silent
 AttributeError presents.
+
+## 27. The global mode becomes an integration-owned entity (2026-07-22, v0.19.0)
+
+**Problem (owner):** the global mode (heating / transitional / cooling / off) and the home
+temperature "should be entities the app exposes". The home temperature already was one
+(`number.tortoise_ufh_home_temperature`, hub device). The mode was not: it lived only in the
+coordinator (`_mode`, persisted in the setpoint Store — S9) and could be changed from the
+panel, the `tortoise_ufh/set_mode` websocket command and the `set_mode` service — but never
+read or written as an entity, so it could not go on a dashboard card, into an automation
+trigger, or through the state API. The only entity-shaped access was BACKWARDS: an optional
+EXTERNAL `select` / `input_select` (`CONF_ENTITY_MODE`) that the coordinator polled every
+cycle and that OVERRODE the internal mode.
+
+**Decision: the integration exposes the mode; the external mode input is retired.**
+
+- New GLOBAL `select` on the hub device — `home_mode`, options exactly `MODE_OPTIONS`
+  (`heating` / `transitional` / `cooling` / `off`), unique id `{entry_id}_home_mode`,
+  deliberately WITHOUT an entity category: unlike the per-room `control_state` (a config
+  switch) this is a primary control, a peer of the home-temperature number. Reads
+  `coordinator.get_mode()`, writes `coordinator.set_mode()` — the single write path shared
+  with the panel and the service, so persistence (S9), the immediate rebroadcast and the
+  debounced recompute are inherited rather than reimplemented. A mode set from the panel
+  travels back to the entity through the coordinator update it subscribes to.
+- `CONF_ENTITY_MODE` is GONE: no wizard picker, no data key, no `_read_mode()` poll in the
+  update cycle. Two writable sources of truth for one value contradicted the owner's
+  SIMPLICITY mandate — and the external one silently won every cycle, so a mode picked in the
+  panel could be reverted 5 minutes later with nothing in the log. Whoever wants to keep
+  driving the mode from a helper writes a one-line automation calling `select.select_option`;
+  the arrow now points outward, which is what an integration OUTPUT means.
+- Config-entry migration **v3 → v4** drops the legacy `entity_mode` key from `entry.data`
+  (pattern of the retired `kill_switch`: a local literal in `async_migrate_entry`, no lingering
+  constant). Nothing replaces it in config — the Store keeps the persisted mode across the
+  upgrade, so a July upgrade stays in cooling. No registry cleanup: the key never owned an
+  entity of its own.
+- Consequence for tests: the mode is no longer seedable by setting an `input_select` state.
+  Suite-level scenarios seed it either through the setpoint Store (a restart-shaped test) or by
+  setting the coordinator's field directly, the same white-box style already used for the
+  control-state map; the entity path itself is covered end-to-end in `tests/ha/test_select.py`.

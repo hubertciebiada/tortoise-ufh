@@ -159,8 +159,18 @@ async def async_migrate_entry(
     is needed: the ``select.*_control_state`` entity keeps its domain and
     unique id; only its option list shrinks.
 
-    A v1 entry passes both blocks sequentially in one call (the v1 block ends
-    at version 2, so the v2 block picks it up immediately) and lands on v3.
+    v3 -> v4 (the mode entity retires, 2026-07-22; DECISIONS §27): the global
+    operating mode is now owned by the integration and exposed as the home-mode
+    ``select`` entity, so the legacy ``entity_mode`` key in ``entry.data`` (an
+    external ``select`` / ``input_select`` the coordinator polled every cycle
+    and which overrode the internal mode) is dropped. Nothing replaces it in
+    the config: the persisted mode in the setpoint Store (S9) carries across
+    the upgrade untouched, and an owner who wants to keep driving the mode from
+    a helper writes an automation calling ``select.select_option``. No registry
+    cleanup is needed — the key never had an entity of its own.
+
+    A v1 entry passes every block sequentially in one call (each block ends at
+    the version the next one picks up) and lands on v4.
 
     Args:
         hass: The Home Assistant instance.
@@ -188,8 +198,11 @@ async def async_migrate_entry(
     # Legacy option/entity key for the retired global kill-switch (no longer a
     # named constant; kept here only to purge it from options and the registry).
     legacy_kill_switch_key = "kill_switch"
+    # Legacy data key of the retired external global-mode entity (v0.19.0);
+    # likewise no longer a named constant, kept only to purge it from data.
+    legacy_mode_entity_key = "entity_mode"
 
-    if entry.version > 3:
+    if entry.version > 4:
         # Downgrade from an unknown future version is not supported.
         return False
 
@@ -268,6 +281,21 @@ async def async_migrate_entry(
                 converted,
             )
         hass.config_entries.async_update_entry(entry, options=new_options_v3, version=3)
+
+    if entry.version == 3:
+        # Mode-entity retirement (2026-07-22, v0.19.0; DECISIONS §27): drop the
+        # external mode-input key. An entry that never had one migrates just as
+        # cleanly — the version bump alone marks it current.
+        new_data_v4 = {
+            key: value
+            for key, value in entry.data.items()
+            if key != legacy_mode_entity_key
+        }
+        hass.config_entries.async_update_entry(entry, data=new_data_v4, version=4)
+        _LOGGER.debug(
+            "Migrated Tortoise-UFH entry %s to v4 (retired the mode entity)",
+            entry.entry_id,
+        )
 
     return True
 

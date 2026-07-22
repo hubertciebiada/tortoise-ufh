@@ -24,7 +24,7 @@ from custom_components.tortoise_ufh.const import (
 )
 from custom_components.tortoise_ufh.core.controller import GLOBAL_SAFE_DEW_MARGIN_K
 from custom_components.tortoise_ufh.core.dew_point import dew_point
-from custom_components.tortoise_ufh.core.models import RoomOutputs
+from custom_components.tortoise_ufh.core.models import Mode, RoomOutputs
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -33,7 +33,6 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.ha
 
 _TEMP_ATTRS = {"unit_of_measurement": "°C", "device_class": "temperature"}
-_MODE_ATTRS = {"options": ["heating", "transitional", "cooling", "off"]}
 
 # The (domain, service) pairs the coordinator uses to command actuators.
 _ACTUATOR_SERVICES = (
@@ -47,6 +46,18 @@ _ACTUATOR_SERVICES = (
 def _get_coordinator(entry: MockConfigEntry) -> Any:
     """Return the live coordinator stored on the entry's runtime data."""
     return entry.runtime_data.coordinator
+
+
+def _force_cooling(coordinator: Any) -> None:
+    """Put the coordinator in COOLING for the next cycle.
+
+    Since v0.19.0 (DECISIONS §27) the global mode is the coordinator's own
+    state, written through the home-mode select / ``set_mode``; that surface is
+    covered end-to-end in ``test_select.py``. Here the mode is set on the
+    in-memory field directly — like the control-state map next to it — so no
+    debounced recompute is armed behind the test's own refresh.
+    """
+    coordinator._mode = Mode.COOLING
 
 
 def _mock_actuator_services(
@@ -186,7 +197,7 @@ async def test_cooling_global_safe_dew_point_is_max_room_dew_plus_margin(
     # global dew point — the room must participate (live; writes mocked).
     coordinator._room_states["Salon"] = ROOM_STATE_LIVE
     _mock_actuator_services(hass)
-    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    _force_cooling(coordinator)
     await _refresh(hass, coordinator)
 
     data = coordinator.data
@@ -538,7 +549,7 @@ async def test_stale_humidity_two_stage_gate(
     # Dew-point participation needs a non-OFF room (live; writes mocked).
     coordinator._room_states["Salon"] = ROOM_STATE_LIVE
     _mock_actuator_services(hass)
-    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    _force_cooling(coordinator)
     await _refresh(hass, coordinator)
     fresh_global = coordinator.data.global_safe_dew_point_c
     assert fresh_global is not None
@@ -547,7 +558,7 @@ async def test_stale_humidity_two_stage_gate(
     # Stage 1: the reading is HELD, the dew points are padded +1 K.
     freezer.tick(timedelta(minutes=61))
     hass.states.async_set("sensor.salon_temp", "21.6", _TEMP_ATTRS)
-    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    _force_cooling(coordinator)
     await _refresh(hass, coordinator)
 
     data = coordinator.data
@@ -560,7 +571,7 @@ async def test_stale_humidity_two_stage_gate(
     # out of the global maximum and the local throttle stops conservatively.
     freezer.tick(timedelta(minutes=61))
     hass.states.async_set("sensor.salon_temp", "21.7", _TEMP_ATTRS)
-    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    _force_cooling(coordinator)
     await _refresh(hass, coordinator)
 
     data = coordinator.data
@@ -594,7 +605,7 @@ async def test_live_to_off_in_cooling_closes_valve(
 ) -> None:
     """C5: in COOLING the farewell also drives the orphaned valve to 0."""
     coordinator = _get_coordinator(setup_integration)
-    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    _force_cooling(coordinator)
     await _refresh(hass, coordinator)
     coordinator._room_states["Salon"] = ROOM_STATE_LIVE
 
@@ -774,7 +785,7 @@ async def test_unavailable_rh_entity_keeps_the_stale_pad(
     # Dew-point participation needs a non-OFF room (live; writes mocked).
     coordinator._room_states["Salon"] = ROOM_STATE_LIVE
     _mock_actuator_services(hass)
-    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
+    _force_cooling(coordinator)
     await _refresh(hass, coordinator)
     fresh_global = coordinator.data.global_safe_dew_point_c
     assert fresh_global is not None
@@ -791,7 +802,7 @@ async def test_unavailable_rh_entity_keeps_the_stale_pad(
 
 
 async def test_off_room_does_not_vote_in_group_arbitration(
-    hass: HomeAssistant, register_sources: None
+    hass: HomeAssistant, register_sources: None, hass_storage: dict
 ) -> None:
     """K1: only LIVE rooms arbitrate a shared outdoor unit.
 
@@ -824,18 +835,12 @@ async def test_off_room_does_not_vote_in_group_arbitration(
     # conservative full min-OFF dwell (S4) and keep both splits idle for the
     # whole first cycle regardless of the arbitration under test.
     _mock_actuator_services(hass)
-    hass.states.async_set(
-        "input_select.home_mode",
-        "transitional",
-        {"options": ["heating", "transitional", "cooling", "off"]},
-    )
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={
             CONF_LATITUDE: 50.5,
             CONF_LONGITUDE: 19.5,
             CONF_HOME_SETPOINT: 21.0,
-            "entity_mode": "input_select.home_mode",
             CONF_ROOMS: [
                 {
                     CONF_ROOM_NAME: "Polnoc",
@@ -862,9 +867,19 @@ async def test_off_room_does_not_vote_in_group_arbitration(
         options={CONF_ROOM_STATE: {"Polnoc": "live", "Poludnie": "off"}},
         title="Tortoise-UFH",
         unique_id="50.5_19.5",
-        version=3,
+        version=4,
     )
     entry.add_to_hass(hass)
+    # TRANSITIONAL (bidirectional fast source, valves parked) seeded through
+    # the setpoint Store — its only source since v0.19.0 retired the external
+    # mode entity (DECISIONS §27).
+    store_key = f"{DOMAIN}.setpoints.{entry.entry_id}"
+    hass_storage[store_key] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": store_key,
+        "data": {"home_setpoint": 21.0, "room_offset": {}, "mode": "transitional"},
+    }
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -916,7 +931,6 @@ async def test_heat_pump_cooling_setpoint_and_mode_written_rarely(
     ]
     hass.states.async_set("number.z1_cool_request_temp", "18.0", {})
     hass.states.async_set("select.heat_pump_mode", "Heat+DHW", {"options": hp_options})
-    hass.states.async_set("input_select.home_mode", "cooling", _MODE_ATTRS)
     # RH 85 % lifts the safe dew point above the 18 degC cooling base.
     hass.states.async_set("sensor.salon_humidity", "85", {"unit_of_measurement": "%"})
 
@@ -951,6 +965,7 @@ async def test_heat_pump_cooling_setpoint_and_mode_written_rarely(
     assert first.writes_enabled is False
     assert select_calls == []
 
+    _force_cooling(coordinator)
     coordinator._room_states["Salon"] = ROOM_STATE_LIVE
     await _refresh(hass, coordinator)
 

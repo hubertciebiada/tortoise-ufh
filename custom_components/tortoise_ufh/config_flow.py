@@ -1,15 +1,14 @@
 """Config flow for the Tortoise-UFH integration.
 
-Implements the multi-step setup wizard (``VERSION = 3``) and the options flow.
+Implements the multi-step setup wizard (``VERSION = 4``) and the options flow.
 
 Wizard steps:
     1. ``user``       — home location (latitude / longitude, decimal degrees).
     2. ``rooms``      — one or more rooms (name, floor area, fast-source flag +
        kind, cooling participation); loops on itself while ``add_another``.
     3. ``entities``   — per-room source entity mapping (room temperature,
-       humidity, valves, supply/return water probes, fast source) plus the two
-       global entities (outdoor temperature, mode input) collected on the first
-       room only.
+       humidity, valves, supply/return water probes, fast source) plus the one
+       global entity (outdoor temperature) collected on the first room only.
     4. ``algorithm``  — advanced controller tuning knobs (all optional, defaults
        from the core :class:`~tortoise_ufh.config.ControllerConfig`).
     5. ``confirm``    — sets ``unique_id = f"{lat}_{lon}"`` and creates the entry.
@@ -65,7 +64,6 @@ from .const import (
     CONF_ENTITY_HP_OUTLET_TEMP,
     CONF_ENTITY_HP_RETURN_TEMP,
     CONF_ENTITY_HUMIDITY,
-    CONF_ENTITY_MODE,
     CONF_ENTITY_RETURN,
     CONF_ENTITY_SUPPLY,
     CONF_ENTITY_TEMP_OUTDOOR,
@@ -569,9 +567,9 @@ def _entities_schema_dict(
 
     Args:
         has_fast_source: Whether to include the fast-source climate picker.
-        include_globals: Whether to append the two global pickers (outdoor
-            temperature + mode input). ``True`` only on the wizard's first room;
-            the options flow never re-collects the (already configured) globals.
+        include_globals: Whether to append the global outdoor-temperature
+            picker. ``True`` only on the wizard's first room; the options flow
+            never re-collects the (already configured) global.
         defaults: An existing room dict used to pre-fill the pickers when
             editing, or ``None`` to leave every field blank (add / first setup).
 
@@ -615,9 +613,6 @@ def _entities_schema_dict(
     if include_globals:
         schema[marker(CONF_ENTITY_TEMP_OUTDOOR, required=False)] = EntitySelector(
             EntitySelectorConfig(domain=["sensor"], device_class=["temperature"])
-        )
-        schema[marker(CONF_ENTITY_MODE, required=False)] = EntitySelector(
-            EntitySelectorConfig(domain=["select", "input_select"])
         )
     return schema
 
@@ -702,7 +697,7 @@ def _first_entity_error(
 class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
     """Multi-step setup wizard for Tortoise-UFH."""
 
-    VERSION = 3
+    VERSION = 4
 
     @staticmethod
     def async_get_options_flow(
@@ -881,8 +876,8 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Step 3: map source entities for the current room.
 
-        The two global entities (outdoor temperature and mode input) are shown
-        only for the first room.
+        The one global entity (outdoor temperature) is shown only for the first
+        room.
         """
         errors: dict[str, str] = {}
         room = self._rooms[self._entity_room_idx]
@@ -898,7 +893,6 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
             returns = _as_entity_list(user_input.get(CONF_ENTITY_RETURN))
             fast_source = str(user_input.get(CONF_ENTITY_FAST_SOURCE, ""))
             outdoor = str(user_input.get(CONF_ENTITY_TEMP_OUTDOOR, ""))
-            mode_entity = str(user_input.get(CONF_ENTITY_MODE, ""))
 
             first_error = _first_entity_error(
                 validator,
@@ -924,10 +918,7 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                 if room.get(CONF_HAS_FAST_SOURCE):
                     room[CONF_ENTITY_FAST_SOURCE] = fast_source
                 if is_first:
-                    self._global = {
-                        CONF_ENTITY_TEMP_OUTDOOR: outdoor,
-                        CONF_ENTITY_MODE: mode_entity,
-                    }
+                    self._global = {CONF_ENTITY_TEMP_OUTDOOR: outdoor}
 
                 self._entity_room_idx += 1
                 if self._entity_room_idx < len(self._rooms):
@@ -998,7 +989,6 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_LATITUDE: location.latitude,
                 CONF_LONGITUDE: location.longitude,
                 CONF_HOME_SETPOINT: DEFAULT_HOME_SETPOINT_C,
-                CONF_ENTITY_MODE: self._global.get(CONF_ENTITY_MODE, ""),
                 CONF_ROOMS: rooms,
                 CONF_CONTROLLER: self._controller,
             }

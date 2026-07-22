@@ -119,7 +119,7 @@ async def test_migrate_v1_chain_state_precedence(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 3
+    assert entry.version == 4
     assert entry.options[CONF_ROOM_STATE] == {"Salon": expected}
     # No shadow literal may survive the chain.
     assert ROOM_STATE_SHADOW not in entry.options[CONF_ROOM_STATE].values()
@@ -141,7 +141,7 @@ async def test_migrate_v1_no_options_defaults_every_room_to_off(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 3
+    assert entry.version == 4
     assert entry.options[CONF_ROOM_STATE] == {
         "Salon": ROOM_STATE_OFF,
         "Lazienka": ROOM_STATE_OFF,
@@ -225,7 +225,7 @@ async def test_migrate_v2_state_conversion(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 3
+    assert entry.version == 4
     assert entry.options[CONF_ROOM_STATE] == {"Salon": expected}
 
 
@@ -242,15 +242,47 @@ async def test_migrate_v2_without_state_map_does_not_invent_one(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 3
+    assert entry.version == 4
     assert CONF_ROOM_STATE not in entry.options
     assert entry.options.get("unrelated") is True
+
+
+async def test_migrate_v3_drops_the_retired_mode_entity(hass: HomeAssistant) -> None:
+    """v3 -> v4 (DECISIONS §27) purges the external mode-entity key from data.
+
+    The mode is owned by the integration (the home-mode select) since v0.19.0,
+    so the legacy ``entity_mode`` pointer must not linger in ``.storage``. Every
+    other data key survives untouched.
+    """
+    entry = _entry(hass, rooms=[{CONF_ROOM_NAME: "Salon"}], version=3)
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, "entity_mode": "input_select.home_mode"}
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert entry.version == 4
+    assert "entity_mode" not in entry.data
+    assert entry.data[CONF_ROOMS] == [{CONF_ROOM_NAME: "Salon"}]
+
+
+async def test_migrate_v3_without_a_mode_entity_just_bumps(
+    hass: HomeAssistant,
+) -> None:
+    """A v3 entry that never had a mode entity migrates on the version alone."""
+    entry = _entry(hass, rooms=[{CONF_ROOM_NAME: "Salon"}], version=3)
+    data_before = dict(entry.data)
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert entry.version == 4
+    assert dict(entry.data) == data_before
 
 
 async def test_migrate_rejects_newer_version(hass: HomeAssistant) -> None:
     """A version newer than the code knows about is refused (no downgrade)."""
     entry = _entry(hass, rooms=[{CONF_ROOM_NAME: "Salon"}])
-    hass.config_entries.async_update_entry(entry, version=4)
+    hass.config_entries.async_update_entry(entry, version=5)
 
     assert await async_migrate_entry(hass, entry) is False
 
@@ -293,7 +325,7 @@ async def test_v1_entry_sets_up_and_migrates(
 
     # The entry loaded on the migrated (v3) schema.
     assert entry.state is ConfigEntryState.LOADED
-    assert entry.version == 3
+    assert entry.version == 4
 
     coordinator = entry.runtime_data.coordinator
     # participates=True + live=True -> live; the other room -> shadow -> off.

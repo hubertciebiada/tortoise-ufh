@@ -228,8 +228,7 @@ validation) first asks for the building location (used for weather compensation 
 solar-gain feedforward), then maps your entities to roles: per room a temperature
 sensor, one or more valve actuators (`number` or `valve` entities), optional
 supply/return water sensors, optional humidity (required for cooled rooms), and an
-optional split `climate` entity; globally an outdoor-temperature sensor and a mode
-selector.
+optional split `climate` entity; globally an outdoor-temperature sensor.
 
 **Multisplit owners:** if several rooms' indoor units share one physical outdoor unit,
 give them the same **shared outdoor unit group** label in the room step (any name, e.g.
@@ -252,7 +251,9 @@ only). From the panel you can:
 - Open any room's **live report** to read the full decision breakdown.
 
 The global home temperature and per-room offsets are also exposed as writable `number`
-entities, and the same actions are available as the `set_home_temperature`,
+entities, the global mode as a writable `select` (`home_mode` — the single source of truth
+for the mode; drive it from your own helper with an automation calling
+`select.select_option`), and the same actions are available as the `set_home_temperature`,
 `set_room_offset` and `set_mode` services and over the panel WebSocket API. No YAML editing
 is required. A `dashboard_tortoise_ufh.yaml` Lovelace template ships as a fallback.
 

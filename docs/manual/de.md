@@ -113,8 +113,7 @@ Der Assistent führt durch fünf Schritte:
    (`number`- oder `valve`-Entitäten; ein Raum kann mehrere Heizkreise haben — ein
    Antrieb pro Heizkreis), Vorlauf- und Rücklauftemperatursensoren (einer pro
    Heizkreis), `climate`-Entität der Zusatzquelle. Beim ersten Raum zusätzlich
-   globale Entitäten: Außentemperatursensor und Modus-Entität (select /
-   input_select).
+   die globale Entität: Außentemperatursensor.
 4. **Algorithmus-Parameter** — Haus-Sollwert und Reglerparameter (Sie können die
    Standardwerte belassen; alles lässt sich später im Panel ändern — §8).
 5. **Bestätigung** — Zusammenfassung. Räume starten im Zustand **Aus**: Es wird
@@ -222,6 +221,11 @@ Berührung daneben schließt sie.
 Globale Entitäten (Gerät „UFH controller“):
 
 - `number.*_home_temperature` — Haustemperatur (5–30 °C, Schritt 0,5),
+- `select.*_home_mode` — Hausmodus **Heizung / Übergang / Kühlung / Aus**
+  (seit v0.19.0; diese Entität ist die einzige Quelle der Wahrheit für den Modus
+  — Panel, Dienst `set_mode` und diese Entität schreiben dasselbe Feld. Sie
+  möchten den Modus aus einem eigenen `input_select` steuern? Dann eine
+  Automatisierung mit `select.select_option` anlegen),
 - `sensor.*_global_safe_dew_point` — globaler sicherer Taupunkt (§9),
 - `sensor.*_algorithm_status`, `sensor.*_last_update`, `sensor.*_watchdog_status`.
 

@@ -104,8 +104,8 @@ Kreator prowadzi przez pięć kroków:
    (**wymagany**, gdy pokój bierze udział w chłodzeniu), siłowniki zaworów (encje
    `number` lub `valve`; pokój może mieć kilka pętli — po jednym siłowniku na
    pętlę), czujniki temperatury zasilania i powrotu (po jednym na pętlę), encja
-   `climate` szybkiego źródła. Przy pierwszym pokoju dodatkowo encje globalne:
-   czujnik temperatury zewnętrznej i encja trybu (select / input_select).
+   `climate` szybkiego źródła. Przy pierwszym pokoju dodatkowo encja globalna:
+   czujnik temperatury zewnętrznej.
 4. **Parametry algorytmu** — nastawa domu i knoby regulatora (możesz zostawić
    domyślne; wszystko zmienisz później w panelu — §8).
 5. **Potwierdzenie** — podsumowanie. Pokoje startują w stanie **Wyłączony**: nic
@@ -202,6 +202,10 @@ zamyka.
 Encje globalne (urządzenie „UFH controller"):
 
 - `number.*_home_temperature` — temperatura domu (5–30 °C, krok 0,5),
+- `select.*_home_mode` — tryb domu **Grzanie / Przejściowy / Chłodzenie / Wył.**
+  (od v0.19.0; ta encja jest jedynym źródłem prawdy dla trybu — panel, usługa
+  `set_mode` i ta encja zapisują to samo pole. Chcesz sterować trybem z własnego
+  `input_select`? Zrób automatyzację wołającą `select.select_option`),
 - `sensor.*_global_safe_dew_point` — globalny bezpieczny punkt rosy (§9),
 - `sensor.*_algorithm_status`, `sensor.*_last_update`, `sensor.*_watchdog_status`.
 

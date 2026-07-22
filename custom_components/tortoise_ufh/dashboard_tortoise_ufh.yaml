@@ -18,6 +18,8 @@
 # their old ids via the registry).
 #   Global (hub device "Tortoise-UFH"):
 #             number.tortoise_ufh_home_temperature
+#             select.tortoise_ufh_home_mode
+#                        (heating/transitional/cooling/off)
 #             sensor.tortoise_ufh_global_safe_dew_point   (°C)
 #             sensor.tortoise_ufh_algorithm_status
 #             sensor.tortoise_ufh_watchdog_status
@@ -54,6 +56,9 @@
 #         entities:
 #           - entity: number.tortoise_ufh_home_temperature
 #             name: Home temperature (°C)
+#             icon: mdi:home-thermometer
+#           - entity: select.tortoise_ufh_home_mode
+#             name: Home mode
 #             icon: mdi:home-thermometer
 #           - entity: sensor.tortoise_ufh_global_safe_dew_point
 #             name: Global safe dew point (°C -> HP)

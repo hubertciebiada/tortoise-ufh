@@ -7,6 +7,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 
 from custom_components.tortoise_ufh.const import DOMAIN, ROOM_STATE_LIVE
+from custom_components.tortoise_ufh.core.models import Mode
 
 pytestmark = pytest.mark.ha
 
@@ -81,16 +82,12 @@ async def test_persisted_mode_restored_on_restart(
     entry_data: dict,
     hass_storage: dict,
 ) -> None:
-    """S9: with no mode entity, a stored COOLING mode survives a restart."""
+    """S9: a stored COOLING mode survives a restart (the Store is its only source)."""
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-    from custom_components.tortoise_ufh.const import CONF_ENTITY_MODE
-
-    data = dict(entry_data)
-    data.pop(CONF_ENTITY_MODE)
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data=data,
+        data=dict(entry_data),
         options={},
         title="Tortoise-UFH",
         unique_id="50.5_19.5",
@@ -142,11 +139,9 @@ async def test_no_actuator_writes_inside_the_unload_window(
     # A cooling scenario with a wide-open valve on a LIVE room.
     hass.states.async_set("sensor.salon_temp", "25.0", {"unit_of_measurement": "°C"})
     hass.states.async_set("sensor.salon_supply", "18.0", {"unit_of_measurement": "°C"})
-    hass.states.async_set(
-        "input_select.home_mode",
-        "cooling",
-        {"options": ["heating", "transitional", "cooling", "off"]},
-    )
+    # The mode is the coordinator's own state since v0.19.0 (DECISIONS §27);
+    # set directly, like the control-state map below, to arm no extra recompute.
+    coordinator._mode = Mode.COOLING
     coordinator._room_states["Salon"] = ROOM_STATE_LIVE
     valve_calls = async_mock_service(hass, "number", "set_value")
     async_mock_service(hass, "climate", "set_hvac_mode")

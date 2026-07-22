@@ -39,8 +39,7 @@
           "entity_supply": "Supply water temperature sensors (one per loop)",
           "entity_return": "Return water temperature sensors (one per loop)",
           "entity_fast_source": "Fast-source climate entity (split / heater)",
-          "room_offset": "Room offset from home setpoint (K)",
-          "entity_mode": "Global mode entity (heating / transitional / cooling / off)"
+          "room_offset": "Room offset from home setpoint (K)"
         }
       },
       "algorithm": {
@@ -261,6 +260,15 @@
   },
   "entity": {
     "select": {
+      "home_mode": {
+        "name": "Home mode",
+        "state": {
+          "heating": "Heating",
+          "transitional": "Transitional",
+          "cooling": "Cooling",
+          "off": "Off"
+        }
+      },
       "control_state": {
         "name": "Control state",
         "state": {

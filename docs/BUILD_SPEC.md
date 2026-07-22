@@ -84,7 +84,7 @@ tortoise-ufh/
     number.py                        # global home-temp + per-room offset (writable)
     sensor.py                        # per-room report/diagnostics + GLOBAL safe dew-point sensor
     binary_sensor.py                 # per-room flags (sensor_lost, saturated, condensation)
-    select.py                        # per-room control-state select (off / live)
+    select.py                        # global home-mode + per-room control-state select
     websocket.py                     # panel API commands (config/live/setters + room state + tuning)
     panel.py                         # register sidebar panel + static path for the JS module
     services.py                      # register/unregister the services declared in services.yaml
@@ -763,7 +763,7 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   `codeowners:["@hubertciebiada"]`,
   `documentation`/`issue_tracker` -> github `hubertciebiada/tortoise-ufh`.
 - **`const.py`**: `DOMAIN`, `PLATFORMS=[NUMBER, SENSOR, BINARY_SENSOR, SELECT]`, `UPDATE_INTERVAL_MINUTES=5`,
-  full `CONF_*` vocabulary (home_setpoint, mode entity, per-room: temp/humidity/outdoor/valves(list)/
+  full `CONF_*` vocabulary (home_setpoint, per-room: temp/humidity/outdoor/valves(list)/
   supply(list)/return(list)/fast_source entity+kind/offset/cooling_enabled),
   `WATCHDOG_TIMEOUT_MINUTES=15`, `WATCHDOG_RECOVERY_MINUTES=5`, unit sets (°C/%/W),
   `ENTITY_STALE_MAX_SECONDS=300`. **Canonical
@@ -837,8 +837,10 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   `RoomInputs.fast_source_group`; the fast-source read path also passes the raw climate state
   as `RoomInputs.fast_source_hvac_mode`, so the core reconciliation sees DIRECTION divergences.
   **Mode persistence (S9):** the global mode is persisted in the setpoint Store and restored on
-  startup (a configured, available mode entity still wins), so a restart in July never falls
-  back to heating logic.
+  startup, so a restart in July never falls back to heating logic. *(Amended 2026-07-22,
+  v0.19.0 — DECISIONS §27: the Store is the ONLY restore source; the external mode-input
+  entity that used to win on every cycle is retired in favour of the integration's own
+  `home_mode` select.)*
   **Farewell command (C5):** on a room's `live → off` transition and on entry unload,
   one-shot safe parking of the released actuators: split **OFF** always; valve → **0** when the
   global mode is COOLING (an orphaned open valve would keep passing chilled water outside both
@@ -863,6 +865,10 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   `control_state` select (`off` / `live`, `translation_key="control_state"`,
   `EntityCategory.CONFIG`); `async_select_option` → `coordinator.set_room_state`. This native select
   replaced the retired global kill-switch and per-room `live_control` switch (both purged by migration).
+  **Plus ONE GLOBAL `home_mode` select** (`heating` / `transitional` / `cooling` / `off`,
+  `translation_key="home_mode"`, NO entity category — a primary control on the hub device);
+  `async_select_option` → `coordinator.set_mode`. *(Additive 2026-07-22, v0.19.0 — DECISIONS §27:
+  the mode is an OUTPUT of the integration; the external mode-input entity is retired.)*
 - **Devices & entity naming (v0.5.0, GH #3)**: helpers in **`device.py`** — every room is a device
   (`(DOMAIN, f"{entry_id}_{room_slug}")`, name = room name, model "Room zone", `via_device` → hub), plus
   one per-entry hub device (`(DOMAIN, entry_id)`, name "Tortoise-UFH", model "UFH controller") carrying
@@ -875,13 +881,14 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   both `number`- and `valve`-domain actuators are accepted — see the coordinator's per-domain
   write dispatch); supply/return
   `domain=["sensor"], device_class=["temperature"]` (per loop, multiple); room temp sensor+temperature;
-  humidity `device_class=["humidity"]`; fast source `domain=["climate"]`; global mode entity
-  `domain=["select","input_select"]`. Rooms can be seeded from HA areas but manual add is fine. Config
-  flow `VERSION = 3`; `async_migrate_entry` folds legacy v1 (`participates` + `live_control` +
+  humidity `device_class=["humidity"]`; fast source `domain=["climate"]`. Rooms can be seeded
+  from HA areas but manual add is fine. Config
+  flow `VERSION = 4`; `async_migrate_entry` folds legacy v1 (`participates` + `live_control` +
   `kill_switch`) into `CONF_ROOM_STATE` (safety precedence: `participates == false` ⇒ `off`),
-  purges the retired switch entities from the registry, and (v2 → v3, shadow removal
-  2026-07-12 — DECISIONS §13) maps every state ∉ {`off`, `live`} to `off`; a v1 entry passes
-  both blocks in ONE call. The **options flow is a menu** with four
+  purges the retired switch entities from the registry, (v2 → v3, shadow removal
+  2026-07-12 — DECISIONS §13) maps every state ∉ {`off`, `live`} to `off`, and (v3 → v4,
+  2026-07-22 — DECISIONS §27) drops the retired `entity_mode` key; a v1 entry passes
+  every block in ONE call. The **options flow is a menu** with four
   leaves: `add_room` / `edit_room` (name immutable) / `remove_room` (with entity-registry and
   setpoint-Store cleanup) / `settings` — the settings form carries the per-room control-state
   selects (off/live) + the advanced global controller knobs, merged over existing options

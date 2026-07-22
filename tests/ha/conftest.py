@@ -25,7 +25,6 @@ from custom_components.tortoise_ufh.const import (  # noqa: E402
     CONF_COOLING_ENABLED,
     CONF_ENTITY_FAST_SOURCE,
     CONF_ENTITY_HUMIDITY,
-    CONF_ENTITY_MODE,
     CONF_ENTITY_RETURN,
     CONF_ENTITY_SUPPLY,
     CONF_ENTITY_TEMP_OUTDOOR,
@@ -82,11 +81,6 @@ def register_sources(hass: HomeAssistant) -> None:
     hass.states.async_set("number.lazienka_valve", "0", _PCT_ATTRS)
     hass.states.async_set("sensor.lazienka_supply", "30.0", _TEMP_ATTRS)
     hass.states.async_set("sensor.lazienka_return", "26.0", _TEMP_ATTRS)
-    hass.states.async_set(
-        "input_select.home_mode",
-        "heating",
-        {"options": ["heating", "transitional", "cooling", "off"]},
-    )
 
 
 @pytest.fixture
@@ -100,7 +94,6 @@ def entry_data() -> dict[str, Any]:
         CONF_LATITUDE: 50.5,
         CONF_LONGITUDE: 19.5,
         CONF_HOME_SETPOINT: 21.0,
-        CONF_ENTITY_MODE: "input_select.home_mode",
         CONF_ROOMS: [
             {
                 CONF_ROOM_NAME: "Salon",

@@ -45,9 +45,6 @@ PLATFORMS: list[Platform] = [
 CONF_HOME_SETPOINT: str = "home_setpoint"
 """Global whole-home comfort setpoint, degrees Celsius. Room target = this + offset."""
 
-CONF_ENTITY_MODE: str = "entity_mode"
-"""Global mode input entity (select/input_select): heating/transitional/cooling/off."""
-
 CONF_CONTROLLER: str = "controller"
 """Serialised global :class:`~core.config.ControllerConfig` knobs, stored under
 ``entry.data`` (wizard result) and overlaid by ``entry.options`` (options flow /

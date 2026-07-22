@@ -225,8 +225,7 @@ Einheitenprüfung) fragt zuerst nach dem Gebäudestandort (verwendet für Wetter
 Sonneneinstrahlungs-Vorsteuerung) und ordnet dann Ihre Entitäten den Rollen zu: je Raum einen
 Temperatursensor, einen oder mehrere Ventilantriebe (`number`- oder `valve`-Entitäten), optionale
 Vorlauf-/Rücklaufwassersensoren, optionale Luftfeuchtigkeit (für gekühlte Räume erforderlich) und
-eine optionale Split-`climate`-Entität; global einen Außentemperatursensor und einen
-Modus-Selektor.
+eine optionale Split-`climate`-Entität; global einen Außentemperatursensor.
 
 **Multisplit-Besitzer:** Wenn die Inneneinheiten mehrerer Räume ein physisches Außengerät teilen,
 geben Sie ihnen im Raumschritt dasselbe Label **Gruppe des gemeinsamen Außengeräts** (ein beliebiger
@@ -251,8 +250,11 @@ hinzugefügt, nur für Administratoren). Vom Panel aus können Sie:
   lesen.
 
 Die globale Haustemperatur und die Offsets je Raum sind auch als beschreibbare `number`-Entitäten
-verfügbar, und dieselben Aktionen stehen als Dienste `set_home_temperature`, `set_room_offset` und
-`set_mode` sowie über die Panel-WebSocket-API zur Verfügung. Kein YAML-Editieren erforderlich. Eine
+verfügbar, der globale Modus als beschreibbares `select` (`home_mode` — die einzige Quelle der
+Wahrheit für den Modus; aus einem eigenen Helfer heraus über eine Automatisierung mit
+`select.select_option` steuerbar), und dieselben Aktionen stehen als Dienste
+`set_home_temperature`, `set_room_offset` und `set_mode` sowie über die Panel-WebSocket-API zur
+Verfügung. Kein YAML-Editieren erforderlich. Eine
 Lovelace-Vorlage `dashboard_tortoise_ufh.yaml` wird als Rückfalloption mitgeliefert.
 
 ### Geräte und Entitätsbenennung

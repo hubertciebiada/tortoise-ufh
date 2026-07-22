@@ -39,8 +39,7 @@
           "entity_supply": "Czujniki temperatury zasilania (po jednym na pętlę)",
           "entity_return": "Czujniki temperatury powrotu (po jednym na pętlę)",
           "entity_fast_source": "Encja klimatyzacji szybkiego źródła (split / grzałka)",
-          "room_offset": "Korekta pomieszczenia względem nastawy domu (K)",
-          "entity_mode": "Globalna encja trybu (grzanie / przejściowy / chłodzenie / wył.)"
+          "room_offset": "Korekta pomieszczenia względem nastawy domu (K)"
         }
       },
       "algorithm": {
@@ -261,6 +260,15 @@
   },
   "entity": {
     "select": {
+      "home_mode": {
+        "name": "Tryb domu",
+        "state": {
+          "heating": "Grzanie",
+          "transitional": "Przejściowy",
+          "cooling": "Chłodzenie",
+          "off": "Wył."
+        }
+      },
       "control_state": {
         "name": "Stan sterowania",
         "state": {

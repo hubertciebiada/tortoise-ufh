@@ -1,9 +1,19 @@
-"""Select-platform tests: the per-room control-state select.
+"""Select-platform tests: the global home-mode and per-room control-state selects.
 
-Exercises the single writable control surface that replaced the retired
-kill-switch and per-room live-control switches (BUILD_SPEC / prd-control-brain.md
-§8, RoomControlState refactor; reduced to the two-state ``off`` / ``live``
-2026-07-12 — DECISIONS §13):
+The global home-mode select (v0.19.0, DECISIONS §27) is the integration's OWN
+mode control and the single source of truth (the external ``entity_mode``
+option is retired):
+
+* exactly one ``home_mode`` select, on the hub device, offering the four
+  :data:`MODE_OPTIONS` and starting in the default ``heating``;
+* selecting an option flips ``coordinator.get_mode()`` (which persists to the
+  setpoint Store and rebroadcasts), and a mode set from the coordinator side
+  (panel / ``set_mode`` service) shows up on the entity.
+
+The per-room control-state select is the writable surface that replaced the
+retired kill-switch and per-room live-control switches (BUILD_SPEC /
+prd-control-brain.md §8, RoomControlState refactor; reduced to the two-state
+``off`` / ``live`` 2026-07-12 — DECISIONS §13):
 
 * one ``control_state`` select per configured room, options ``off`` / ``live``,
   each starting in the safe default ``off``;
@@ -23,12 +33,27 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.tortoise_ufh.const import (
     CONF_ROOM_STATE,
     DOMAIN,
+    MODE_COOLING,
+    MODE_HEATING,
+    MODE_OPTIONS,
+    MODE_TRANSITIONAL,
     ROOM_STATE_LIVE,
     ROOM_STATE_OFF,
     ROOM_STATES,
 )
+from custom_components.tortoise_ufh.core.models import Mode
 
 pytestmark = pytest.mark.ha
+
+
+def _home_mode_entity_id(hass: HomeAssistant, entry: MockConfigEntry) -> str:
+    """Resolve the global home-mode select entity id from its unique id."""
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        "select", DOMAIN, f"{entry.entry_id}_home_mode"
+    )
+    assert entity_id is not None
+    return entity_id
 
 
 def _control_state_entity_id(
@@ -52,6 +77,70 @@ async def _select(hass: HomeAssistant, entity_id: str, option: str) -> None:
         blocking=True,
     )
     await hass.async_block_till_done()
+
+
+async def test_home_mode_select_exists_on_the_hub_device(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """One global home-mode select, four options, default heating, on the hub."""
+    from homeassistant.helpers import device_registry as dr
+
+    entry = setup_integration
+    entity_id = _home_mode_entity_id(hass, entry)
+
+    state = hass.states.get(entity_id)
+    assert state is not None
+    assert state.state == MODE_HEATING
+    assert state.attributes["options"] == MODE_OPTIONS
+    assert state.attributes["options"] == [
+        MODE_HEATING,
+        MODE_TRANSITIONAL,
+        MODE_COOLING,
+        "off",
+    ]
+
+    # Building-wide control: it belongs to the hub device, not to a room.
+    registry = er.async_get(hass)
+    device_id = registry.async_get(entity_id).device_id
+    hub = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    assert hub is not None
+    assert device_id == hub.id
+
+    # Exactly one such entity for the entry.
+    home_mode_entities = [
+        reg.entity_id
+        for reg in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if reg.unique_id.endswith("_home_mode")
+    ]
+    assert home_mode_entities == [entity_id]
+
+
+async def test_home_mode_select_drives_and_follows_the_coordinator(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """The select writes the mode through the coordinator — and mirrors it back."""
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    async_mock_service(hass, "number", "set_value")
+    async_mock_service(hass, "climate", "set_hvac_mode")
+    async_mock_service(hass, "climate", "set_temperature")
+
+    entry = setup_integration
+    coordinator = entry.runtime_data.coordinator
+    entity_id = _home_mode_entity_id(hass, entry)
+
+    await _select(hass, entity_id, MODE_COOLING)
+
+    assert coordinator.get_mode() is Mode.COOLING
+    assert hass.states.get(entity_id).state == MODE_COOLING
+    # The mode change is rebroadcast, so the cached payload agrees at once.
+    assert coordinator.data.mode == MODE_COOLING
+
+    # The other direction: the panel / set_mode service path updates the entity.
+    coordinator.set_mode(Mode.TRANSITIONAL)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(entity_id).state == MODE_TRANSITIONAL
 
 
 async def test_select_entities_exist(
