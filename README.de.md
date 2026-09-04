@@ -290,15 +290,19 @@ Standard **Aus** — es wird nichts geschrieben, bis Sie ihn bewusst auf **Aktiv
   um mindestens die Schreibschwelle vom letzten abweicht, um Aktor-Klappern zu vermeiden) sowie Modus
   und Zieltemperatur des Splits.
 
-> **Manuelle Übersteuerungen & das 45-Minuten-Neuerzwingen.** Im Zustand `live` ist Tortoise-UFH der
-> EIGENTÜMER des Split des Raums: Ein unveränderter Befehl wird nicht in jedem Zyklus erneut gesendet
-> (kein Piepen, Ihre Ventilator- und Lamellen-Anpassungen überstehen es), aber das Paar Modus + Ziel
-> wird **etwa alle 45 Minuten neu erzwungen**, sodass eine manuelle Änderung von Modus oder Ziel des
-> Splits per Fernbedienung innerhalb dieses Fensters überschrieben wird (der Bericht meldet in der
-> Zwischenzeit `fast_source_mismatch`). Wenn Sie die Hardware eines Raums eine Weile von Hand steuern
-> möchten, **schalten Sie den Raum auf `off`** — das ist der unterstützte „manuelle Modus“: Der
-> Regler schreibt nichts, und der Weg zurück nach `live` parkt die Aktoren sicher neu (der Split
-> absolviert eine ehrliche Mindest-AUS-Zeit vor jedem Neustart).
+> **Manuelle Übersteuerungen.** Im Zustand `live` ist Tortoise-UFH der Eigentümer des Splits des
+> Raums: Ein unveränderter Befehl wird nicht in jedem Zyklus erneut gesendet (kein Piepen, Ihre
+> Ventilator- und Lamellen-Anpassungen überstehen es), und das Paar Modus + Ziel wird etwa alle
+> 45 Minuten neu erzwungen. Eine manuelle Änderung des **Modus** des Splits (Ein/Aus oder Richtung)
+> per Fernbedienung gilt als Ihre Entscheidung: Der Regler übernimmt den Zustand des Geräts und
+> spiegelt ihn für `fast_manual_hold_minutes` nur (Standard 60 min, gezählt ab der letzten
+> Berührung — Meldung `fast_source_manual`, nichts wird geschrieben, ein kühlender Split wird nie
+> direkt auf Heizen gekippt); danach läuft die normale Logik aus diesem Zustand weiter. Die
+> Sicherheitsregeln S3/S4 und ein verlorener Sensor beenden das Halten. Setzen Sie den Parameter
+> auf `0` für das frühere Verhalten (`fast_source_mismatch` + erneutes Erzwingen). Für dauerhaft
+> manuelle Steuerung **schalten Sie den Raum auf `off`** — der Regler schreibt nichts, und der Weg
+> zurück nach `live` parkt die Aktoren sicher neu (der Split absolviert eine ehrliche
+> Mindest-AUS-Zeit vor jedem Neustart).
 
 Ein „Hände weg von der Hardware“ für das ganze Haus ist einfach **jeder Raum auf Aus** — der
 Regelungszustand je Raum ersetzte den früheren globalen Kill-Switch. Eine Änderung des

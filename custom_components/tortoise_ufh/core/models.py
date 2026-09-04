@@ -213,7 +213,10 @@ class FastSourceCommand:
         on: Whether the fast source should be running.
         mode: Commanded direction (:class:`FastSourceMode`).
         target_temperature_c: Target temperature in degrees Celsius the split
-            should self-regulate to, or ``None`` when off.
+            should self-regulate to, or ``None`` when off — and ``None`` for
+            an ON command that only MIRRORS a manual hold (DECISIONS §28: the
+            unit runs at the user's own setpoint, which the controller does
+            not know) or commands DRY (the unit self-regulates, §24).
 
     Raises:
         ValueError: If ``on`` is ``True`` while ``mode`` is

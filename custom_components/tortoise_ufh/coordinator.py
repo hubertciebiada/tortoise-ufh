@@ -95,6 +95,7 @@ from .core.hp_link import (
     heating_curve,
 )
 from .core.models import (
+    FastSourceMode,
     LoopInput,
     Mode,
     RoomInputs,
@@ -1134,7 +1135,14 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 if await self._write_fast_source(room_cfg, name, runtime.outputs):
                     # Dry assist demoted to OFF: the climate entity does not
                     # advertise a "dry" hvac mode (§24). Surface it on the
-                    # room like the S8 valve_mismatch merge above.
+                    # room like the S8 valve_mismatch merge above, and tell
+                    # the core what was REALLY written (§28) — otherwise the
+                    # unit's OFF feedback would read as a manual OFF next
+                    # cycle and raise a false manual hold.
+                    if self._building is not None:
+                        self._building.note_fast_source_written(
+                            name, on=False, mode=FastSourceMode.OFF
+                        )
                     report = replace(
                         runtime.report,
                         flags=tuple(
@@ -1851,6 +1859,13 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         Thin delegate to :meth:`CommandWriter.write_fast_source` (which owns
         the S3 command cache and the periodic re-assert).
 
+        Manual hold (§28, 2026-09-04): a report carrying
+        ``"fast_source_manual"`` means the core is mirroring a state the USER
+        set on the unit — nothing is written (so the S3 re-assert cannot stomp
+        on the user's choice) and the entity's command cache is forgotten so
+        the first command after the hold is written unconditionally. The valve
+        path is untouched.
+
         Args:
             room_cfg: The room's configuration dict.
             name: The room name.
@@ -1861,9 +1876,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             entity advertises no dry mode (§24) — the caller flags the room
             with ``dry_unsupported``.
         """
-        return await self._writer.write_fast_source(
-            room_cfg.get(CONF_ENTITY_FAST_SOURCE), name, outputs
-        )
+        entity_id = room_cfg.get(CONF_ENTITY_FAST_SOURCE)
+        if "fast_source_manual" in outputs.report.flags:
+            self._writer.forget_fast_source(entity_id)
+            return False
+        return await self._writer.write_fast_source(entity_id, name, outputs)
 
     # -- Internal: farewell command (live -> off, unload) --------------------
 
