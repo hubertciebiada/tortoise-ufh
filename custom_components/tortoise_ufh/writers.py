@@ -143,6 +143,23 @@ class CommandWriter:
         cached = self._last_written_valve.get(entity_id)
         return None if cached is None else cached[0]
 
+    def forget_fast_source(self, entity_id: str | None) -> None:
+        """Drop the S3 command cache of one climate entity (manual hold, §28).
+
+        Called by the coordinator on every cycle it SKIPS the fast-source
+        write because the room holds a user's manual touch. Without this the
+        first post-hold command could be swallowed as "unchanged and younger
+        than the re-assert period" — e.g. an OFF cached shortly before the
+        hold while the unit physically runs — and the un-written command would
+        read as a fresh divergence next cycle, restarting the hold. With the
+        entry gone, the first command after the hold is always written.
+
+        Args:
+            entity_id: The fast-source climate entity id, or ``None`` / empty.
+        """
+        if entity_id:
+            self._last_written_fast.pop(entity_id, None)
+
     @staticmethod
     def recent_farewell(entity_id: str | None, *, max_age_s: float) -> bool:
         """Whether *entity_id* received a farewell OFF within ``max_age_s``.

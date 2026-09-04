@@ -262,8 +262,8 @@ Zasady praktyczne:
 - **Nowy pokój startuje Wyłączony** — świadomie: integracja nie dotknie sprzętu,
   dopóki sam nie zdecydujesz.
 - **Tryb ręczny** = przełącz pokój na Wyłączony i steruj urządzeniami bezpośrednio.
-  (W stanie Steruje integracja jest właścicielem splita i mniej więcej co 45 minut
-  ponownie wymusza swoją komendę — ręczna zmiana z pilota zostanie nadpisana.)
+  (W stanie Steruje ręczna zmiana trybu splita z pilota jest przyjmowana na czas
+  ręcznego sterowania — §10; stan Wyłączony to sterowanie ręczne bez limitu czasu.)
 - **Całkowity stop** = wszystkie pokoje Wyłączone.
 - Zmiana stanu działa natychmiast i **nie resetuje integratora PID** (przeładowanie
   następuje tylko po zmianie strojenia).
@@ -313,6 +313,7 @@ budynku, więc nadpisanie per pokój nie ma fizycznego sensu i jest odrzucane.
 | **Minimalny czas pracy wspomagania** (`fast_min_on_minutes`) | min | 10 | Minimalny czas pracy szybkiego źródła po włączeniu. Chroni sprężarkę splita przed taktowaniem i uspokaja zmiany kierunku w grupie multisplit. Domyślnie 10 min; minimum 3. |
 | **Minimalny czas postoju wspomagania** (`fast_min_off_minutes`) | min | 10 | Minimalny czas postoju szybkiego źródła po wyłączeniu, zanim wolno je włączyć ponownie. Domyślnie 10 min; minimum 3. |
 | **Podbicie nastawy wspomagania** (`fast_target_offset_k`) | K | 1,0 | O ile kelwinów nastawa wysyłana do splita jest podbijana poza zadaną pokoju podczas dogrzewu/dochładzania (grzanie: zadana + wartość, chłodzenie: zadana − wartość). Czujnik splita pod sufitem czyta cieplej niż czujnik pokojowy — bez podbicia split dławi się przed dostarczeniem dogrzewu; o wyłączeniu i tak decyduje czujnik pokojowy (§10). 0 = bez podbicia. Domyślnie 1,0 K. |
+| **Czas ręcznego sterowania wspomaganiem** (`fast_manual_hold_minutes`) | min | 60 | Gdy split fizycznie robi co innego niż ostatnia komenda (włączony pilotem, wyłączony, przestawiony kierunek), regulator uznaje to za Twoją decyzję: przyjmuje stan urządzenia i przez tyle minut od ostatniego dotknięcia tylko go odzwierciedla — nic nie wysyła i nie nadpisuje ponownym wymuszaniem (flaga `fast_source_manual`, §10). Po upływie czasu wraca normalna logika (zmiana kierunku dalej przez OFF i minimalny postój). Zabezpieczenia S3/S4 i utrata czujnika przerywają utrzymanie. 0 = wyłączone (jak dawniej: `fast_source_mismatch` i ponowne wymuszenie po ~45 min). Domyślnie 60 min. |
 
 **Ochrona przed kondensacją (chłodzenie)**
 
@@ -401,14 +402,36 @@ udziału w chłodzeniu (kreator to wymusza).
 - **Ponowne wymuszanie:** niezmieniona komenda nie jest wysyłana co cykl (bez
   pikania, Twoje ustawienia nawiewu przetrwają), ale mniej więcej **co 45 minut**
   para tryb+temperatura jest wymuszana ponownie; do tego czasu rozjazd zgłasza
-  flaga `fast_source_mismatch`.
+  flaga `fast_source_mismatch` (na stałe tylko przy wyłączonym sterowaniu ręcznym —
+  patrz niżej; domyślnie pojawia się przejściowo na 1–2 cykle po własnej komendzie,
+  a utrzymujący się rozjazd jest przyjmowany jako Twoja decyzja).
+- **Sterowanie ręczne (od v0.20.0):** jeśli split fizycznie robi co innego niż
+  ostatnia komenda — włączyłeś go pilotem, wyłączyłeś albo przestawiłeś kierunek —
+  integracja **nie walczy**: przyjmuje stan urządzenia i przez **czas ręcznego
+  sterowania** (§8; domyślnie 60 min, liczone od ostatniego dotknięcia) tylko go
+  odzwierciedla — nic nie wysyła, ponowne wymuszanie nie nadpisze Twojej zmiany, a
+  split chłodzący z pilota nie zostanie przerzucony wprost na grzanie (pokój, którego
+  czujnikiem jest sam split, po ręcznym chłodzeniu czyta 2 K poniżej zadanej — bez tej
+  reguły regulator „dogrzewałby" go do 24 °C według własnego czujnika splita). Raport
+  nosi flagę `fast_source_manual` (informacyjną). Po upływie czasu wraca normalna
+  logika ze stanu, który zastała: zmiana kierunku dalej przechodzi przez OFF i pełny
+  czas postoju. Zabezpieczenia S3/S4 oraz utrata czujnika przerywają utrzymanie — ich
+  komenda jest zapisywana. Przeładowanie wpisu (każdy zapis strojenia) buduje maszynę
+  od nowa i tym samym kończy utrzymanie — pierwsza synchronizacja przyjmuje pracujące
+  urządzenie bez utrzymania. Parametr 0 wyłącza regułę (zachowanie jak dawniej:
+  `fast_source_mismatch` + wymuszenie po ~45 min). Do stałego ręcznego sterowania
+  nadal służy stan pokoju Wyłączony.
 - **Multisplit:** pokoje, których jednostki wewnętrzne wiszą na wspólnym agregacie,
   oznacz tą samą **grupą** w konfiguracji pokoju. Agregat fizycznie nie umie grzać
   i chłodzić naraz, więc integracja rozstrzyga **jeden kierunek na grupę**: wygrywa
   pokój najdalej poza swoim pasmem komfortu, a **urzędujący kierunek ma bonus
   0,5 K** (nowy kierunek musi być wyraźnie bardziej potrzebny — bez trzepotania).
   Przegrany jest przymusowo wyłączony (flaga `fast_source_group_conflict`) i wraca
-  dopiero po zmianie kierunku grupy, przechodząc pełny czas postoju.
+  dopiero po zmianie kierunku grupy, przechodząc pełny czas postoju. Pokój w
+  sterowaniu ręcznym (powyżej) **przypina kierunek grupy** — agregat fizycznie już
+  pracuje w kierunku, który wybrałeś, więc taki pokój zawsze wygrywa, nigdy nie jest
+  przegranym (jego split nie dostanie OFF od arbitra), a pokoje w przeciwnym kierunku
+  są rozstrzygane jak dotąd.
 
 ### Osuszanie wspomagające (opcjonalne; od v0.15.0)
 
@@ -572,7 +595,8 @@ automatycznie. Pełny słownik poniżej:
 | `s2_condensation` | Ochrona przed kondensacją: zasilanie osiągnęło punkt rosy — zawór zamknięty. | Sprawdź wilgotność i temperaturę wody chłodzącej; upewnij się, że pompa respektuje globalny bezpieczny punkt rosy. |
 | `rh_stale_gated` | Wilgotność nieświeża (60–120 min) — punkt rosy liczony z zapasem do +1 K. | Sprawdź czujnik wilgotności. Powyżej 120 min pokój wypada z ochron — patrz §9. |
 | `valve_mismatch` | Siłownik od ≥3 cykli raportuje pozycję inną niż komenda („zawór nie słucha"). | Sprawdź siłownik/przekaźnik/encję; porównaj kolumny Komenda i Feedback w zakładce Zawory. |
-| `fast_source_mismatch` | Split jest w innym stanie niż komenda (np. zmieniony pilotem). | Nic — zostanie nadpisany przy ponownym wymuszeniu (~45 min); na stałe ręczne sterowanie przełącz pokój na Wyłączony. |
+| `fast_source_mismatch` | Split jest w innym stanie niż komenda (np. zmieniony pilotem). Przy czasie ręcznego sterowania = 0 (§8) to stan trwały — regulator pozostaje właścicielem splita. Przy domyślnym czasie pojawia się tylko przejściowo: w oknie ustalania (1–2 cykle po naszej własnej komendzie — urządzenie mogło jej jeszcze nie wykonać), przy późnym pierwszym odczycie stanu splita (może być nieświeży, nie jest przyjmowany) oraz w cyklu, w którym zabezpieczenie (S3/S4, utrata czujnika) przerywa sterowanie ręczne; ustalony rozjazd jest przyjmowany jako `fast_source_manual`. | Przy czasie = 0: nic — zostanie nadpisany przy ponownym wymuszeniu (~45 min). Domyślnie: nic — po oknie ustalania przechodzi w `fast_source_manual` albo znika. Na stałe ręczne sterowanie przełącz pokój na Wyłączony. |
+| `fast_source_manual` | Sterowanie ręczne (§10): split został przestawiony poza integracją — regulator przyjął jego stan i przez czas ręcznego sterowania tylko go odzwierciedla (nic nie wysyła). | Informacyjne (zamierzone). Czas zmienisz w Strojeniu; 0 wyłącza regułę. |
 | `fast_source_min_runtime` | Blokada minimalnego czasu pracy/postoju — wspomaganie chwilowo nie może zmienić stanu. | Nic — ochrona sprężarki; timer w zakładce Wspomaganie. |
 | `fast_source_quiet_hours` | Ciche godziny wspomagania — pokój jest poza swoim oknem dozwolonych godzin (§10), split się nie załącza (pracujący kończy przez min. czas pracy). | Informacyjne. Okno zmienisz w konfiguracji pokoju. |
 | `fast_source_group_conflict` | Pokój przegrał arbitraż kierunku na wspólnym agregacie — jego split przymusowo OFF. | Nic — wróci po zmianie kierunku grupy. Jeśli częste: przemyśl korekty pokoi w grupie. |
@@ -605,9 +629,12 @@ automatycznie. Pełny słownik poniżej:
 - **Zawór nie słucha (`valve_mismatch`)** — porównaj Komenda vs Feedback
   (zakładka Zawory). Typowe przyczyny: siłownik bez zasilania, encja tylko do
   odczytu, zła encja przypisana do pętli.
-- **Split w innym stanie niż komenda** — flaga `fast_source_mismatch`; integracja
-  nadpisze go przy ponownym wymuszeniu (~45 min). Chcesz sterować ręcznie —
-  przełącz pokój na Wyłączony (§7).
+- **Split w innym stanie niż komenda** — domyślnie flaga `fast_source_manual`:
+  integracja przyjęła Twoją zmianę i przez czas ręcznego sterowania (§8, §10) nic nie
+  wysyła; potem wraca do normalnej pracy (przez 1–2 cykle po własnej komendzie
+  integracji rozjazd pokazuje jeszcze `fast_source_mismatch`). Przy czasie = 0 zamiast
+  tego stale flaga `fast_source_mismatch` i nadpisanie przy ponownym wymuszeniu (~45 min). Chcesz
+  sterować ręcznie na stałe — przełącz pokój na Wyłączony (§7).
 - **Brak globalnego punktu rosy w chłodzeniu** — najedź na kafelek w hero: zobaczysz
   powód per pokój (brak wilgotności, pokój nie chłodzi, chłodzenie wyłączone, brak
   pomiaru). Punkt rosy liczą tylko pokoje realnie chłodzące.

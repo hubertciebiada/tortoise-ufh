@@ -401,7 +401,8 @@ class RoomController:
         # -- Step 0: reconcile the fast-source machine with the physical unit
         # (S4, 2026-07-09): on the FIRST observed feedback the physical state
         # wins and the dwell timer is seeded conservatively; afterwards a
-        # divergence only raises a report flag.
+        # divergence is adopted as user intent under a manual hold (§28,
+        # 2026-09-04) or — with the hold knob at 0 — only raises a flag.
         self._fast.sync(inputs)
         # Snapshot the direction the unit was ACTUALLY running in before any
         # of this cycle's decisions (K4): feeds fast_source_locked_on.
@@ -517,6 +518,14 @@ class RoomController:
         feedback disagreed with the previous cycle's command, and records this
         cycle's commanded on-state for the next comparison.
 
+        Manual hold (§28, 2026-09-04): stamps ``"fast_source_manual"`` while
+        the machine's hold is active. Stamping HERE — after the safety layer —
+        is what makes the flag exact on every path: each path that does not
+        mirror (OFF mode, sensor lost, cooling opt-out, no fast source, an
+        S3/S4/S5 force) goes through ``force_on`` / ``force_off``, which end
+        the hold, so the flag is present exactly when the adapter must NOT
+        write the fast source.
+
         S6 (2026-07-13): merges the ``loop_no_flow`` / ``actuation_test_*``
         flags, stamps the per-loop flow statuses and the self-test payload,
         advances a running self-test by ``dt_seconds`` (restarting the
@@ -547,6 +556,8 @@ class RoomController:
         if self._fast.mismatch:
             flags = tuple(dict.fromkeys((*flags, "fast_source_mismatch")))
         extra: list[str] = []
+        if self._fast.manual_hold_active:
+            extra.append("fast_source_manual")
         if self._flow.no_flow_active:
             extra.append("loop_no_flow")
         if self._selftest.running:
@@ -685,6 +696,24 @@ class RoomController:
         self._fast.force_off()
         self._fast.note_command(False, FastSourceMode.OFF)
 
+    def note_fast_source_written(self, *, on: bool, mode: FastSourceMode) -> None:
+        """Record what the adapter REALLY wrote to the fast source (§28).
+
+        Adapter hook for a degraded write: when the climate entity advertises
+        no ``dry`` mode the adapter writes OFF instead of the core's DRY
+        (``dry_unsupported``, §24). Without this the next cycle's OFF
+        feedback would disagree with the recorded DRY command, look like a
+        manual OFF once settled and raise a false manual hold. Overrides only
+        the pair the next reconciliation compares against; the manual-hold
+        settle counter is untouched (the EMITTED command did not change), so
+        a real touch on such a unit is still adoptable.
+
+        Args:
+            on: The ``on`` state actually written.
+            mode: The direction actually written (``OFF`` for a demoted DRY).
+        """
+        self._fast.note_written(on, mode)
+
     def resolve_group_conflict(self, outputs: RoomOutputs) -> RoomOutputs:
         """Rewrite this cycle's result after LOSING the group arbitration (K4).
 
@@ -696,7 +725,8 @@ class RoomController:
         OFF, and the flag ``"fast_source_group_conflict"`` is merged into the
         report. Because the ON->OFF edge resets the dwell clock, the loser
         re-engages only through a full min-OFF — deliberately biased toward
-        the stability of the winning direction.
+        the stability of the winning direction. A room in a manual hold (§28)
+        is PINNED by the arbiter and never reaches here.
 
         Args:
             outputs: The room's already-finalised outputs for this cycle.
@@ -904,6 +934,10 @@ class RoomController:
         carry it), through the min-ON dwell. A HEATING<->COOLING flip is only
         reachable through OFF with the full min-OFF dwell. The valve is parked.
 
+        Manual hold (§28): while the machine holds a user's touch the command
+        only MIRRORS the adopted state — no demand logic, no quiet-hours gate
+        (the user's choice stands) — and the explanation names the hold.
+
         Args:
             inputs: The room's raw inputs.
             error_c: ``setpoint - room_temp`` [K] (heating convention).
@@ -923,6 +957,9 @@ class RoomController:
         if inputs.fast_source_kind is FastSourceKind.NONE:
             fast = self._fast.force_off()
             direction = "brak"
+        elif self._fast.manual_hold_active:
+            fast = self._fast.mirror()
+            direction = self._manual_hold_text()
         else:
             # Quiet hours (B1, 2026-07-12): outside the room's allowed-hours
             # window the split must not engage — in TRANSITIONAL it is the
@@ -1227,7 +1264,11 @@ class RoomController:
         # -- Step 15: report -------------------------------------------------
         mode_pl = "Grzanie" if mode is Mode.HEATING else "Chlodzenie"
         split_txt = ""
-        if inputs.fast_source_kind is not FastSourceKind.NONE:
+        if self._fast.manual_hold_active:
+            split_txt = (
+                f" Split {self._manual_hold_text()}, {'ON' if fast.on else 'OFF'}."
+            )
+        elif inputs.fast_source_kind is not FastSourceKind.NONE:
             split_txt = f" Split {'ON (boost)' if fast.on else 'OFF'}."
         explanation = (
             f"{mode_pl}, blad {error_c:+.1f} K, trend {trend:+.1f} K/h. "
@@ -1253,6 +1294,16 @@ class RoomController:
         return RoomOutputs(valve_position_pct=valve, fast_source=fast, report=report)
 
     # -- internal: helpers --------------------------------------------------
+
+    def _manual_hold_text(self) -> str:
+        """Explanation fragment for an active manual hold (§28), Polish ASCII.
+
+        Returns:
+            E.g. ``"reczne sterowanie (jeszcze 55 min)"`` — minutes rounded
+            up so the text never claims 0 min while the hold is still active.
+        """
+        minutes = math.ceil(self._fast.manual_hold_remaining_s / 60.0)
+        return f"reczne sterowanie (jeszcze {minutes} min)"
 
     @staticmethod
     def _room_dew_point(t_room: float, humidity_pct: float | None) -> float | None:
@@ -1401,6 +1452,11 @@ class RoomController:
         does NOT lower the temperature-boost engage threshold: temperature
         hysteresis stays keyed to a temperature-commanded run.
 
+        Manual hold (§28, 2026-09-04): while the machine holds a user's touch
+        none of the above runs — the command MIRRORS the adopted state
+        (quiet hours, the heater rule and the dry gate included: the user's
+        choice stands until the hold elapses or the safety layer intervenes).
+
         Args:
             inputs: The room's raw inputs.
             error_c: ``setpoint - room_temp`` [K] (heating convention).
@@ -1413,6 +1469,8 @@ class RoomController:
         """
         if inputs.fast_source_kind is FastSourceKind.NONE:
             return self._fast.force_off()
+        if self._fast.manual_hold_active:
+            return self._fast.mirror()
 
         quiet = not inputs.fast_source_allowed
         if quiet and "fast_source_quiet_hours" not in flags:
@@ -1780,6 +1838,23 @@ class BuildingController:
         if controller is not None:
             controller.notify_fast_source_farewell()
 
+    def note_fast_source_written(
+        self, room_name: str, *, on: bool, mode: FastSourceMode
+    ) -> None:
+        """Record what the adapter REALLY wrote to one room's fast source (§28).
+
+        Adapter hook: see :meth:`RoomController.note_fast_source_written`.
+        Unknown room names are ignored.
+
+        Args:
+            room_name: The room whose fast-source write was degraded.
+            on: The ``on`` state actually written.
+            mode: The direction actually written.
+        """
+        controller = self._controllers.get(room_name)
+        if controller is not None:
+            controller.note_fast_source_written(on=on, mode=mode)
+
     def begin_actuation_test(self, room_name: str, *, duration_s: float) -> str | None:
         """Start one room's actuation self-test (S6/C; adapter hook).
 
@@ -1894,8 +1969,11 @@ class BuildingController:
         commands disagree on direction this cycle:
 
         1. A room whose machine is ON and still inside its min-ON dwell (or
-           held ON by an S3/S4 emergency) PINS the group to its direction —
-           the arbiter never breaks a min-ON or overrides an emergency.
+           held ON by an S3/S4 emergency, or mirroring a MANUAL HOLD — §28,
+           2026-09-04: the outdoor unit physically IS in the user's
+           direction) PINS the group to its direction — the arbiter never
+           breaks a min-ON, overrides an emergency or writes OFF to a unit
+           the user set by hand. A pinned room's band excess is not weighed.
         2. With no pinned direction, the INCUMBENT direction (K2,
            2026-07-12) defends its seat: the incumbent is the direction of a
            unit that was already running when this step began, falling back
@@ -1955,6 +2033,7 @@ class BuildingController:
                 for n in on_rooms
                 if self._controllers[n].fast_source_locked_on
                 or self._is_safety_forced(rooms[n])
+                or self._is_manual_hold(rooms[n])
             }
             pinned_dirs = {direction_of(rooms[n].fast_source.mode) for n in pinned}
             if len(pinned_dirs) == 1:
@@ -2072,6 +2151,23 @@ class BuildingController:
         """
         flags = outputs.report.flags
         return "s3_emergency_heat" in flags or "s4_emergency_cool" in flags
+
+    @staticmethod
+    def _is_manual_hold(outputs: RoomOutputs) -> bool:
+        """Whether a room's ON command mirrors a manual hold (§28).
+
+        The unit physically runs in the direction the USER chose, so the
+        arbiter treats the room like a safety-forced one: it pins its group
+        and is never the loser (the arbiter's OFF would be written over the
+        user's touch).
+
+        Args:
+            outputs: The room's outputs this cycle.
+
+        Returns:
+            ``True`` when the report carries ``"fast_source_manual"``.
+        """
+        return "fast_source_manual" in outputs.report.flags
 
     @staticmethod
     def _flag_group_conflict(outputs: RoomOutputs) -> RoomOutputs:

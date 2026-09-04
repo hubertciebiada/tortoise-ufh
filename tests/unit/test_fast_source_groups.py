@@ -14,6 +14,9 @@ Pins the 2026-07-12 round-2 contracts:
 * K10 — ``notify_fast_source_farewell`` synchronises the machine with the
   adapter's out-of-band farewell OFF, so a return to live passes through an
   honest min-OFF instead of an instant ON.
+* §28 (2026-09-04) — a room mirroring a MANUAL HOLD pins its group like a
+  safety-forced room: the outdoor unit physically IS in the user's direction,
+  so the opposite direction loses and the manual room is never written OFF.
 
 Group names in the docstrings/fixtures are deliberately generic
 (``outdoor_unit_a``). Units: temperatures in degC, ``dt_seconds`` in seconds.
@@ -191,6 +194,73 @@ class TestGroupArbiter:
             assert "fast_source_group_conflict" not in room.report.flags
 
 
+class TestManualHoldPin:
+    """§28: a manual-hold room pins its multisplit group's direction."""
+
+    def test_manual_cooling_room_pins_group_and_heating_room_loses(self) -> None:
+        """Manual cool + legitimate heat in one group: heat OFF, cool mirrored.
+
+        Short dwells so the manual room's min-ON lock elapses DURING the test:
+        the pin must then come from the hold alone, not from the K4 min-ON
+        rule. The heating room's band excess (1.2 K vs the manual room's 0)
+        would win a plain excess arbitration — the pin overrides that.
+        """
+        cfg = ControllerConfig(
+            fast_min_on_minutes=3.0,
+            fast_min_off_minutes=3.0,
+            fast_manual_hold_minutes=60.0,
+        )
+        building = BuildingController({"south": cfg, "north": cfg})
+        controllers = building._controllers  # white-box: the K4 lock flag
+
+        def south(*, on: bool, hvac: str) -> RoomInputs:
+            return make_inputs(
+                mode=Mode.TRANSITIONAL,
+                setpoint_c=21.0,
+                room_temperature_c=21.0,  # at the setpoint: excess 0
+                fast_source_kind=FastSourceKind.SPLIT,
+                fast_source_group=_GROUP,
+                fast_source_on=on,
+                fast_source_hvac_mode=hvac,
+            )
+
+        # Cycles 1-2: both rooms satisfied, the south unit off (first sync
+        # adopts OFF, the second cycle settles the OFF command — §28).
+        for _ in range(2):
+            out = building.step(
+                {
+                    "south": south(on=False, hvac="off"),
+                    "north": _transitional(room_temperature_c=21.0),
+                },
+                dt_seconds=300.0,
+            )
+            assert out.rooms["south"].fast_source.on is False
+
+        # Cycle 3: the user starts cooling the south room from the remote
+        # while the north room turns cold (1.5 K below: wants HEATING).
+        conflict = {
+            "south": south(on=True, hvac="cool"),
+            "north": _transitional(room_temperature_c=19.5),
+        }
+        results = [building.step(conflict, dt_seconds=300.0) for _ in range(4)]
+        for out in results:
+            manual = out.rooms["south"]
+            assert manual.fast_source.on is True
+            assert manual.fast_source.mode is FastSourceMode.COOLING
+            assert "fast_source_manual" in manual.report.flags
+            assert "fast_source_group_conflict" not in manual.report.flags
+            loser = out.rooms["north"]
+            assert loser.fast_source.on is False
+            assert "fast_source_group_conflict" in loser.report.flags
+        # The hold is intact (60 min minus four 5-min ticks) ...
+        south_machine = controllers["south"]._fast
+        assert south_machine.manual_hold_active is True
+        assert south_machine.manual_hold_remaining_s == pytest.approx(40.0 * 60.0)
+        # ... and by the last cycle the 3-min min-ON lock had long elapsed, so
+        # the pin came from the hold, not from the K4 min-ON rule.
+        assert controllers["south"].fast_source_locked_on is False
+
+
 class TestDirectionMismatch:
     """K4c: the S4 reconciliation sees a DIRECTION divergence."""
 
@@ -203,8 +273,14 @@ class TestDirectionMismatch:
         )
 
     def test_opposite_direction_flags_mismatch(self) -> None:
-        """Physically COOLING while commanded HEATING raises the flag."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        """Physically COOLING while commanded HEATING raises the flag.
+
+        Legacy path (§28): ``fast_manual_hold_minutes = 0`` keeps the machine
+        the owner; with the default hold the divergence is adopted instead.
+        """
+        controller = RoomController(
+            ControllerConfig(fast_manual_hold_minutes=0.0), name="salon"
+        )
         first = controller.step(self._heating_split("heat"), dt_seconds=300.0)
         assert first.fast_source.mode is FastSourceMode.HEATING
         assert "fast_source_mismatch" not in first.report.flags
@@ -224,9 +300,12 @@ class TestDirectionMismatch:
         """Non-directional strings (auto/heat_cool/...) skip the direction check.
 
         Since §24 ``"dry"`` is DIRECTIONAL (cooling side): a unit drying while
-        commanded to HEAT is a real divergence and must flag the mismatch.
+        commanded to HEAT is a real divergence and must flag the mismatch
+        (legacy path, hold knob 0 — §28).
         """
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(
+            ControllerConfig(fast_manual_hold_minutes=0.0), name="salon"
+        )
         controller.step(self._heating_split("heat"), dt_seconds=300.0)
         out = controller.step(self._heating_split("auto"), dt_seconds=300.0)
         assert "fast_source_mismatch" not in out.report.flags

@@ -13,7 +13,13 @@ decision path against the frozen black-box contract:
   changes during dwell holds and deadband crossings never flip it; a real
   reversal is OFF-gated through the full min-OFF.
 * The machine consumes the physical on/off feedback (S4) and flags a
-  persistent divergence.
+  persistent divergence (legacy path, ``fast_manual_hold_minutes = 0``).
+* Manual hold (§28): a SETTLED divergence (our own emitted command stable for
+  at least half a cycle — the second regular cycle after our change) is
+  adopted as user intent and mirrored for ``fast_manual_hold_minutes``;
+  safety forces end the hold and leave the mismatch flag as a trace; a late
+  first feedback and a demoted DRY reported via ``note_fast_source_written``
+  never raise a false hold, while a real touch on such a unit still does.
 * ``boost_offset_c`` must exceed ``deadband_c`` (D2) at construction.
 
 Units: temperatures / setpoints in degC; valve in percent (0..100);
@@ -28,8 +34,14 @@ from dataclasses import replace
 import pytest
 
 from custom_components.tortoise_ufh.core.config import ControllerConfig
-from custom_components.tortoise_ufh.core.controller import RoomController
-from custom_components.tortoise_ufh.core.fast_source import window_allows
+from custom_components.tortoise_ufh.core.controller import (
+    BuildingController,
+    RoomController,
+)
+from custom_components.tortoise_ufh.core.fast_source import (
+    FastSourceMachine,
+    window_allows,
+)
 from custom_components.tortoise_ufh.core.models import (
     FastSourceKind,
     FastSourceMode,
@@ -587,8 +599,14 @@ class TestFastPhysicalSync:
 
     @pytest.mark.unit
     def test_persistent_divergence_flags_mismatch(self) -> None:
-        """Feedback disagreeing with the previous command raises the flag."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        """Feedback disagreeing with the previous command raises the flag.
+
+        Legacy path (§28): with ``fast_manual_hold_minutes = 0`` a divergence
+        is NOT adopted — the machine stays the owner and only flags it.
+        """
+        controller = RoomController(
+            ControllerConfig(fast_manual_hold_minutes=0.0), name="salon"
+        )
         controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
         engaged = controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
         assert engaged.fast_source.on is True
@@ -1035,11 +1053,400 @@ class TestDryAssist:
 
     @pytest.mark.unit
     def test_opposite_feedback_during_dry_is_a_mismatch(self) -> None:
-        """A unit physically HEATING while commanded DRY raises the mismatch."""
-        controller = RoomController(_dry_cfg(), name="salon")
+        """A unit physically HEATING while commanded DRY raises the mismatch.
+
+        Legacy path (§28, hold knob 0) — with the default hold the same
+        divergence would be adopted as user intent instead.
+        """
+        controller = RoomController(
+            _dry_cfg(fast_manual_hold_minutes=0.0), name="salon"
+        )
         controller.step(_dry_inputs(), dt_seconds=300.0)
         out = controller.step(
             _dry_inputs(fast_source_on=True, fast_source_hvac_mode="heat"),
             dt_seconds=300.0,
         )
         assert "fast_source_mismatch" in out.report.flags
+
+    @pytest.mark.unit
+    def test_demoted_dry_noted_as_written_is_not_a_divergence(self) -> None:
+        """§28: the adapter reports the OFF it REALLY wrote for a demoted DRY.
+
+        Without ``note_fast_source_written`` the unit's OFF feedback would
+        disagree with the recorded DRY and, once settled, be adopted as a
+        manual OFF — a false hold on a unit that simply cannot dry.
+        """
+        off = _dry_inputs(fast_source_on=False, fast_source_hvac_mode="off")
+        building = BuildingController({"salon": _dry_cfg()})
+        out = building.step({"salon": off}, dt_seconds=300.0)
+        assert out.rooms["salon"].fast_source.mode is FastSourceMode.DRY
+        for _ in range(4):
+            # The climate entity has no "dry": the adapter wrote OFF instead.
+            building.note_fast_source_written(
+                "salon", on=False, mode=FastSourceMode.OFF
+            )
+            out = building.step({"salon": off}, dt_seconds=300.0)
+            room = out.rooms["salon"]
+            assert "fast_source_manual" not in room.report.flags
+            assert "fast_source_mismatch" not in room.report.flags
+            # The core keeps asking for DRY (the adapter keeps flagging).
+            assert room.fast_source.mode is FastSourceMode.DRY
+        # Unknown rooms are ignored (a write may race a room removal).
+        building.note_fast_source_written(
+            "nie_ma_takiego_pokoju", on=False, mode=FastSourceMode.OFF
+        )
+
+    @pytest.mark.unit
+    def test_demoted_dry_room_still_adopts_a_real_touch(self) -> None:
+        """§28: the written-back OFF must not block the hold in that room.
+
+        ``note_fast_source_written`` replaces only the pair the feedback is
+        compared against; the settle counter follows the EMITTED command,
+        which stays DRY every cycle. Were the note treated as a command
+        change, the counter would restart every cycle and a unit in a
+        ``dry_unsupported`` room could never be adopted when the user turns
+        it on by hand.
+        """
+        off = _dry_inputs(fast_source_on=False, fast_source_hvac_mode="off")
+        building = BuildingController({"salon": _dry_cfg()})
+        out = building.step({"salon": off}, dt_seconds=300.0)
+        assert out.rooms["salon"].fast_source.mode is FastSourceMode.DRY
+        for _ in range(3):
+            # Steady dry_unsupported loop: emit DRY, adapter wrote OFF,
+            # feedback OFF — agreement, no flags of either kind.
+            building.note_fast_source_written(
+                "salon", on=False, mode=FastSourceMode.OFF
+            )
+            out = building.step({"salon": off}, dt_seconds=300.0)
+            room = out.rooms["salon"]
+            assert room.fast_source.mode is FastSourceMode.DRY
+            assert "fast_source_manual" not in room.report.flags
+            assert "fast_source_mismatch" not in room.report.flags
+        building.note_fast_source_written("salon", on=False, mode=FastSourceMode.OFF)
+        # The user turns the unit on in cool from the remote: adopted, held.
+        cool = _dry_inputs(fast_source_on=True, fast_source_hvac_mode="cool")
+        out = building.step({"salon": cool}, dt_seconds=300.0)
+        room = out.rooms["salon"]
+        assert "fast_source_manual" in room.report.flags
+        assert "fast_source_mismatch" not in room.report.flags
+        assert room.fast_source.on is True
+        assert room.fast_source.mode is FastSourceMode.COOLING
+
+    @pytest.mark.unit
+    def test_demoted_dry_without_the_note_becomes_a_false_hold(self) -> None:
+        """Contrast: an un-noted demotion IS adopted as a manual OFF (settled)."""
+        off = _dry_inputs(fast_source_on=False, fast_source_hvac_mode="off")
+        building = BuildingController({"salon": _dry_cfg()})
+        out = building.step({"salon": off}, dt_seconds=300.0)
+        assert out.rooms["salon"].fast_source.mode is FastSourceMode.DRY
+        # First divergence < half a cycle after our own change: flag only.
+        out = building.step({"salon": off}, dt_seconds=300.0)
+        assert "fast_source_mismatch" in out.rooms["salon"].report.flags
+        # Settled: adopted as the user's OFF.
+        out = building.step({"salon": off}, dt_seconds=300.0)
+        assert "fast_source_manual" in out.rooms["salon"].report.flags
+        assert out.rooms["salon"].fast_source.on is False
+
+
+def _hold_cfg(**overrides: object) -> ControllerConfig:
+    """The owner's live tuning (§28): 30/31 min dwells, 60 min manual hold."""
+    base: dict[str, object] = {
+        "boost_offset_c": 1.5,
+        "deadband_c": 0.3,
+        "fast_min_on_minutes": 30.0,
+        "fast_min_off_minutes": 31.0,
+        "fast_manual_hold_minutes": 60.0,
+    }
+    base.update(overrides)
+    return ControllerConfig(**base)  # type: ignore[arg-type]
+
+
+def _feedback(
+    *,
+    on: bool,
+    hvac: str | None,
+    kind: FastSourceKind = FastSourceKind.SPLIT,
+) -> RoomInputs:
+    """TRANSITIONAL room at its setpoint carrying a physical split feedback."""
+    return make_inputs(
+        mode=Mode.TRANSITIONAL,
+        setpoint_c=23.0,
+        room_temperature_c=23.0,
+        fast_source_kind=kind,
+        fast_source_on=on,
+        fast_source_hvac_mode=hvac,
+    )
+
+
+_HVAC_DIRECTION: dict[str, FastSourceMode] = {
+    "heat": FastSourceMode.HEATING,
+    "cool": FastSourceMode.COOLING,
+    "dry": FastSourceMode.DRY,
+}
+
+
+def _settle(machine: FastSourceMachine, *, on: bool, hvac: str) -> None:
+    """Run one agreeing cycle in the controller's order (sync, tick, note).
+
+    The settle rule (§28) adopts a divergence only once the EMITTED command
+    pair has been stable for at least half a ``cycle_seconds`` — and the
+    counter seen by ``sync`` lags one step behind — so a machine whose
+    command just changed needs one more agreeing cycle before a touch is
+    adopted.
+    """
+    machine.sync(_feedback(on=on, hvac=hvac))
+    machine.tick(300.0)
+    machine.note_command(on, _HVAC_DIRECTION[hvac] if on else FastSourceMode.OFF)
+
+
+class TestManualHold:
+    """§28: a settled physical divergence is adopted under a manual hold."""
+
+    def _settled_off(self, cfg: ControllerConfig | None = None) -> FastSourceMachine:
+        """A machine that adopted a stopped unit and has emitted OFF, settled."""
+        machine = FastSourceMachine(cfg or _hold_cfg())
+        machine.sync(_feedback(on=False, hvac="off"))  # first sync: adopt OFF
+        machine.tick(300.0)
+        machine.note_command(False, FastSourceMode.OFF)  # pair changed: settle 0
+        _settle(machine, on=False, hvac="off")  # one agreeing cycle: settle 300
+        return machine
+
+    @pytest.mark.unit
+    def test_manual_cool_is_adopted_with_a_hold(self) -> None:
+        """(a) Physical ON+cool vs a previous OFF: adopt COOLING, hold, no flag."""
+        machine = self._settled_off()
+        assert machine.timer_s == pytest.approx(600.0)
+        machine.sync(_feedback(on=True, hvac="cool"))
+        assert machine.state is FastSourceMode.COOLING
+        assert machine.timer_s == pytest.approx(0.0)
+        assert machine.manual_hold_active is True
+        assert machine.manual_hold_remaining_s == pytest.approx(3600.0)
+        assert machine.mismatch is False
+
+    @pytest.mark.unit
+    def test_manual_off_is_adopted_from_heating(self) -> None:
+        """(b) Physical OFF while the machine HEATS: adopt OFF, hold."""
+        machine = FastSourceMachine(_hold_cfg())
+        machine.sync(_feedback(on=True, hvac="heat"))  # first sync: adopt HEATING
+        assert machine.state is FastSourceMode.HEATING
+        machine.tick(300.0)
+        machine.note_command(True, FastSourceMode.HEATING)
+        _settle(machine, on=True, hvac="heat")
+        machine.sync(_feedback(on=False, hvac="off"))
+        assert machine.state is FastSourceMode.OFF
+        assert machine.timer_s == pytest.approx(0.0)
+        assert machine.manual_hold_active is True
+        assert machine.mismatch is False
+
+    @pytest.mark.unit
+    def test_divergence_right_after_own_command_is_not_adopted(self) -> None:
+        """Settle rule: a divergence < half a cycle after OUR change only flags.
+
+        The values deliberately avoid the edges: 2 s must NOT adopt, 299 s
+        (a real cycle that came in a hair short of 300) MUST — a full-cycle
+        threshold would have slipped that adoption to the next cycle.
+        """
+        machine = self._settled_off()
+        # The controller engages HEATING this cycle (pair changes: settle 0).
+        machine.note_command(True, FastSourceMode.HEATING)
+        # The debounced recompute 2 s later reads a unit still "off".
+        machine.sync(_feedback(on=False, hvac="off"))
+        assert machine.mismatch is True
+        assert machine.manual_hold_active is False
+        assert machine.state is FastSourceMode.OFF  # nothing adopted
+        machine.tick(2.0)
+        machine.note_command(True, FastSourceMode.HEATING)  # unchanged pair
+        # A cycle later (settle 2 s at sync, < 150): still only a flag.
+        machine.sync(_feedback(on=False, hvac="off"))
+        assert machine.mismatch is True
+        assert machine.manual_hold_active is False
+        machine.tick(297.0)
+        machine.note_command(True, FastSourceMode.HEATING)
+        # Settle 299 s >= half a cycle: the unit REALLY is off — adopt it.
+        machine.sync(_feedback(on=False, hvac="off"))
+        assert machine.mismatch is False
+        assert machine.manual_hold_active is True
+        assert machine.state is FastSourceMode.OFF
+
+    @pytest.mark.unit
+    def test_late_first_feedback_is_never_adopted(self) -> None:
+        """A first feedback arriving AFTER commands only flags (may be stale)."""
+        machine = FastSourceMachine(_hold_cfg())
+        # No feedback entity yet: the machine engages HEATING freely.
+        cmd = machine.decide(
+            want_on=True,
+            fs_mode=FastSourceMode.HEATING,
+            target_heating=24.0,
+            target_cooling=22.0,
+            flags=[],
+        )
+        assert cmd.on is True
+        machine.note_command(True, FastSourceMode.HEATING)
+        for _ in range(3):
+            machine.tick(300.0)
+        # The feedback entity appears, reading "off" — possibly stale.
+        machine.sync(_feedback(on=False, hvac="off"))
+        assert machine.mismatch is True
+        assert machine.manual_hold_active is False
+        assert machine.state is FastSourceMode.HEATING
+        machine.tick(300.0)
+        machine.note_command(True, FastSourceMode.HEATING)
+        # Still off one cycle later: now a settled divergence — adopted.
+        machine.sync(_feedback(on=False, hvac="off"))
+        assert machine.manual_hold_active is True
+        assert machine.state is FastSourceMode.OFF
+
+    @pytest.mark.unit
+    def test_hold_expires_in_tick_and_decide_resumes(self) -> None:
+        """(c) The hold counts down once per tick; then decide() runs again."""
+        machine = self._settled_off()
+        machine.sync(_feedback(on=True, hvac="cool"))
+        for i in range(12):
+            machine.tick(300.0)
+            expected = 3600.0 - 300.0 * (i + 1)
+            assert machine.manual_hold_remaining_s == pytest.approx(expected)
+            assert machine.manual_hold_active is (i < 11)
+        # Normal logic resumes from the ADOPTED state: the room is satisfied,
+        # the min-ON accumulated during the hold (60 min > 30), so the unit
+        # releases to OFF — never straight to the other direction.
+        cmd = machine.decide(
+            want_on=False,
+            fs_mode=FastSourceMode.COOLING,
+            target_heating=23.0,
+            target_cooling=23.0,
+            flags=[],
+        )
+        assert cmd.on is False
+        assert machine.state is FastSourceMode.OFF
+
+    @pytest.mark.unit
+    def test_second_divergence_restarts_the_hold(self) -> None:
+        """(d) A new touch during the hold restarts it from the LAST touch."""
+        machine = self._settled_off()
+        machine.sync(_feedback(on=True, hvac="cool"))
+        machine.note_command(True, FastSourceMode.COOLING)
+        for _ in range(6):
+            machine.tick(300.0)
+        assert machine.manual_hold_remaining_s == pytest.approx(1800.0)
+        # The user now switches the unit OFF.
+        machine.sync(_feedback(on=False, hvac="off"))
+        assert machine.state is FastSourceMode.OFF
+        assert machine.manual_hold_remaining_s == pytest.approx(3600.0)
+        assert machine.mismatch is False
+
+    @pytest.mark.unit
+    def test_knob_zero_keeps_the_legacy_mismatch(self) -> None:
+        """(e) Hold disabled: the flag is raised and the state NOT adopted."""
+        machine = self._settled_off(_hold_cfg(fast_manual_hold_minutes=0.0))
+        machine.sync(_feedback(on=True, hvac="cool"))
+        assert machine.state is FastSourceMode.OFF
+        assert machine.mismatch is True
+        assert machine.manual_hold_active is False
+
+    @pytest.mark.unit
+    def test_force_off_and_force_on_end_the_hold(self) -> None:
+        """(f) The safety forces outrank the hold and clear it."""
+        machine = self._settled_off()
+        machine.sync(_feedback(on=True, hvac="cool"))
+        assert machine.manual_hold_active is True
+        off = machine.force_off()
+        assert off.on is False
+        assert machine.manual_hold_active is False
+        assert machine.state is FastSourceMode.OFF
+        # A fresh (settled) divergence re-arms it; force_on clears it again.
+        machine.note_command(False, FastSourceMode.OFF)
+        _settle(machine, on=False, hvac="off")
+        machine.sync(_feedback(on=True, hvac="cool"))
+        assert machine.manual_hold_active is True
+        on = machine.force_on(FastSourceMode.HEATING, 24.0)
+        assert on.mode is FastSourceMode.HEATING
+        assert machine.manual_hold_active is False
+        assert machine.state is FastSourceMode.HEATING
+
+    @pytest.mark.unit
+    def test_force_cancelling_an_active_hold_leaves_a_mismatch_trace(self) -> None:
+        """(f') A safety force that ends a hold raises the mismatch flag.
+
+        The unit is physically in the USER's state while the safety layer is
+        about to write something else: that divergence must show in the
+        report (``fast_source_mismatch``), not vanish silently. A force with
+        NO active hold leaves the flag alone.
+        """
+        machine = self._settled_off()
+        machine.sync(_feedback(on=True, hvac="cool"))  # adopted ON, hold armed
+        assert machine.manual_hold_active is True
+        assert machine.mismatch is False
+        machine.force_off()
+        assert machine.mismatch is True
+        assert machine.manual_hold_active is False
+        assert machine.state is FastSourceMode.OFF
+        # The next sync clears the trace like any other cycle flag; a force
+        # without a hold does not re-raise it.
+        machine.note_command(False, FastSourceMode.OFF)
+        machine.sync(_feedback(on=False, hvac="off"))
+        assert machine.mismatch is False
+        machine.force_off()
+        assert machine.mismatch is False
+        # force_on on an active hold traces too.
+        _settle(machine, on=False, hvac="off")
+        machine.sync(_feedback(on=True, hvac="cool"))
+        assert machine.manual_hold_active is True
+        machine.force_on(FastSourceMode.HEATING, 24.0)
+        assert machine.mismatch is True
+        assert machine.manual_hold_active is False
+
+    @pytest.mark.unit
+    def test_reset_clears_the_hold(self) -> None:
+        """(g) reset() drops the hold with the rest of the machine state."""
+        machine = self._settled_off()
+        machine.sync(_feedback(on=True, hvac="cool"))
+        machine.reset()
+        assert machine.manual_hold_active is False
+        assert machine.manual_hold_remaining_s == pytest.approx(0.0)
+        assert machine.state is FastSourceMode.OFF
+
+    @pytest.mark.unit
+    def test_mirror_echoes_the_adopted_state(self) -> None:
+        """mirror() emits on/mode from the state and NO target (user's own)."""
+        machine = self._settled_off()
+        machine.sync(_feedback(on=True, hvac="cool"))
+        cmd = machine.mirror()
+        assert cmd.on is True
+        assert cmd.mode is FastSourceMode.COOLING
+        # The unit runs at the USER's setpoint, unknown to us: no fabricated
+        # target for the panel/sensors (nothing is written during a hold).
+        assert cmd.target_temperature_c is None
+        # The min-ON lock that still applies after the hold is surfaced.
+        assert machine.dwell_remaining_s == pytest.approx(30.0 * 60.0)
+        machine.note_command(True, FastSourceMode.COOLING)
+        _settle(machine, on=True, hvac="cool")
+        machine.sync(_feedback(on=False, hvac="off"))
+        off = machine.mirror()
+        assert off.on is False
+        assert off.mode is FastSourceMode.OFF
+        assert off.target_temperature_c is None
+
+    @pytest.mark.unit
+    def test_heater_is_adopted_as_heating_whatever_the_feedback(self) -> None:
+        """A HEATER kind can never be adopted as COOLING (first-sync rule)."""
+        machine = FastSourceMachine(_hold_cfg())
+        heater_off = _feedback(on=False, hvac="off", kind=FastSourceKind.HEATER)
+        machine.sync(heater_off)
+        machine.tick(300.0)
+        machine.note_command(False, FastSourceMode.OFF)
+        machine.sync(heater_off)
+        machine.tick(300.0)
+        machine.note_command(False, FastSourceMode.OFF)
+        machine.sync(_feedback(on=True, hvac="cool", kind=FastSourceKind.HEATER))
+        assert machine.state is FastSourceMode.HEATING
+        assert machine.manual_hold_active is True
+
+    @pytest.mark.unit
+    def test_negative_hold_rejected(self) -> None:
+        """The knob must be >= 0 (0 disables)."""
+        with pytest.raises(ValueError, match="fast_manual_hold_minutes"):
+            ControllerConfig(fast_manual_hold_minutes=-1.0)
+        assert (
+            ControllerConfig(fast_manual_hold_minutes=0.0).fast_manual_hold_minutes
+            == 0.0
+        )

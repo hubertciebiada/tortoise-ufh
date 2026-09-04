@@ -302,6 +302,13 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
   > `fast_source_mismatch`. **(S3)** Adapter nie spamuje komendami: niezmieniona para
   > (tryb, cel) nie jest wysyłana co cykl, a co ~45 min następuje re-assert (samonaprawa po
   > ręcznej zmianie).
+  > **Zmienione 2026-09-04 (DECISIONS §28):** ustabilizowany rozjazd komenda↔stan (nasza
+  > własna komenda niezmieniona od pełnego cyklu) jest DECYZJĄ UŻYTKOWNIKA, nie usterką —
+  > maszyna przyjmuje fizyczny stan splitu i przez `fast_manual_hold_minutes` (domyślnie 60,
+  > liczone od ostatniego dotknięcia; 0 = zachowanie jak wyżej) tylko go odzwierciedla
+  > (flaga `fast_source_manual`), a adapter NIE zapisuje i zapomina cache S3, więc re-assert
+  > nie nadpisze ręcznej zmiany. Zabezpieczenia S3/S4, utrata czujnika i przeładowanie wpisu
+  > kończą utrzymanie; potem normalna logika wraca ze stanu, który zastała.
 - **Koordynacja (anti priority-inversion):** podłoga zawsze bazą i **nie zamyka się** tylko dlatego, że
   split dogrzał/dochłodził; split dobija ponad próg i odpuszcza po wejściu w pasmo komfortu.
   > **Zmienione 2026-07-12 (K4, runda 2 — NOWA opcjonalna konfiguracja; patrz
@@ -316,6 +323,12 @@ Parametry regulatora są **domyślnie schowane** — moduł startuje z sensownym
   > `hvac_mode` — rozjazd KIERUNKU (jednostka fizycznie w trybie przeciwnym) podnosi
   > `fast_source_mismatch`, na co sam bool on/off był ślepy. Pokoje bez grupy — bez
   > zmian zachowania.
+  > **Zmienione 2026-09-04 (DECISIONS §28):** rozjazd kierunku (jak i on/off) jest domyślnie
+  > przyjmowany jako ręczna zmiana użytkownika (utrzymanie `fast_manual_hold_minutes`, flaga
+  > `fast_source_manual`); `fast_source_mismatch` pojawia się tylko przy knobie 0 albo dopóki
+  > nasza własna komenda nie ustabilizuje się przez pełny cykl. Pokój w utrzymaniu ręcznym
+  > PINUJE kierunek grupy jak jednostka wymuszona S3/S4 — agregat fizycznie już pracuje w
+  > kierunku użytkownika; arbiter nigdy nie wyłącza takiego pokoju.
 
 ### 8.6 Tryby
 - **Jeden globalny tryb domu**: `grzanie / przejściowy / chłodzenie / off` (encja wejściowa). Per-pokój

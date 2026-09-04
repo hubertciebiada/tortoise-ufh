@@ -16,6 +16,24 @@ direction, never a freshly computed one. The dwell clock is advanced by
 :meth:`tick` exactly once per control step (fix 2026-07-10); the decision
 methods only RESET it on ON<->OFF edges.
 
+Manual hold (2026-09-04, DECISIONS §28): a SETTLED physical feedback that
+disagrees with the previously emitted command is USER INTENT, not a fault.
+"Settled" means our own EMITTED command pair has not changed for at least
+half a ``cycle_seconds`` — in practice the second regular cycle after our
+change (a 2-s debounced recompute or a few-second climate-integration lag
+must not be mistaken for a touch; the threshold sits well clear of both and
+of the jittery real cycle length). The machine adopts the physical state and,
+for ``fast_manual_hold_minutes``, the controller only mirrors it
+(:meth:`FastSourceMachine.mirror`) — nothing is written, so the adapter's
+re-assert cannot stomp on the user's choice, and a unit the user set to cool
+is never flipped straight to heat. The hold counts down in :meth:`tick`; the
+safety forces (:meth:`FastSourceMachine.force_on` /
+:meth:`FastSourceMachine.force_off`) end it and leave the mismatch flag as
+an honest trace. Knob ``0`` keeps the legacy behaviour (mismatch flag only).
+What the adapter REALLY wrote (a demoted DRY) is reported through
+:meth:`FastSourceMachine.note_written`, which feeds the divergence check but
+never the settle counter.
+
 This module is pure Python (stdlib + sibling core modules only) and MUST NOT
 import ``homeassistant``.
 
@@ -180,8 +198,11 @@ class FastSourceMachine:
 
         machine.sync(inputs)          # step 0: reconcile with the hardware
         machine.tick(dt_seconds)      # advance the dwell clock ONCE
-        want = machine.want(demand, engaged=machine.state is fs_mode)
-        command = machine.decide(want_on=want, fs_mode=fs_mode, ...)
+        if machine.manual_hold_active:              # §28: the user touched it
+            command = machine.mirror()
+        else:
+            want = machine.want(demand, engaged=machine.state is fs_mode)
+            command = machine.decide(want_on=want, fs_mode=fs_mode, ...)
     """
 
     def __init__(self, config: ControllerConfig) -> None:
@@ -198,7 +219,8 @@ class FastSourceMachine:
         self._timer_s: float = _INITIAL_FAST_TIMER_S
         # Physical-feedback bookkeeping (S4): the first observed
         # ``fast_source_on`` wins over the cold machine (conservative timer
-        # seed); later divergence raises the ``fast_source_mismatch`` flag.
+        # seed); a later divergence is adopted as user intent under a manual
+        # hold (§28) or, with the hold knob at 0, raises ``fast_source_mismatch``.
         self._synced: bool = False
         self._mismatch: bool = False
         self._prev_cmd_on: bool | None = None
@@ -207,10 +229,25 @@ class FastSourceMachine:
         # direction (multisplit standby / manual override), which the plain
         # on/off comparison is blind to.
         self._prev_cmd_mode: FastSourceMode | None = None
+        # The (on, direction) pair the core last EMITTED (§28 settle rule) —
+        # distinct from the written pair above: a degraded write reported via
+        # note_written() must not look like a command change every cycle.
+        self._last_emitted_pair: tuple[bool, FastSourceMode | None] | None = None
+        # Seconds since the EMITTED (on, direction) command pair last CHANGED
+        # (§28 settle rule): reset by note_command() on a change, advanced by
+        # tick(). A divergence is adopted as user intent only once this has
+        # reached half a cycle — a unit that has not caught up with OUR OWN
+        # fresh command (2-s debounced recompute, slow climate integration)
+        # is not a touch.
+        self._since_cmd_change_s: float = 0.0
         # Seconds remaining on the min ON/OFF dwell lock (None = unlocked / no
         # fast source). Recomputed each cycle by the decision methods and
         # surfaced in the report for the panel's assist timer.
         self._dwell_remaining_s: float | None = None
+        # Manual hold (§28): seconds left during which the controller only
+        # MIRRORS the adopted physical state. 0 = no hold. Restarted on every
+        # new divergence, counted down by tick(), ended by force_on/force_off.
+        self._manual_hold_s: float = 0.0
 
     # -- properties -----------------------------------------------------------
 
@@ -244,6 +281,16 @@ class FastSourceMachine:
         """
         return self._prev_cmd_mode
 
+    @property
+    def manual_hold_active(self) -> bool:
+        """Whether a manual hold is running (§28): mirror, do not decide."""
+        return self._manual_hold_s > 0.0
+
+    @property
+    def manual_hold_remaining_s(self) -> float:
+        """Seconds left on the manual hold, ``0.0`` when none is active (§28)."""
+        return self._manual_hold_s
+
     # -- public API -----------------------------------------------------------
 
     def sync(self, inputs: RoomInputs) -> None:
@@ -262,17 +309,42 @@ class FastSourceMachine:
         If the machine already emitted commands before the first feedback
         arrived (feedback entity unavailable at engagement, appearing cycles
         later with a possibly stale reading), the late first reading must NOT
-        overwrite the machine — it is treated like a regular settling cycle
-        and at most raises the mismatch flag.
+        overwrite the machine — it only marks the machine synced and raises
+        the mismatch flag when it disagrees; a STILL diverging next cycle is
+        then judged by the regular rule below (and may be adopted).
 
         On later cycles a feedback that disagrees with the PREVIOUS cycle's
-        emitted command (one full cycle of settling allowance) only sets the
-        mismatch flag; the machine stays the owner and the adapter's periodic
-        re-assert converges the hardware back. Since 2026-07-12 (K4) the
-        comparison also sees the DIRECTION: a unit physically running in a
+        emitted command is a DIVERGENCE. Since 2026-07-12 (K4) the comparison
+        also sees the DIRECTION: a unit physically running in a
         single-direction HVAC mode opposite to the commanded one (multisplit
-        standby, manual reversal) raises the same mismatch flag even though
-        the plain on/off feedback agrees.
+        standby, manual reversal) diverges even though the plain on/off
+        feedback agrees. What a divergence does depends on
+        ``fast_manual_hold_minutes`` (§28, 2026-09-04):
+
+        * knob ``> 0`` (default 60) AND the emitted command pair has been
+          stable for at least half a ``cycle_seconds`` (the settle rule): the
+          divergence is USER INTENT — the machine ADOPTS the physical state
+          (a running unit takes the reported direction when unambiguous,
+          else the first-sync fallback; a stopped unit becomes OFF; the dwell
+          timer restarts on any state change) and a manual hold of that many
+          minutes starts — RESTARTED on every new divergence, so it is
+          measured from the last touch. No mismatch flag is raised; the
+          controller reports ``"fast_source_manual"`` and only mirrors the
+          state until the hold elapses.
+        * knob ``> 0`` but OUR OWN command changed less than half a cycle
+          ago: the unit may simply not have caught up (the coordinator's
+          debounced off-cycle recompute runs ~2 s after a write; a climate
+          integration may report a few seconds late) — only the mismatch
+          flag is set, nothing is adopted. Because the controller runs
+          ``sync -> tick -> decide -> note_command``, the settle counter seen
+          by ``sync`` lags one step behind: adoption after our own command
+          change happens at the SECOND regular cycle — deterministically,
+          since half a cycle is far from the jittery real cycle length (a
+          full-cycle threshold was a knife edge: ``299.99 < 300`` slipped
+          the adoption to the next cycle at random).
+        * knob ``0``: legacy behaviour — only the mismatch flag is set, the
+          machine stays the owner and the adapter's periodic re-assert
+          converges the hardware back.
 
         Args:
             inputs: The room's raw inputs for this cycle.
@@ -296,41 +368,102 @@ class FastSourceMachine:
                 # otherwise the direction follows the global mode. A HEATER
                 # can never cool, whatever the feedback claims.
                 if physical and self._state is FastSourceMode.OFF:
-                    if reported is not None and (
-                        reported is FastSourceMode.HEATING
-                        or inputs.fast_source_kind is FastSourceKind.SPLIT
-                    ):
-                        self._state = reported
-                    else:
-                        self._state = (
-                            FastSourceMode.COOLING
-                            if (
-                                inputs.mode is Mode.COOLING
-                                and inputs.fast_source_kind is FastSourceKind.SPLIT
-                            )
-                            else FastSourceMode.HEATING
-                        )
+                    self._state = self._running_direction(reported, inputs)
                 elif not physical:
                     self._state = FastSourceMode.OFF
                 # Conservative seed: a full dwell from now, whatever the state.
                 self._timer_s = 0.0
                 return
-            # The machine already owns the unit; a late first feedback falls
-            # through to the regular mismatch check below.
-        if self._prev_cmd_on is not None and physical is not self._prev_cmd_on:
+            # Late first feedback: the machine already owns the unit and the
+            # reading may be stale — never adopt it. Flag a disagreement and
+            # let the NEXT cycle judge a still-diverging unit.
+            self._mismatch = self._diverges(physical, reported)
+            return
+        if not self._diverges(physical, reported):
+            return
+        if (
+            self._config.fast_manual_hold_minutes <= 0.0
+            or self._since_cmd_change_s < 0.5 * self._config.cycle_seconds
+        ):
+            # Legacy (knob 0), or our own command changed less than half a
+            # cycle ago and the unit may not have caught up yet: flag only,
+            # the machine stays the owner.
             self._mismatch = True
-        elif (
+            return
+        # Manual hold (§28): the user touched the unit — adopt what it is
+        # physically doing and hold that for the configured time, measured
+        # from THIS (latest) touch.
+        adopted = (
+            self._running_direction(reported, inputs)
+            if physical
+            else FastSourceMode.OFF
+        )
+        if adopted is not self._state:
+            self._state = adopted
+            self._timer_s = 0.0
+        self._manual_hold_s = self._config.fast_manual_hold_minutes * 60.0
+
+    def _diverges(self, physical: bool, reported: FastSourceMode | None) -> bool:
+        """Whether a physical feedback disagrees with the last emitted command.
+
+        The S4/K4 condition shared by the late-first-feedback guard and the
+        regular reconciliation: the on/off state differs, or both are ON and
+        the unit reports the OPPOSITE refrigerant direction. Directions are
+        compared refrigerant-side (§24): a commanded DRY normalises to
+        COOLING, so a unit reporting "dry" or "cool" while dry-assisting is
+        NOT a divergence.
+
+        Args:
+            physical: The unit's on/off feedback this cycle.
+            reported: The direction parsed from ``fast_source_hvac_mode``, or
+                ``None`` when the feedback carries no single direction.
+
+        Returns:
+            ``True`` on a divergence; ``False`` before any command was emitted.
+        """
+        if self._prev_cmd_on is None:
+            return False
+        if physical is not self._prev_cmd_on:
+            return True
+        return (
             physical
-            and self._prev_cmd_on
             and self._prev_cmd_mode is not None
             and reported is not None
             and reported is not direction_of(self._prev_cmd_mode)
+        )
+
+    @staticmethod
+    def _running_direction(
+        reported: FastSourceMode | None, inputs: RoomInputs
+    ) -> FastSourceMode:
+        """Direction adopted for a unit that is physically RUNNING (S4/K4).
+
+        The reported HVAC direction wins when unambiguous; otherwise the
+        direction follows the global mode. A HEATER can never cool, whatever
+        the feedback claims. Shared by the first-sync adoption and the
+        manual-hold adoption (§28) so both apply one rule.
+
+        Args:
+            reported: The direction parsed from ``fast_source_hvac_mode``, or
+                ``None`` when the feedback carries no single direction.
+            inputs: The room's raw inputs (global mode, fast-source kind).
+
+        Returns:
+            ``HEATING`` or ``COOLING`` — never ``OFF``.
+        """
+        if reported is not None and (
+            reported is FastSourceMode.HEATING
+            or inputs.fast_source_kind is FastSourceKind.SPLIT
         ):
-            # On/off agrees but the unit runs the OPPOSITE direction (K4).
-            # Directions are compared refrigerant-side (§24): a commanded DRY
-            # normalises to COOLING, so a unit reporting "dry" or "cool" while
-            # dry-assisting is NOT a mismatch.
-            self._mismatch = True
+            return reported
+        return (
+            FastSourceMode.COOLING
+            if (
+                inputs.mode is Mode.COOLING
+                and inputs.fast_source_kind is FastSourceKind.SPLIT
+            )
+            else FastSourceMode.HEATING
+        )
 
     def tick(self, dt_seconds: float) -> None:
         """Advance the dwell clock by ``dt_seconds`` — exactly once per step.
@@ -342,19 +475,90 @@ class FastSourceMachine:
         it AGAIN, so the min-OFF wait under an active S1 elapsed twice as fast
         as wall-clock time.
 
+        The manual hold (§28) counts down here too, once per step, and the
+        settle counter (seconds since our own command pair last changed)
+        advances.
+
         Args:
             dt_seconds: Elapsed time since the previous control step [s].
         """
         self._timer_s += dt_seconds
+        self._since_cmd_change_s += dt_seconds
+        if self._manual_hold_s > 0.0:
+            self._manual_hold_s = max(0.0, self._manual_hold_s - dt_seconds)
+
+    def mirror(self) -> FastSourceCommand:
+        """Emit the command that MIRRORS the adopted state (manual hold, §28).
+
+        Called by the controller instead of :meth:`want` / :meth:`decide`
+        while :attr:`manual_hold_active`: the state is whatever the user set
+        the unit to, so the command echoes it — ``on`` when the state is not
+        OFF, ``mode`` = state, ``target_temperature_c`` = ``None`` (the unit
+        runs at the USER's own setpoint, which the controller does not know;
+        a fabricated target would show up in the panel and sensors as ours,
+        and the adapter writes nothing during a hold anyway). Recording the
+        command via :meth:`note_command` is what lets the next :meth:`sync`
+        see agreement and NOT restart the hold. The dwell lock is surfaced
+        exactly like :meth:`decide` does, so the panel timer stays honest
+        about the min ON/OFF that still applies once the hold elapses.
+
+        Returns:
+            The mirrored :class:`~tortoise_ufh.models.FastSourceCommand`.
+        """
+        cfg = self._config
+        state = self._state
+        min_lock_min = (
+            cfg.fast_min_off_minutes
+            if state is FastSourceMode.OFF
+            else cfg.fast_min_on_minutes
+        )
+        remaining = min_lock_min * 60.0 - self._timer_s
+        self._dwell_remaining_s = remaining if remaining > 0.0 else None
+        if state is FastSourceMode.OFF:
+            return FastSourceCommand(
+                on=False, mode=FastSourceMode.OFF, target_temperature_c=None
+            )
+        return FastSourceCommand(on=True, mode=state, target_temperature_c=None)
 
     def note_command(self, on: bool, mode: FastSourceMode | None = None) -> None:
-        """Record this cycle's emitted command for the next S4 comparison.
+        """Record this cycle's EMITTED command for the next S4 comparison.
+
+        Also restarts the settle counter (§28) whenever the EMITTED
+        ``(on, direction_of(mode))`` pair CHANGES versus the previously
+        emitted one — a divergence right after our own command change is the
+        unit catching up, not a touch. The comparison is against the last
+        EMITTED pair, not the last written one: a degraded write reported via
+        :meth:`note_written` every cycle (``dry_unsupported``) would otherwise
+        read as a command change every cycle and the hold could never arm.
 
         Args:
             on: The ``on`` field of the command actually emitted this cycle.
             mode: The command's direction (K4, 2026-07-12) so the next
                 reconciliation can also flag a DIRECTION divergence. ``None``
                 (legacy callers) records the on-state only.
+        """
+        pair = (on, direction_of(mode))
+        if pair != self._last_emitted_pair:
+            self._since_cmd_change_s = 0.0
+        self._last_emitted_pair = pair
+        self._prev_cmd_on = on
+        self._prev_cmd_mode = mode
+
+    def note_written(self, on: bool, mode: FastSourceMode) -> None:
+        """Record what the adapter REALLY wrote, overriding the emitted pair.
+
+        Adapter hook (§28) for a degraded write: when the climate entity
+        advertises no ``dry`` mode the adapter writes OFF instead of the
+        core's DRY (``dry_unsupported``, §24). Only the pair the next
+        :meth:`sync` compares the feedback against is replaced — the unit's
+        OFF feedback then agrees with the written OFF instead of diverging
+        from the emitted DRY. The settle counter is NOT touched: the core
+        keeps emitting the same DRY, so nothing about OUR command changed,
+        and a real touch on such a unit must still be adoptable.
+
+        Args:
+            on: The ``on`` state actually written.
+            mode: The direction actually written (``OFF`` for a demoted DRY).
         """
         self._prev_cmd_on = on
         self._prev_cmd_mode = mode
@@ -466,7 +670,11 @@ class FastSourceMachine:
         just started. This is the ONE deliberate exception to the
         change-direction-through-OFF rule: a hard S3/S4 emergency outranks
         compressor hygiene (and S3-in-summer / S4-in-winter cannot co-occur
-        with the opposite direction in practice).
+        with the opposite direction in practice). It also ENDS a manual hold
+        (§28): safety outranks the user's touch, and the forced command must
+        be written. Cancelling an ACTIVE hold leaves an honest trace — the
+        unit is diverged from what the safety layer writes, so the mismatch
+        flag is raised for this cycle instead of silence.
 
         Args:
             fs_mode: Direction to command (HEATING or COOLING).
@@ -475,6 +683,7 @@ class FastSourceMachine:
         Returns:
             An ON :class:`~tortoise_ufh.models.FastSourceCommand`.
         """
+        self._end_hold()
         if self._state is not fs_mode:
             self._state = fs_mode
             self._timer_s = 0.0
@@ -491,11 +700,16 @@ class FastSourceMachine:
         already-OFF cycles the timer keeps growing via the single per-step
         accumulation in :meth:`tick` (fast-F6, 2026-07-09; single-accumulation
         fix 2026-07-10), so a long sensor-lost or OFF stretch counts toward the
-        min-OFF wait instead of restarting it on recovery.
+        min-OFF wait instead of restarting it on recovery. Also ENDS a manual
+        hold (§28) — uniformly for every caller (safety, sensor lost, OFF
+        mode, group arbitration, farewell): a forced OFF is written, and
+        cancelling an ACTIVE hold raises the mismatch flag as an honest trace
+        (the unit is diverged from what the safety layer writes).
 
         Returns:
             An OFF :class:`~tortoise_ufh.models.FastSourceCommand`.
         """
+        self._end_hold()
         if self._state is not FastSourceMode.OFF:
             self._state = FastSourceMode.OFF
             self._timer_s = 0.0
@@ -507,12 +721,28 @@ class FastSourceMachine:
             on=False, mode=FastSourceMode.OFF, target_temperature_c=None
         )
 
+    def _end_hold(self) -> None:
+        """End an active manual hold from a safety force (§28).
+
+        A hold cancelled by ``force_on`` / ``force_off`` sets the mismatch
+        flag for this cycle: the physical unit is in the USER's state while
+        the safety layer is about to write something else, and that
+        divergence must show in the report rather than vanish silently. An
+        inactive hold leaves the flag alone.
+        """
+        if self._manual_hold_s > 0.0:
+            self._mismatch = True
+            self._manual_hold_s = 0.0
+
     def reset(self) -> None:
-        """Clear all machine state (direction, dwell clock, S4 bookkeeping)."""
+        """Clear all machine state (direction, dwell clock, S4, manual hold)."""
         self._state = FastSourceMode.OFF
         self._timer_s = _INITIAL_FAST_TIMER_S
         self._synced = False
         self._mismatch = False
         self._prev_cmd_on = None
         self._prev_cmd_mode = None
+        self._last_emitted_pair = None
+        self._since_cmd_change_s = 0.0
         self._dwell_remaining_s = None
+        self._manual_hold_s = 0.0

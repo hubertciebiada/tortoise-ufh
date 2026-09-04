@@ -1545,3 +1545,139 @@ cycle and that OVERRODE the internal mode.
   Suite-level scenarios seed it either through the setpoint Store (a restart-shaped test) or by
   setting the coordinator's field directly, the same white-box style already used for the
   control-state map; the entity path itself is covered end-to-end in `tests/ha/test_select.py`.
+
+## 28. Manual hold for the fast source — a physical divergence is user intent (2026-09-04, v0.20.0)
+
+**Problem (owner, live data, 08-10 → 09-04):** in TRANSITIONAL a split started by hand from the
+remote (target 21, room setpoint 23) was flipped by the controller **straight to HEATING within
+13–15 min** and heated the room to 24 °C by the split's own sensor. The room is **Pokój
+Antoniego** (a child's bedroom) — NOT Sypialnia: Sypialnia, whose room sensor is a REAL
+AirGuard wall sensor, had ZERO episodes in the whole window. Three manual-cool → heat flips:
+08-18 19:15 → 19:29, 08-22 19:39 → 19:52, 08-24 20:27 → 20:42 (error exactly +2.0 K at the
+flip — boost 1.5, sensor step 0.5); the heating released at 24 °C by the split's own sensor on
+08-23 01:02, 08-24 21:47 and 08-25 16:47. On 09-04 at 17:47 a "turbo cool" script set **six**
+splits to cool/16 at once — **three** were flipped to heat: Helena 17:57, Antoni 18:07,
+Patrycja 18:07. Separately, three S3 re-assert (45 min, `writers.py`) stomps re-wrote our stale
+command after the user had turned a unit off or re-cooled it: 08-18 20:19, 08-22 20:37,
+08-24 21:32. The pattern is exact: in the affected rooms the room-temperature sensor IS the
+split's own sensor, so a manual cool drops the "room" 2 K below the setpoint within a few
+cycles; the `FastSourceMachine` is in OFF (it never commanded anything), so `decide()` sees a
+2 K heating demand from an OFF state with the min-OFF long elapsed and engages HEATING — on a
+unit that is physically cooling, with no OFF dwell in between. Two root causes: (1) `sync()`
+adopted the physical state only on the FIRST feedback; a later divergence only raised
+`fast_source_mismatch` and the machine kept its own (wrong) state; (2) nothing treated a
+divergence as user intent — the design assumed the controller is always the owner and the
+adapter re-asserts.
+
+**Decision: a settled divergence is the user's decision. Adopt it, mirror it, hold it.**
+
+- New tuning knob **`fast_manual_hold_minutes`** (`ControllerConfig`, default **60**, UI range
+  0..1440 step 5, core accepts ≥ 0; unit `min`; per-room overridable like the other
+  fast-source knobs). **`0` disables the feature entirely** — legacy behaviour: the divergence
+  only raises `fast_source_mismatch` and the 45-min re-assert converges the hardware.
+- **Rule (core, `FastSourceMachine.sync`):** on any SETTLED cycle where the physical feedback
+  disagrees with the PREVIOUSLY EMITTED command — the existing S4/K4 condition: on/off differs,
+  or on/off agrees-ON but the reported refrigerant direction differs (`direction_of`) — and the
+  knob is > 0, the machine ADOPTS the physical state (a running unit takes the direction from
+  `fast_source_hvac_mode` when unambiguous, else the first-sync fallback — global mode, a
+  HEATER never cools; a stopped unit becomes OFF; the dwell timer restarts on any state
+  change) and starts a **manual hold** of `fast_manual_hold_minutes`, RESTARTED on every new
+  divergence (measured from the LAST touch). No `fast_source_mismatch` is raised; the report
+  carries **`fast_source_manual`** instead. The first-sync adoption block is unchanged (the
+  same direction rule, now shared through `_running_direction`).
+- **Settle rule (review fix; threshold revised to half a cycle):** "settled" means OUR OWN
+  EMITTED command pair `(on, direction_of(mode))` has not changed for at least **half a
+  `cycle_seconds`** (150 s at the default cycle) — in practice the SECOND regular cycle after
+  our change. The machine keeps `_since_cmd_change_s` — reset to 0 in `note_command()` whenever
+  the EMITTED pair changes versus the previously emitted one (`_last_emitted_pair`), advanced in
+  `tick()` — and adopts only once it has reached half a cycle; otherwise the divergence only sets
+  the legacy mismatch flag. Why a settle window at all: the coordinator's debounced off-cycle
+  recompute fires ~2 s after a write and reads a climate entity that has not published the new
+  state yet, and a climate integration may report a few seconds late — without the rule our own
+  fresh command would be "adopted back" as a manual touch. Why HALF a cycle and not a full one:
+  the core is fed the REAL, jittery measured dt, so a full-cycle threshold was a knife edge
+  (`since = 299.99 < 300.0` slipped the adoption to the next cycle at random); half a cycle is
+  clearly above the ~2-s recompute and any few-second climate-integration lag and clearly below
+  one cycle, so the adoption cycle is deterministic. Because `RoomController.step` runs
+  `sync → tick → decide → note_command`, the counter `sync` sees lags one step behind wall
+  time: the first regular cycle after our change sees ~0 s (flag only), the second sees ~one
+  cycle (adopt). A touch on a long-idle machine (command stable for hours) is adopted at the
+  very next cycle.
+- **Late first feedback (guard kept):** when the feedback entity appears only AFTER the machine
+  has already emitted commands (`not _synced and _prev_cmd_on is not None`), the first reading
+  may be stale — it only marks the machine synced and raises `fast_source_mismatch` if it
+  disagrees; nothing is adopted. A STILL diverging next cycle is judged by the regular rule
+  (and may be adopted under the settle rule).
+- **While the hold is active** the controller emits a command that MIRRORS the machine state
+  (`FastSourceMachine.mirror`: `on` = state is not OFF, `mode` = state,
+  `target_temperature_c` = **`None`** — the unit runs at the USER's own setpoint, which we do
+  not know; a fabricated target would show in the panel and sensors as ours, and the adapter
+  writes nothing during a hold anyway; the panel renders the missing target as an em dash)
+  instead of running `want()`/`decide()` — on EVERY fast-source path (HEATING/COOLING boost,
+  dry assist, TRANSITIONAL); quiet hours, the heater rule and the dry gate are bypassed too
+  (the user's choice stands). The mirrored command is recorded via `note_command`, so the next
+  cycle sees agreement and does not restart the hold. The hold counts down in `tick()` (once
+  per step, like the dwell clock). When it reaches 0 the normal logic resumes FROM THE ADOPTED
+  STATE — so a reversal still has to go OFF → min-OFF → other direction (the
+  compressor-hygiene fix); a unit adopted OFF has accumulated its OFF timer during the hold.
+  The explanation reads e.g. `Split reczne sterowanie (jeszcze 45 min), ON.`
+- **Group arbiter (K4) — a manual-hold room is PINNED.** The outdoor unit physically IS in the
+  user's direction, so `_arbitrate_fast_groups` treats a room carrying `fast_source_manual`
+  like a safety-forced one: it always wins its group, it is never the loser (its unit never
+  gets a written OFF from the arbiter), rooms in the opposite direction are resolved OFF as
+  today, and its band excess is not weighed either way. Two pinned rooms in opposite
+  directions fall into the existing double-pin path (flag everyone, override nobody).
+  `resolve_group_conflict` therefore never sees a manual room.
+- **Safety outranks the hold.** `force_on()` / `force_off()` END the hold, uniformly for every
+  caller — S3/S4 emergency, S5 fallback, sensor lost, OFF mode, cooling opt-out and the
+  farewell — and their commands are written (the flag is absent because it is stamped in
+  `_finalize` from `manual_hold_active`, after the safety layer). Sensor-lost `force_off`
+  included: one uniform rule beats a special case. Cancelling an ACTIVE hold is not silent:
+  `force_on` / `force_off` set the mismatch flag for that cycle (`FastSourceMachine._end_hold`)
+  — the unit is physically in the user's state while the safety layer writes something else, so
+  the report carries `fast_source_mismatch` as an honest trace. Accepted edge: sensor-lost (or
+  any safety rule) forcing OFF while a user keeps re-running the unit adopts ON and forces OFF
+  every cycle, which resets the dwell clock each time, so the min-OFF restarts from zero after
+  recovery.
+- **An entry reload ends any hold.** Every tuning save (and every restart) rebuilds the
+  `BuildingController` and its machines; the first sync of the new machine adopts a running
+  unit WITHOUT a hold (the existing S4 first-feedback rule), so the normal logic owns it from
+  the next cycle.
+- **Adapter (`coordinator._write_fast_source`):** a report carrying `fast_source_manual` is NOT
+  written (the valve path is untouched), so the S3 re-assert cannot fire during the hold. The
+  entity's S3 command cache is FORGOTTEN on every skipped cycle
+  (`CommandWriter.forget_fast_source`): otherwise the first post-hold command could be
+  swallowed as "unchanged and younger than 45 min" (e.g. an OFF cached shortly before the hold
+  while the unit physically runs), the un-written OFF would read as a fresh divergence next
+  cycle and the hold would restart. With the entry gone the first post-hold write is
+  unconditional.
+- **Adapter — a degraded write is reported back (`BuildingController.note_fast_source_written`
+  → `RoomController.note_fast_source_written` → `FastSourceMachine.note_written`):** when the
+  climate entity advertises no `dry` mode the writer demotes the core's DRY to OFF
+  (`dry_unsupported`, §24). The coordinator now tells the core what was REALLY written
+  (`on=False, mode=OFF`) right where it merges the flag, so the unit's OFF feedback next cycle
+  compares against OFF — agreement, not a divergence that would settle into a false manual
+  hold. `note_written` replaces ONLY the pair the next `sync` compares against and never touches
+  the settle counter — the EMITTED command (DRY) did not change. The two concerns are separate
+  on purpose: routed through `note_command`, the written OFF alternated with the emitted DRY
+  every cycle, restarted the settle counter every cycle, and the hold could never arm in a
+  `dry_unsupported` room — a real touch there was never adopted.
+- **Panel:** `fast_source_manual` in the `info` tier (an intentional steady state, like
+  `cooling_disabled`; group `assist`, shown in the Assist tab's flag subset), labels PL
+  „Sterowanie ręczne" / EN "Manual control" / DE "Manuelle Steuerung"; the knob in the
+  fast-source tuning group in all three languages + `strings.json` / translations.
+
+**Accepted ambiguity.** A missed IR write looks exactly like a manual touch once the settle
+rule has passed (the second regular cycle): the unit stays in its old state, the feedback disagrees, the
+machine adopts it and holds for an hour with the unit running at OUR last target. Accepted —
+the CN105 link over ESPHome rarely drops writes, the cost is one hold, and the alternative (a
+second source of truth about who touched the unit) contradicts the SIMPLICITY mandate. A `dry`
+command demoted to OFF by the adapter is NOT such a case any more: the degraded write is
+reported back to the core (see above), so it never becomes a false hold.
+
+**Rejected alternatives.** (a) Only suppressing the direct COOL→HEAT flip (force an OFF cycle):
+fixes the flip, not the re-assert stomps, and still fights the user. (b) Re-adopting on every
+divergence WITHOUT a hold: the next cycle's demand logic would immediately release/flip the
+adopted unit — the user's touch would survive one cycle. (c) A per-room "manual" state: the
+two-state `off | live` is a locked decision (§13); the hold is the same idea, scoped in time,
+without a third state.

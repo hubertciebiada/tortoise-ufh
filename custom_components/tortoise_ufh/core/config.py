@@ -99,6 +99,21 @@ class ControllerConfig:
             air feels stale from a real dew point of ~17-18 degC). Releases
             ``DRY_HYSTERESIS_K`` (1 K, a constant) below, or as soon as the
             room is overcooled past the deadband. Per-room overridable.
+        fast_manual_hold_minutes: Manual-hold duration of the fast source
+            [min] (>= 0; default 60; 2026-09-04, DECISIONS §28). When the
+            physical feedback of a split disagrees with the previously
+            emitted command (on/off, or the reported refrigerant direction),
+            the :class:`~tortoise_ufh.fast_source.FastSourceMachine` treats
+            the divergence as USER INTENT: it adopts the physical state and,
+            for this many minutes measured from the LAST such touch, the
+            controller only mirrors that state (nothing is written, flag
+            ``"fast_source_manual"``). When the hold elapses the normal logic
+            resumes from the adopted state, so a reversal still passes
+            through OFF and the min-OFF dwell. ``0`` disables the feature —
+            legacy behaviour: the divergence only raises
+            ``"fast_source_mismatch"`` and the adapter re-asserts. The hard
+            safety layer (S3/S4, sensor lost) ends a hold. Per-room
+            overridable.
         dew_margin_k: Supply-above-dew gap [K] at (and above) which the local
             cooling throttle is fully OPEN (>= 0). Semantics revised
             2026-07-12 (K6): the ramp ENDS here — this is the same design gap
@@ -208,6 +223,9 @@ class ControllerConfig:
     # Dry assist (2026-07-16, DECISIONS §24): humidity-triggered split DRY.
     dry_enabled: bool = False
     dry_dew_max_c: float = 17.0
+    # Manual hold (2026-09-04, DECISIONS §28): a physical divergence of the
+    # split is adopted as user intent for this long; 0 = legacy mismatch flag.
+    fast_manual_hold_minutes: float = 60.0
     dew_margin_k: float = 2.0
     dew_ramp_k: float = 2.0
     # Optional heat-pump water setpoints (B2, 2026-07-12): global knobs read
@@ -249,7 +267,8 @@ class ControllerConfig:
                 ``[0, 100]``, a margin/threshold is negative, ``dew_ramp_k`` or
                 ``cycle_seconds`` is non-positive, ``boost_offset_c`` does
                 not exceed ``deadband_c``, ``fast_target_offset_k`` is outside
-                ``[0, 3]``, ``dry_dew_max_c`` is outside ``[12, 22]``, or a
+                ``[0, 3]``, ``dry_dew_max_c`` is outside ``[12, 22]``,
+                ``fast_manual_hold_minutes`` is negative, or a
                 heat-pump water knob is outside its range
                 (``cooling_supply_base_c`` [10, 25], ``heating_supply_base_c``
                 [20, 40], ``heating_supply_slope`` [0, 2]), a flicker knob is
@@ -311,6 +330,12 @@ class ControllerConfig:
             raise ValueError(msg)
         if not 12.0 <= self.dry_dew_max_c <= 22.0:
             msg = f"dry_dew_max_c must be in [12, 22], got {self.dry_dew_max_c}"
+            raise ValueError(msg)
+        if self.fast_manual_hold_minutes < 0:
+            msg = (
+                "fast_manual_hold_minutes must be >= 0, got "
+                f"{self.fast_manual_hold_minutes}"
+            )
             raise ValueError(msg)
         if self.dew_margin_k < 0:
             msg = f"dew_margin_k must be >= 0, got {self.dew_margin_k}"

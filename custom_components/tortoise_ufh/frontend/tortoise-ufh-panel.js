@@ -299,6 +299,7 @@ const STR = {
     tune_fast_target_offset_k: "Podbicie nastawy wspomagania",
     tune_dry_enabled: "Osuszanie wspomagające",
     tune_dry_dew_max_c: "Próg rosy osuszania",
+    tune_fast_manual_hold_minutes: "Czas ręcznego sterowania wspomaganiem",
     tune_dew_margin_k: "Margines bezpieczeństwa nad punktem rosy",
     tune_dew_ramp_k: "Szerokość rampy dławienia chłodzenia",
     tune_outdoor_ff_enabled: "Człon pogodowy włączony",
@@ -426,6 +427,16 @@ const STR = {
       "chłodzi). Zwolnienie 1 K poniżej progu (histereza) albo gdy pokój " +
       "przechłodzi się poza martwą strefę. Domyślnie 17 °C — od ok. " +
       "17–18 °C rosy powietrze robi się lepkie.",
+    tip_knob_fast_manual_hold_minutes:
+      "Gdy split fizycznie robi co innego niż ostatnia komenda (włączony " +
+      "pilotem, wyłączony, przestawiony kierunek), regulator uznaje to za " +
+      "Twoją decyzję: przyjmuje stan urządzenia i przez tyle minut od " +
+      "ostatniego dotknięcia tylko go odzwierciedla — nic nie wysyła, nie " +
+      "nadpisuje ponownym wymuszaniem i nie przerzuca chłodzącego splita " +
+      "wprost na grzanie. Po upływie czasu wraca normalna logika (zmiana " +
+      "kierunku dalej przez OFF i minimalny postój). Zabezpieczenia S3/S4 i " +
+      "utrata czujnika przerywają utrzymanie. 0 = wyłączone (jak dawniej: " +
+      "flaga rozjazdu i ponowne wymuszenie po ~45 min). Domyślnie 60 min.",
     tip_knob_dew_margin_k:
       "Chłodzenie: gdy zasilanie jest co najmniej o tyle K powyżej punktu " +
       "rosy, zawór działa bez ograniczeń; bliżej rosy zaczyna się dławienie " +
@@ -856,6 +867,7 @@ const STR = {
     tune_fast_target_offset_k: "Assist target overdrive",
     tune_dry_enabled: "Dry assist",
     tune_dry_dew_max_c: "Dry-assist dew-point threshold",
+    tune_fast_manual_hold_minutes: "Assist manual-hold time",
     tune_dew_margin_k: "Safety margin above the dew point",
     tune_dew_ramp_k: "Cooling throttle ramp width",
     tune_outdoor_ff_enabled: "Weather feedforward enabled",
@@ -966,6 +978,16 @@ const STR = {
       "too). Releases 1 K below the threshold (hysteresis) or as soon as " +
       "the room overcools past the deadband. Default 17 °C — air starts " +
       "feeling sticky from a dew point of ~17–18 °C.",
+    tip_knob_fast_manual_hold_minutes:
+      "When the split is physically doing something other than the last " +
+      "command (switched on by remote, switched off, direction changed), the " +
+      "controller treats it as your decision: it adopts the unit's state and " +
+      "for this many minutes since the last touch only mirrors it — writes " +
+      "nothing, does not overwrite it with the re-assert and never flips a " +
+      "cooling split straight to heating. Afterwards the normal logic " +
+      "resumes (a direction change still goes through OFF and the minimum " +
+      "rest time). Safety rules S3/S4 and a lost sensor end the hold. 0 = " +
+      "off (legacy: mismatch flag and re-assert after ~45 min). Default 60 min.",
     tip_knob_dew_margin_k:
       "Cooling: while supply is at least this many K above the dew point the " +
       "valve runs unrestricted; closer to the dew point the flow gets " +
@@ -1420,6 +1442,7 @@ const STR = {
     tune_fast_target_offset_k: "Sollwert-Überhöhung der Zusatzquelle",
     tune_dry_enabled: "Entfeuchtungs-Assistent",
     tune_dry_dew_max_c: "Taupunktschwelle der Entfeuchtung",
+    tune_fast_manual_hold_minutes: "Haltezeit der manuellen Steuerung",
     tune_dew_margin_k: "Sicherheitsmarge über dem Taupunkt",
     tune_dew_ramp_k: "Rampenbreite der Kühldrosselung",
     tune_outdoor_ff_enabled: "Wettervorsteuerung aktiviert",
@@ -1533,6 +1556,17 @@ const STR = {
       "kühlt auch im Entfeuchten). Freigabe 1 K unter der Schwelle " +
       "(Hysterese) oder sobald der Raum über das Totband hinaus unterkühlt. " +
       "Standard 17 °C — ab ~17–18 °C Taupunkt wirkt die Luft stickig.",
+    tip_knob_fast_manual_hold_minutes:
+      "Tut der Split physisch etwas anderes als der letzte Befehl (per " +
+      "Fernbedienung eingeschaltet, ausgeschaltet, Richtung geändert), wertet " +
+      "der Regler das als Ihre Entscheidung: Er übernimmt den Zustand des " +
+      "Geräts und spiegelt ihn für so viele Minuten seit der letzten Berührung " +
+      "nur — schreibt nichts, überschreibt ihn nicht durch das erneute " +
+      "Erzwingen und kippt einen kühlenden Split nie direkt auf Heizen. Danach " +
+      "läuft die normale Logik weiter (ein Richtungswechsel geht weiterhin " +
+      "über AUS und die Mindeststillstandszeit). Die Sicherheitsregeln S3/S4 " +
+      "und ein verlorener Sensor beenden das Halten. 0 = aus (wie früher: " +
+      "Abweichungsmeldung und erneutes Erzwingen nach ~45 min). Standard 60 min.",
     tip_knob_dew_margin_k:
       "Kühlung: solange der Vorlauf mindestens so viele K über dem Taupunkt liegt, " +
       "läuft das Ventil uneingeschränkt; näher am Taupunkt wird der Durchfluss " +
@@ -2026,15 +2060,37 @@ const FLAG_LABELS = {
     de: "Zusatzquelle weicht vom Befehl ab",
     sev: "warn", sx: null, group: "assist",
     descPl:
-      "Split jest w innym stanie niż zadany (np. zmieniony pilotem). Nadpisany " +
-      "przy najbliższym re-assert (~45 min); dla trwałej ręcznej kontroli ustaw " +
+      "Split jest w innym stanie niż zadany (np. zmieniony pilotem). Przy " +
+      "domyślnym czasie ręcznego sterowania (§8) stan zostaje przyjęty po 1–2 " +
+      "cyklach (flaga fast_source_manual); nadpisany przy najbliższym re-assert " +
+      "(~45 min) tylko przy czasie = 0. Dla trwałej ręcznej kontroli ustaw " +
       "pokój na WYŁ.",
     descEn:
       "The split is in a different state than commanded (e.g. changed by remote). " +
-      "Overwritten on the next re-assert (~45 min); for permanent manual control " +
+      "With the default manual-hold time (§8) the state is adopted after 1–2 " +
+      "cycles (flag fast_source_manual); overwritten on the next re-assert " +
+      "(~45 min) only with the time set to 0. For permanent manual control " +
       "set the room to OFF.",
     descDe:
-      "Der Split ist in einem anderen Zustand als befohlen (z. B. per Fernbedienung geändert). Wird beim nächsten erneuten Erzwingen (~45 min) überschrieben; für dauerhafte manuelle Steuerung stellen Sie den Raum auf AUS.",
+      "Der Split ist in einem anderen Zustand als befohlen (z. B. per Fernbedienung geändert). Bei der Standard-Haltezeit der manuellen Steuerung (§8) wird der Zustand nach 1–2 Zyklen übernommen (Meldung fast_source_manual); nur bei Haltezeit 0 wird er beim nächsten erneuten Erzwingen (~45 min) überschrieben. Für dauerhafte manuelle Steuerung stellen Sie den Raum auf AUS.",
+  },
+  fast_source_manual: {
+    pl: "Sterowanie ręczne",
+    en: "Manual control",
+    de: "Manuelle Steuerung",
+    sev: "info", sx: null, group: "assist",
+    descPl:
+      "Split został przestawiony poza integracją (pilot, aplikacja producenta) " +
+      "— regulator przyjął jego stan i przez czas ręcznego sterowania (§8) " +
+      "tylko go odzwierciedla: nic nie wysyła, nic nie nadpisuje. Zamierzone; " +
+      "po upływie czasu wraca normalna logika (zmiana kierunku przez OFF).",
+    descEn:
+      "The split was changed outside the integration (remote, vendor app) — " +
+      "the controller adopted its state and only mirrors it for the manual-" +
+      "hold time (§8): nothing is written, nothing overwritten. Intentional; " +
+      "the normal logic resumes when the hold elapses (direction via OFF).",
+    descDe:
+      "Der Split wurde außerhalb der Integration verstellt (Fernbedienung, Hersteller-App) — der Regler hat seinen Zustand übernommen und spiegelt ihn für die Haltezeit der manuellen Steuerung (§8) nur: nichts wird geschrieben, nichts überschrieben. Beabsichtigt; nach Ablauf läuft die normale Logik weiter (Richtungswechsel über AUS).",
   },
   fast_source_min_runtime: {
     pl: "Wspomaganie: blokada min. czasu pracy",
@@ -2302,6 +2358,7 @@ const KNOB_GROUPS = [
       "fast_target_offset_k",
       "dry_enabled",
       "dry_dew_max_c",
+      "fast_manual_hold_minutes",
     ],
   },
   {
@@ -6108,7 +6165,8 @@ class TortoiseUfhPanel extends HTMLElement {
     }
 
     // Flags: the assist-relevant subset (K9 extended it with the group
-    // conflict and the physical-state mismatch; B1 added the quiet hours).
+    // conflict and the physical-state mismatch; B1 added the quiet hours;
+    // §28 the manual hold).
     p.flags.textContent = "";
     for (const f of [
       "fast_source_min_runtime",
@@ -6116,6 +6174,7 @@ class TortoiseUfhPanel extends HTMLElement {
       "fast_source_cannot_cool",
       "fast_source_group_conflict",
       "fast_source_mismatch",
+      "fast_source_manual",
       "dry_assist",
       "dry_unsupported",
     ]) {

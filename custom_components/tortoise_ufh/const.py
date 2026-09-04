@@ -307,6 +307,10 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     # Dry assist (2026-07-16, §24): room dew point above which a split is
     # engaged in DRY; default 17 from the owner's stale-air observation.
     ("dry_dew_max_c", 12.0, 22.0, 0.5),
+    # Manual hold (2026-09-04, §28): how long a physical divergence of the
+    # split (remote touch) is adopted and mirrored before the controller
+    # resumes; 0 disables (legacy: mismatch flag + 45-min re-assert).
+    ("fast_manual_hold_minutes", 0.0, 1440.0, 5.0),
     # Lower bound 0.5 K (D4, 2026-07-12): margin 0 degenerates the local
     # dew-point throttle ramp into a hard on/off step at the dew point.
     ("dew_margin_k", 0.5, 10.0, 0.1),
@@ -376,6 +380,7 @@ CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "fast_target_offset_k": "K",
     "dry_dew_max_c": "°C",
     "dry_enabled": "",
+    "fast_manual_hold_minutes": "min",
     "dew_margin_k": "K",
     "dew_ramp_k": "K",
     "ff_neutral_c": "°C",

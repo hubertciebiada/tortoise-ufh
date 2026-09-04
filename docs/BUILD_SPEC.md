@@ -478,7 +478,16 @@ Algorithm (all knobs from `ControllerConfig`, §6.3):
       additive `"fast_source_mismatch"` flag — since 2026-07-12 (K4) this comparison also sees
       the DIRECTION: a unit physically running a single-direction HVAC mode opposite to the
       command flags too (the bool-only comparison was blind to multisplit standby / manual
-      reversal). The machine stays the owner (the adapter re-asserts). Without feedback
+      reversal). The machine stays the owner (the adapter re-asserts) — since 2026-09-04
+      (DECISIONS §28) ONLY with `fast_manual_hold_minutes = 0`: by default a later SETTLED
+      divergence (our own emitted command pair unchanged for at least half a `cycle_seconds` —
+      in practice the second regular cycle after our change; a divergence right after our own
+      command change only flags — the unit may not have caught up) is USER
+      INTENT — the machine adopts the physical state, the controller MIRRORS it for the hold
+      (flag `"fast_source_manual"`, `target_temperature_c=None`, the adapter writes nothing) and
+      the normal logic then resumes from the adopted state (a reversal still passes OFF +
+      min-OFF); `force_on` / `force_off` end the hold; a manual-hold room pins its multisplit
+      group like a safety-forced one. Without feedback
       (`fast_source_on is None`) the legacy free first transition is kept.
     - **Anti priority-inversion:** the split decision NEVER reduces/holds the valve; floor stays base.
       Split only *adds* boost above the threshold and releases once inside the comfort band.
@@ -591,6 +600,7 @@ class ControllerConfig:
     fast_min_on_minutes: float = 10.0
     fast_min_off_minutes: float = 10.0
     fast_target_offset_k: float = 1.0    # ADDITIVE (2026-07-13): S12 boost overdrive, now a knob in [0,3]; 0 = split gets the plain setpoint
+    fast_manual_hold_minutes: float = 60.0  # ADDITIVE (2026-09-04, DECISIONS §28): manual hold after a physical divergence of the split, >= 0; 0 = legacy mismatch flag
     dew_margin_k: float = 2.0            # gap at which the local throttle is FULLY OPEN
                                          # (K6 2026-07-12: the ramp ENDS here — the same design
                                          # gap the pump's global dew floor already guarantees)

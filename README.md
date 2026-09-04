@@ -290,15 +290,18 @@ to **live**.
   differs from the last by at least the write threshold, to avoid actuator chatter) and the
   split's mode and target temperature.
 
-> **Manual overrides & the 45-minute re-assert.** In `live`, Tortoise-UFH is the OWNER of
-> the room's split: an unchanged command is not re-sent every cycle (no beeps, your fan and
-> louvre tweaks survive), but the mode + target pair is **re-asserted roughly every
-> 45 minutes**, so a manual change of the split's mode or target from its remote will be
-> overwritten within that window (the report raises `fast_source_mismatch` in the
-> meantime). If you want to drive a room's hardware by hand for a while, **switch the room
-> to `off`** — that is the supported "manual mode": the controller writes nothing, and the
-> way back to `live` re-parks the actuators safely (the split passes an honest
-> minimum-OFF before any restart).
+> **Manual overrides.** In `live`, Tortoise-UFH is the owner of the room's split: an
+> unchanged command is not re-sent every cycle (no beeps, your fan and louvre tweaks survive)
+> and the mode + target pair is re-asserted roughly every 45 minutes. A manual change of the
+> split's **mode** (on/off or direction) from its remote is treated as your decision: the
+> controller adopts the unit's state and only mirrors it for `fast_manual_hold_minutes`
+> (default 60 min, counted from the last touch — flag `fast_source_manual`, nothing is
+> written, a cooling split is never flipped straight to heating); afterwards the normal logic
+> resumes from that state. Safety rules S3/S4 and a lost sensor end the hold. Set the knob to
+> `0` for the legacy behaviour (`fast_source_mismatch` + re-assert). For permanent manual
+> control **switch the room to `off`** — the controller writes nothing, and the way back to
+> `live` re-parks the actuators safely (the split passes an honest minimum-OFF before any
+> restart).
 
 A whole-house "hands off the hardware" is simply **every room off** — the per-room control
 state replaced the earlier global kill-switch. Changing a room's control state takes

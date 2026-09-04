@@ -12,6 +12,7 @@ attribute in modern Home Assistant and cannot be monkeypatched directly.
 from __future__ import annotations
 
 import math
+import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -24,7 +25,11 @@ from custom_components.tortoise_ufh.const import (
 )
 from custom_components.tortoise_ufh.core.controller import GLOBAL_SAFE_DEW_MARGIN_K
 from custom_components.tortoise_ufh.core.dew_point import dew_point
-from custom_components.tortoise_ufh.core.models import Mode, RoomOutputs
+from custom_components.tortoise_ufh.core.models import (
+    FastSourceMode,
+    Mode,
+    RoomOutputs,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant, ServiceCall
@@ -369,6 +374,9 @@ async def test_room_offset_change_rewrites_split_target_same_cycle(
     hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
     await _refresh(hass, coordinator)
     assert coordinator.data.rooms["Salon"].outputs.fast_source.on is True
+    # The unit obeys the write (§28: a unit still reading "off" one cycle after
+    # an ON command would be adopted as a manual OFF and held, not re-written).
+    hass.states.async_set("climate.salon_split", "heat", {})
 
     # Force the scheduled recompute to run immediately (function -> async_refresh
     # so the full update path executes within block_till_done).
@@ -708,6 +716,9 @@ async def test_split_command_cached_not_respammed(
     temp_calls = mocks[("climate", "set_temperature")]
     assert len(hvac_calls) == 1
     assert len(temp_calls) == 1
+    # The unit obeys the write, so the following cycles exercise the S3 cache
+    # and not the §28 manual hold (an un-obeying unit would be held instead).
+    hass.states.async_set("climate.salon_split", "heat", {})
 
     # Unchanged command: further cycles are silent (cache, re-assert 45 min).
     await _refresh(hass, coordinator)
@@ -735,6 +746,9 @@ async def test_split_command_change_writes_immediately(
     await _refresh(hass, coordinator)
     temp_calls = mocks[("climate", "set_temperature")]
     assert [c.data["temperature"] for c in temp_calls] == [pytest.approx(22.0)]
+    # The unit obeys the write (§28: an un-obeying unit is adopted as a manual
+    # OFF and held instead of being re-written).
+    hass.states.async_set("climate.salon_split", "heat", {})
 
     coordinator.set_room_offset("Salon", 1.0)
     await _refresh(hass, coordinator)
@@ -1048,3 +1062,41 @@ async def test_heat_pump_dhw_only_is_never_overwritten(
     assert hp.dhw_only is True
     assert hp.desired_option is None  # no direction is forced
     assert select_calls == []
+
+
+# -- Manual hold (DECISIONS §28, 2026-09-04) ---------------------------------
+
+
+async def test_manual_hold_skips_the_fast_source_write(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+) -> None:
+    """A split the user changed by hand is mirrored, flagged and NOT written."""
+    coordinator = _get_coordinator(setup_integration)
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    # Settled: the unit is off, the room satisfied -> command OFF, agreement.
+    # The §28 settle rule adopts a divergence only once our own command has
+    # been stable for at least half a cycle, so this cycle must span well over
+    # cycle_seconds / 2 (the test's back-to-back refreshes would otherwise
+    # read as a 1-s dt).
+    coordinator._last_step_monotonic = time.monotonic() - 600.0
+    await _refresh(hass, coordinator)
+    assert coordinator.data.rooms["Salon"].outputs.fast_source.on is False
+
+    # The user starts cooling from the remote: the climate entity reads "cool".
+    hass.states.async_set("climate.salon_split", "cool", {})
+    mocks = _mock_actuator_services(hass)
+    await _refresh(hass, coordinator)
+
+    room = coordinator.data.rooms["Salon"]
+    assert "fast_source_manual" in room.report.flags
+    assert "fast_source_mismatch" not in room.report.flags
+    # The core mirrors the adopted state (no fabricated target — the unit
+    # runs at the user's own setpoint) ...
+    assert room.outputs.fast_source.on is True
+    assert room.outputs.fast_source.mode is FastSourceMode.COOLING
+    assert room.outputs.fast_source.target_temperature_c is None
+    # ... and the adapter writes nothing to the split (the valve path is
+    # untouched — only the climate services are asserted here).
+    assert mocks[("climate", "set_hvac_mode")] == []
+    assert mocks[("climate", "set_temperature")] == []
