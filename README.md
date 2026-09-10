@@ -297,7 +297,9 @@ to **live**.
 > controller adopts the unit's state and only mirrors it for `fast_manual_hold_minutes`
 > (default 60 min, counted from the last touch — flag `fast_source_manual`, nothing is
 > written, a cooling split is never flipped straight to heating); afterwards the normal logic
-> resumes from that state. Safety rules S3/S4 and a lost sensor end the hold. Set the knob to
+> resumes from that state. Safety rules S3/S4 and a lost sensor end the hold (while the split
+> reports its state; after a loss of contact the unit is re-adopted as found, like after a
+> restart). Set the knob to
 > `0` for the legacy behaviour (`fast_source_mismatch` + re-assert). For permanent manual
 > control **switch the room to `off`** — the controller writes nothing, and the way back to
 > `live` re-parks the actuators safely (the split passes an honest minimum-OFF before any

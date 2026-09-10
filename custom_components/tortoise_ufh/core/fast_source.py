@@ -34,6 +34,19 @@ What the adapter REALLY wrote (a demoted DRY) is reported through
 :meth:`FastSourceMachine.note_written`, which feeds the divergence check but
 never the settle counter.
 
+Blind commands (2026-09-10, DECISIONS §28 note): a command emitted in a step
+whose :meth:`FastSourceMachine.sync` saw NO feedback (the climate entity
+unavailable — typically the first cycle after a Home Assistant restart) cannot
+have reached the unit, because the adapter writes nothing to an unavailable
+entity. It is therefore NOT recorded as the reference the next feedback is
+compared against, and it does not restart the settle counter either. The first
+visible feedback of a machine is always adopted as the truth (the S4
+first-sync rule), however many blind commands preceded it — and not only after
+a restart: ANY gap in the feedback un-syncs the machine, so the unit found when
+it reappears is adopted afresh (conservative dwell seed, no hold), never judged
+against a command it may not have received. A manual hold survives the gap: a
+safety force the unit cannot see does not end it.
+
 This module is pure Python (stdlib + sibling core modules only) and MUST NOT
 import ``homeassistant``.
 
@@ -223,17 +236,28 @@ class FastSourceMachine:
         # hold (§28) or, with the hold knob at 0, raises ``fast_source_mismatch``.
         self._synced: bool = False
         self._mismatch: bool = False
+        # Whether the latest sync() saw a feedback (2026-09-10): a command
+        # emitted while the unit is invisible never reached it (the adapter
+        # writes nothing to an unavailable entity), so it is not recorded as
+        # the reference below and does not touch the settle counter.
+        self._unit_visible: bool = False
+        # The on-state of the last command emitted while the unit was VISIBLE
+        # — the reference the next feedback is compared against (S4).
         self._prev_cmd_on: bool | None = None
-        # Direction of the previously emitted command (K4, 2026-07-12): lets
-        # the reconciliation flag a unit physically running in the OPPOSITE
+        # Direction of that same command (K4, 2026-07-12): lets the
+        # reconciliation flag a unit physically running in the OPPOSITE
         # direction (multisplit standby / manual override), which the plain
         # on/off comparison is blind to.
         self._prev_cmd_mode: FastSourceMode | None = None
-        # The (on, direction) pair the core last EMITTED (§28 settle rule) —
-        # distinct from the written pair above: a degraded write reported via
-        # note_written() must not look like a command change every cycle.
+        # Mode of the last emitted (or written) command, visible or not — the
+        # dry-assist hysteresis state behind ``last_command_mode`` (§24).
+        self._last_cmd_mode: FastSourceMode | None = None
+        # The (on, direction) pair the core last EMITTED while the unit was
+        # visible (§28 settle rule) — distinct from the written pair above: a
+        # degraded write reported via note_written() must not look like a
+        # command change every cycle.
         self._last_emitted_pair: tuple[bool, FastSourceMode | None] | None = None
-        # Seconds since the EMITTED (on, direction) command pair last CHANGED
+        # Seconds since that EMITTED (on, direction) command pair last CHANGED
         # (§28 settle rule): reset by note_command() on a change, advanced by
         # tick(). A divergence is adopted as user intent only once this has
         # reached half a cycle — a unit that has not caught up with OUR OWN
@@ -277,9 +301,11 @@ class FastSourceMachine:
 
         Lets the controller distinguish "the machine runs because of
         temperature" (COOLING/HEATING) from "it runs because of humidity"
-        (DRY) — the two demands carry separate hysteresis states.
+        (DRY) — the two demands carry separate hysteresis states. Recorded
+        whether or not the unit was visible (blind commands only stay out of
+        the S4 reference).
         """
-        return self._prev_cmd_mode
+        return self._last_cmd_mode
 
     @property
     def manual_hold_active(self) -> bool:
@@ -297,24 +323,35 @@ class FastSourceMachine:
         """Reconcile the machine with the physical unit (S4, step 0).
 
         On the FIRST cycle that carries a physical ``fast_source_on`` feedback
-        AND the machine has not emitted any command yet
-        (``_prev_cmd_on is None``), the physical state wins: a running
-        unit is adopted as ON (direction follows the global mode; COOLING is
+        the physical state wins: a running unit is adopted as ON (the
+        reported direction when unambiguous, else the global mode; COOLING is
         adopted only for a SPLIT — a HEATER can never cool), a stopped unit as
         OFF, and in BOTH cases the dwell timer is re-seeded to 0 so a full
         min-ON/min-OFF must elapse before the machine may change state — a
         restart/reload (every tuning change!) can therefore never short-cycle
         a compressor.
 
-        If the machine already emitted commands before the first feedback
-        arrived (feedback entity unavailable at engagement, appearing cycles
-        later with a possibly stale reading), the late first reading must NOT
-        overwrite the machine — it only marks the machine synced and raises
-        the mismatch flag when it disagrees; a STILL diverging next cycle is
-        then judged by the regular rule below (and may be adopted).
+        This holds even when the machine emitted commands before the first
+        feedback arrived (2026-09-10): those were emitted BLIND — the adapter
+        writes nothing to an unavailable climate entity — so none of them
+        reached the unit and the first reading is the truth, not a stale echo.
+        The case is the first cycle after a Home Assistant restart: the
+        rebuilt machine force-stops on a room sensor that is not up yet
+        (often the split's own probe), and the retired "late first feedback"
+        guard then read the split it had started itself before the restart as
+        a manual touch. A cycle WITHOUT feedback on a synced machine un-syncs
+        it (the reference is dropped), so after any gap — a Wi-Fi blip, a
+        split that rebooted — the unit found is adopted by the same rule: the
+        machine cannot know what reached the unit meanwhile. An ambiguous
+        running report ("auto", "fan_only", ...) keeps the machine's own
+        direction; a unit found drying keeps the dry-assist band.
 
-        On later cycles a feedback that disagrees with the PREVIOUS cycle's
-        emitted command is a DIVERGENCE. Since 2026-07-12 (K4) the comparison
+        While visible, the machine records every emitted command as the
+        reference for the next reconciliation (:meth:`note_command`); a blind
+        cycle records nothing.
+
+        On later cycles a feedback that disagrees with that recorded command
+        is a DIVERGENCE. Since 2026-07-12 (K4) the comparison
         also sees the DIRECTION: a unit physically running in a
         single-direction HVAC mode opposite to the commanded one (multisplit
         standby, manual reversal) diverges even though the plain on/off
@@ -350,34 +387,40 @@ class FastSourceMachine:
             inputs: The room's raw inputs for this cycle.
         """
         self._mismatch = False
+        self._unit_visible = False
         if inputs.fast_source_kind is FastSourceKind.NONE:
             return
         physical = inputs.fast_source_on
         if physical is None:
+            # A gap in the feedback: nothing emitted until the unit is
+            # visible again can be known to reach it, so drop the reference —
+            # the next visible reading is adopted afresh (first-sync rule).
+            self._synced = False
+            self._prev_cmd_on = None
+            self._prev_cmd_mode = None
+            self._last_emitted_pair = None
             return
-        reported = (
-            _HVAC_MODE_TO_DIRECTION.get(inputs.fast_source_hvac_mode.lower())
-            if inputs.fast_source_hvac_mode
-            else None
-        )
+        self._unit_visible = True
+        raw_hvac = (inputs.fast_source_hvac_mode or "").lower()
+        reported = _HVAC_MODE_TO_DIRECTION.get(raw_hvac) if raw_hvac else None
         if not self._synced:
+            # First visible feedback (start-up or after a gap) — adopt the
+            # physical state. Any command emitted before it was blind, so a
+            # running unit takes the reported HVAC direction when unambiguous
+            # (K4); a HEATER can never cool. With an ambiguous report
+            # ("auto", "fan_only", ...) the machine's own direction is the
+            # better guess than the global-mode fallback (in TRANSITIONAL
+            # that would be HEATING for a unit engaged to cool). A unit found
+            # drying keeps the dry-assist release band (§24).
             self._synced = True
-            if self._prev_cmd_on is None:
-                # No command emitted yet — adopt the physical state. The
-                # reported HVAC direction wins when unambiguous (K4);
-                # otherwise the direction follows the global mode. A HEATER
-                # can never cool, whatever the feedback claims.
-                if physical and self._state is FastSourceMode.OFF:
-                    self._state = self._running_direction(reported, inputs)
-                elif not physical:
-                    self._state = FastSourceMode.OFF
-                # Conservative seed: a full dwell from now, whatever the state.
-                self._timer_s = 0.0
-                return
-            # Late first feedback: the machine already owns the unit and the
-            # reading may be stale — never adopt it. Flag a disagreement and
-            # let the NEXT cycle judge a still-diverging unit.
-            self._mismatch = self._diverges(physical, reported)
+            if not physical:
+                self._state = FastSourceMode.OFF
+            elif reported is not None or self._state is FastSourceMode.OFF:
+                self._state = self._running_direction(reported, inputs)
+            if physical and raw_hvac == "dry":
+                self._last_cmd_mode = FastSourceMode.DRY
+            # Conservative seed: a full dwell from now, whatever the state.
+            self._timer_s = 0.0
             return
         if not self._diverges(physical, reported):
             return
@@ -404,11 +447,11 @@ class FastSourceMachine:
         self._manual_hold_s = self._config.fast_manual_hold_minutes * 60.0
 
     def _diverges(self, physical: bool, reported: FastSourceMode | None) -> bool:
-        """Whether a physical feedback disagrees with the last emitted command.
+        """Whether a physical feedback disagrees with the last recorded command.
 
-        The S4/K4 condition shared by the late-first-feedback guard and the
-        regular reconciliation: the on/off state differs, or both are ON and
-        the unit reports the OPPOSITE refrigerant direction. Directions are
+        The S4/K4 reconciliation condition, against the last command emitted
+        while the unit was visible: the on/off state differs, or both are ON
+        and the unit reports the OPPOSITE refrigerant direction. Directions are
         compared refrigerant-side (§24): a commanded DRY normalises to
         COOLING, so a unit reporting "dry" or "cool" while dry-assisting is
         NOT a divergence.
@@ -419,7 +462,8 @@ class FastSourceMachine:
                 ``None`` when the feedback carries no single direction.
 
         Returns:
-            ``True`` on a divergence; ``False`` before any command was emitted.
+            ``True`` on a divergence; ``False`` before any command was
+            recorded.
         """
         if self._prev_cmd_on is None:
             return False
@@ -531,12 +575,23 @@ class FastSourceMachine:
         :meth:`note_written` every cycle (``dry_unsupported``) would otherwise
         read as a command change every cycle and the hold could never arm.
 
+        Only a command emitted while the unit was VISIBLE in the latest
+        :meth:`sync` is recorded (2026-09-10): a blind command was never
+        written (the adapter skips an unavailable entity), so neither the
+        reconciliation reference nor the settle counter may move — otherwise
+        its first real delivery, cycles later, would look settled and the
+        unit catching up with it would be adopted as a manual touch. The mode
+        behind :attr:`last_command_mode` is recorded either way.
+
         Args:
             on: The ``on`` field of the command actually emitted this cycle.
             mode: The command's direction (K4, 2026-07-12) so the next
                 reconciliation can also flag a DIRECTION divergence. ``None``
                 (legacy callers) records the on-state only.
         """
+        self._last_cmd_mode = mode
+        if not self._unit_visible:
+            return
         pair = (on, direction_of(mode))
         if pair != self._last_emitted_pair:
             self._since_cmd_change_s = 0.0
@@ -554,12 +609,17 @@ class FastSourceMachine:
         OFF feedback then agrees with the written OFF instead of diverging
         from the emitted DRY. The settle counter is NOT touched: the core
         keeps emitting the same DRY, so nothing about OUR command changed,
-        and a real touch on such a unit must still be adoptable.
+        and a real touch on such a unit must still be adoptable. Like
+        :meth:`note_command`, the reference only moves when the latest
+        :meth:`sync` saw the unit.
 
         Args:
             on: The ``on`` state actually written.
             mode: The direction actually written (``OFF`` for a demoted DRY).
         """
+        self._last_cmd_mode = mode
+        if not self._unit_visible:
+            return
         self._prev_cmd_on = on
         self._prev_cmd_mode = mode
 
@@ -674,7 +734,8 @@ class FastSourceMachine:
         (§28): safety outranks the user's touch, and the forced command must
         be written. Cancelling an ACTIVE hold leaves an honest trace — the
         unit is diverged from what the safety layer writes, so the mismatch
-        flag is raised for this cycle instead of silence.
+        flag is raised for this cycle instead of silence. Not in a cycle that
+        did not see the unit (:meth:`_end_hold`).
 
         Args:
             fs_mode: Direction to command (HEATING or COOLING).
@@ -704,7 +765,8 @@ class FastSourceMachine:
         hold (§28) — uniformly for every caller (safety, sensor lost, OFF
         mode, group arbitration, farewell): a forced OFF is written, and
         cancelling an ACTIVE hold raises the mismatch flag as an honest trace
-        (the unit is diverged from what the safety layer writes).
+        (the unit is diverged from what the safety layer writes). Not in a
+        cycle that did not see the unit (:meth:`_end_hold`).
 
         Returns:
             An OFF :class:`~tortoise_ufh.models.FastSourceCommand`.
@@ -729,8 +791,15 @@ class FastSourceMachine:
         the safety layer is about to write something else, and that
         divergence must show in the report rather than vanish silently. An
         inactive hold leaves the flag alone.
+
+        A force in a cycle whose :meth:`sync` did not see the unit
+        (2026-09-10) leaves the hold running: nothing is written to an
+        unreachable unit, and a Wi-Fi blip — which also reads as sensor lost
+        when the room sensor is the split's own probe — must not end the
+        user's manual cooling. The unit found after the gap is re-adopted
+        (first-sync rule) and mirrored for the rest of the hold.
         """
-        if self._manual_hold_s > 0.0:
+        if self._manual_hold_s > 0.0 and self._unit_visible:
             self._mismatch = True
             self._manual_hold_s = 0.0
 
@@ -740,8 +809,10 @@ class FastSourceMachine:
         self._timer_s = _INITIAL_FAST_TIMER_S
         self._synced = False
         self._mismatch = False
+        self._unit_visible = False
         self._prev_cmd_on = None
         self._prev_cmd_mode = None
+        self._last_cmd_mode = None
         self._last_emitted_pair = None
         self._since_cmd_change_s = 0.0
         self._dwell_remaining_s = None

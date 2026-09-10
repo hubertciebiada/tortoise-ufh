@@ -1550,14 +1550,14 @@ cycle and that OVERRODE the internal mode.
 
 **Problem (owner, live data, 08-10 → 09-04):** in TRANSITIONAL a split started by hand from the
 remote (target 21, room setpoint 23) was flipped by the controller **straight to HEATING within
-13–15 min** and heated the room to 24 °C by the split's own sensor. The room is **Pokój
-Antoniego** (a child's bedroom) — NOT Sypialnia: Sypialnia, whose room sensor is a REAL
-AirGuard wall sensor, had ZERO episodes in the whole window. Three manual-cool → heat flips:
+13–15 min** and heated the room to 24 °C by the split's own sensor. The room is **a child's
+bedroom** — NOT the main bedroom: the main bedroom, whose room sensor is a REAL wall sensor,
+had ZERO episodes in the whole window. Three manual-cool → heat flips:
 08-18 19:15 → 19:29, 08-22 19:39 → 19:52, 08-24 20:27 → 20:42 (error exactly +2.0 K at the
 flip — boost 1.5, sensor step 0.5); the heating released at 24 °C by the split's own sensor on
 08-23 01:02, 08-24 21:47 and 08-25 16:47. On 09-04 at 17:47 a "turbo cool" script set **six**
-splits to cool/16 at once — **three** were flipped to heat: Helena 17:57, Antoni 18:07,
-Patrycja 18:07. Separately, three S3 re-assert (45 min, `writers.py`) stomps re-wrote our stale
+splits to cool/16 at once — **three** were flipped to heat (at 17:57, 18:07 and 18:07, in
+three different rooms). Separately, three S3 re-assert (45 min, `writers.py`) stomps re-wrote our stale
 command after the user had turned a unit off or re-cooled it: 08-18 20:19, 08-22 20:37,
 08-24 21:32. The pattern is exact: in the affected rooms the room-temperature sensor IS the
 split's own sensor, so a manual cool drops the "room" 2 K below the setpoint within a few
@@ -1603,11 +1603,12 @@ adapter re-asserts.
   time: the first regular cycle after our change sees ~0 s (flag only), the second sees ~one
   cycle (adopt). A touch on a long-idle machine (command stable for hours) is adopted at the
   very next cycle.
-- **Late first feedback (guard kept):** when the feedback entity appears only AFTER the machine
+- **Late first feedback (guard kept; retired in v0.20.1):** when the feedback entity appears only AFTER the machine
   has already emitted commands (`not _synced and _prev_cmd_on is not None`), the first reading
   may be stale — it only marks the machine synced and raises `fast_source_mismatch` if it
   disagrees; nothing is adopted. A STILL diverging next cycle is judged by the regular rule
-  (and may be adopted under the settle rule).
+  (and may be adopted under the settle rule). *(Retired in v0.20.1 — see the post-release fix
+  below: a command emitted before the first feedback is blind and never reached the unit.)*
 - **While the hold is active** the controller emits a command that MIRRORS the machine state
   (`FastSourceMachine.mirror`: `on` = state is not OFF, `mode` = state,
   `target_temperature_c` = **`None`** — the unit runs at the USER's own setpoint, which we do
@@ -1681,3 +1682,61 @@ divergence WITHOUT a hold: the next cycle's demand logic would immediately relea
 adopted unit — the user's touch would survive one cycle. (c) A per-room "manual" state: the
 two-state `off | live` is a locked decision (§13); the hold is the same idea, scoped in time,
 without a third state.
+
+**Post-release fix (v0.20.1, owner-observed false hold after a restart):** a split the
+controller had started itself (a TRANSITIONAL cooling boost) was put under a manual hold ~5 min
+after a Home Assistant restart. Recorder chain: in that room the room sensor is the split's own
+probe, so on the rebuilt controller's first cycle both the climate entity and the room
+temperature were still `unavailable` → sensor lost → `force_off` → the core emitted OFF and the
+writer dispatched `set_hvac_mode: off` to the unavailable entity. The call could not land, but
+the S3 cache recorded it as written. Next regular cycle: the unit read `cool`; the late-first-
+feedback guard only flagged it, and the OFF (identical to the cache, younger than 45 min) was
+not re-sent. The owner then raised the setpoint; the debounced recompute 3 s later saw the
+divergence with our emitted OFF unchanged for 303 s ≥ 150 s and adopted the running unit as a
+manual touch. The setpoint change only timed it — the next regular cycle would have done the
+same. Root cause: the settle rule measured from the EMISSION of a command, and a command sent to
+an invisible unit counted as delivered. Fix — one rule, *the unit found after any gap in its
+feedback is adopted afresh; a command it could not see is no reference*:
+- **Core (`FastSourceMachine`):** `note_command` / `note_written` record the S4 reference pair
+  and move the settle counter only when the latest `sync` saw a feedback (`_unit_visible`),
+  and a cycle WITHOUT feedback un-syncs the machine (reference and settle pair dropped). The
+  first visible feedback — after a restart or after any gap (Wi-Fi blip, split reboot) — is
+  therefore ALWAYS adopted as the truth under the first-sync rule (conservative dwell seed,
+  no hold, no flag): the machine cannot know what reached the unit meanwhile. The first sync
+  now also REPLACES a blind running direction when the unit reports one (a blind HEATING
+  engage must never be re-emitted onto a unit that is physically cooling); an ambiguous report
+  (`auto`, `fan_only`, ...) keeps the machine's own direction rather than the global-mode
+  fallback (TRANSITIONAL would read as HEATING for a unit engaged to cool); a unit found
+  drying keeps the dry-assist release band (`last_command_mode` = DRY). The
+  late-first-feedback guard above is unreachable and removed. While the feedback is missing
+  the machine decides open-loop exactly as before (the multisplit arbiter and the cooling
+  boost-hold see no change); nothing it emits then is recorded.
+- **Core — a manual hold survives a gap:** `_end_hold` does nothing in a cycle whose `sync`
+  did not see the unit. In a room whose sensor is the split's probe a single Wi-Fi blip is
+  sensor-lost AND an unreachable unit; the undeliverable sensor-lost force-off used to end the
+  user's manual cooling, and the next visible cycle WROTE the OFF. Now the hold keeps counting
+  down, the unit found after the gap is re-adopted and mirrored for the rest of the hold.
+- **Adapter:** nothing is written to a missing or `unavailable` climate entity
+  (`writers._unreachable`) — nor cached, by `write_fast_source` AND by the farewell (no call,
+  no cache, no farewell stamp: a cached OFF that never landed would make a return to live skip
+  the real OFF). `unknown` is still written (the entity is online; a device that publishes its
+  state only after a command must not be starved) — the core treats the cycle as a gap either
+  way. The degraded-input fallback keeps the fast-source feedback, so the core sees the unit
+  whenever the writer may write to it.
+**Trade-offs (owner-chosen over a "freeze while unreachable" design, whose partial variants
+each broke something — the multisplit arbiter kept a stale vote, the cooling boost-hold stayed
+latched, blind engages spent min-ON before the real start):** after a gap the dwell clock
+restarts (a boost may run up to min-ON longer, or engage up to min-OFF later; a unit whose
+feedback dropped more often than that would be held in its state), and a remote
+OFF during the gap is adopted as the unit's state without a hold — as is a unit that lost
+power and came back off. Regression tests: `TestBlindRestart` and `TestManualHold` in
+`tests/unit/test_fast_source.py` (the recorder chain, blips with and without a hold, min-ON
+from the real start, a unit found drying); end-to-end
+`test_restart_during_own_boost_is_not_read_as_manual` plus the unreachable / missing /
+unknown / farewell / degraded-input tests in `tests/ha/test_coordinator.py`. Not in this fix
+(separate GitHub issues): an undelivered farewell OFF is never retried; valve writes to an
+unavailable actuator are cached as delivered; the first cycle after a restart is still
+sensor-lost in rooms whose sensor comes up later than the integration while the split is
+reachable, and `force_off` then bypasses min-ON — harmless in the reported room only because
+its split entity was unavailable too.
+because its split entity was unavailable too.

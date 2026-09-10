@@ -89,6 +89,28 @@ _HVAC_MODE_BY_FAST_SOURCE: dict[FastSourceMode, str] = {
     FastSourceMode.OFF: "off",
 }
 
+
+def _unreachable(hass: HomeAssistant, entity_id: str) -> bool:
+    """Whether a climate entity cannot receive a command right now (2026-09-10).
+
+    True for an entity that does not exist or reads ``unavailable``: a
+    fire-and-forget service call to it cannot land, so the fast-source writes
+    skip it WITHOUT caching (DECISIONS §28 note). ``unknown`` is deliberately
+    NOT unreachable — the entity is online, only its state is not known, and
+    a device that publishes its state only after a command would otherwise
+    never be driven at all.
+
+    Args:
+        hass: The Home Assistant instance.
+        entity_id: The climate entity id.
+
+    Returns:
+        ``True`` when no command should be sent to the entity.
+    """
+    state = hass.states.get(entity_id)
+    return state is None or state.state.lower() == "unavailable"
+
+
 # Monotonic timestamp of the last farewell OFF written per fast-source entity
 # (K10/R5, 2026-07-12). Deliberately MODULE-level: a config-entry reload (every
 # tuning change!) rebuilds the CommandWriter, but the module object survives,
@@ -297,8 +319,21 @@ class CommandWriter:
         :meth:`hp_setpoint_step`). When the list EXISTS and lacks ``"dry"`` the
         unit cannot dehumidify — ``"off"`` is written instead and ``True`` is
         returned so the coordinator can flag ``dry_unsupported``. A missing
-        state/attribute assumes support (never block on an unreadable
-        attribute; the S4 mismatch catches a lying unit).
+        attribute assumes support (never block on an unreadable attribute;
+        the S4 mismatch catches a lying unit).
+
+        Unreachable unit (2026-09-10, DECISIONS §28 note): a missing or
+        ``unavailable`` climate entity (:func:`_unreachable`) is neither
+        written nor cached. A fire-and-forget call to it cannot land, and
+        caching it made the undelivered command look delivered until the
+        45-min re-assert — after a Home Assistant restart the rebuilt
+        machine's first-cycle OFF went to a not-yet-connected split, the
+        running unit then read as a manual touch and was put under a manual
+        hold. With nothing cached the first cycle that reaches the entity
+        again writes the current command. The core treats such a cycle as a
+        gap too (the reader reports the same entity state as
+        ``fast_source_on = None``): nothing it emits is recorded as the S4
+        reference, and the unit found when it reappears is adopted afresh.
 
         Args:
             entity_id: The fast-source climate entity id, or ``None`` / empty.
@@ -309,7 +344,7 @@ class CommandWriter:
             ``True`` when a DRY command was demoted to OFF because the entity
             does not advertise a dry mode; ``False`` on every other path.
         """
-        if not entity_id:
+        if not entity_id or _unreachable(self._hass, entity_id):
             return False
         command = outputs.fast_source
         hvac_mode = (
@@ -482,13 +517,18 @@ class CommandWriter:
         so holding the last position keeps the house warm and is strictly
         safer than cold-parking it in winter.
 
+        An unreachable split (:func:`_unreachable`, 2026-09-10) gets no
+        farewell OFF, no cache entry and no farewell stamp — like the regular
+        write: a cached OFF that never landed would make a return to live
+        skip the real OFF and read the still-running unit as a manual touch.
+
         Args:
             fast_source_entity: The fast-source climate entity id, if any.
             valves: The room's valve actuator entity ids.
             name: The room name (log context).
             mode: The current global operating mode (drives the valve rule).
         """
-        if fast_source_entity:
+        if fast_source_entity and not _unreachable(self._hass, fast_source_entity):
             try:
                 await self._hass.services.async_call(
                     "climate",

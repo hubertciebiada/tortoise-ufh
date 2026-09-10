@@ -452,10 +452,17 @@ das).
   Der Bericht trägt die Meldung `fast_source_manual` (informativ). Nach Ablauf läuft
   die normale Logik aus dem vorgefundenen Zustand weiter: Ein Richtungswechsel geht
   weiterhin über AUS und die volle Stillstandszeit. Die Sicherheitsregeln S3/S4 sowie
-  ein verlorener Sensor beenden das Halten — ihr Befehl wird geschrieben. Ein Neuladen
+  ein verlorener Sensor beenden das Halten — ihr Befehl wird geschrieben (solange der
+  Split seinen Zustand meldet — ein kurzer Verbindungsverlust beendet die manuelle
+  Steuerung nicht). Ein Neuladen
   des Eintrags (jedes Speichern der Abstimmung) baut die Maschine neu auf und beendet
   damit jedes Halten — die erste Synchronisation übernimmt ein laufendes Gerät ohne
-  Halten. Der Parameter 0 schaltet die Regel ab (Verhalten wie früher:
+  Halten. Ebenso nach einem Neustart von HA, auch wenn der Split und sein Sensor erst
+  nach dem ersten Zyklus erreichbar sind, und nach jedem Verbindungsverlust zum Split:
+  An ein nicht erreichbares Gerät wird nichts geschrieben, und der Split wird so
+  übernommen, wie er zurückkommt (seit v0.20.1; ein Ausschalten per Fernbedienung
+  während eines solchen Verlusts startet daher keine manuelle Steuerung). Der Parameter 0
+  schaltet die Regel ab (Verhalten wie früher:
   `fast_source_mismatch` + Erzwingen nach ~45 min). Für dauerhaft manuelle Steuerung
   dient weiterhin der Raumzustand Aus.
 - **Multisplit:** Räume, deren Inneneinheiten an einem gemeinsamen Außengerät hängen,
@@ -647,7 +654,7 @@ Das vollständige Verzeichnis unten:
 | `s2_condensation` | Kondensationsschutz: Der Vorlauf hat den Taupunkt erreicht — Ventil geschlossen. | Prüfen Sie Luftfeuchtigkeit und Kühlwassertemperatur; stellen Sie sicher, dass die Pumpe den globalen sicheren Taupunkt respektiert. |
 | `rh_stale_gated` | Luftfeuchtigkeit veraltet (60–120 min) — Taupunkt mit einem Zuschlag von bis zu +1 K berechnet. | Prüfen Sie den Luftfeuchtigkeitssensor. Über 120 min fällt der Raum aus den Schutzmechanismen — siehe §9. |
 | `valve_mismatch` | Der Aktor meldet seit ≥3 Zyklen eine andere Position als der Befehl („das Ventil gehorcht nicht“). | Prüfen Sie Aktor/Relais/Entität; vergleichen Sie die Spalten Befehl und Rückmeldung im Reiter Ventile. |
-| `fast_source_mismatch` | Der Split ist in einem anderen Zustand als der Befehl (z. B. per Fernbedienung geändert). Bei Haltezeit der manuellen Steuerung = 0 (§8) ist das ein Dauerzustand — der Regler bleibt Eigentümer des Splits. Bei der Standard-Haltezeit erscheint sie nur vorübergehend: im Einschwingfenster (1–2 Zyklen nach unserem eigenen Befehl — das Gerät hat ihn womöglich noch nicht ausgeführt), bei einer späten ersten Rückmeldung des Splits (kann veraltet sein, wird nicht übernommen) sowie in dem Zyklus, in dem eine Sicherheitsregel (S3/S4, verlorener Sensor) die manuelle Steuerung beendet; eine eingeschwungene Abweichung wird als `fast_source_manual` übernommen. | Bei Haltezeit = 0: nichts — er wird beim erneuten Erzwingen (~45 min) überschrieben. Standardmäßig: nichts — nach dem Einschwingfenster geht sie in `fast_source_manual` über oder verschwindet. Für dauerhaft manuelle Steuerung schalten Sie den Raum auf Aus. |
+| `fast_source_mismatch` | Der Split ist in einem anderen Zustand als der Befehl (z. B. per Fernbedienung geändert). Bei Haltezeit der manuellen Steuerung = 0 (§8) ist das ein Dauerzustand — der Regler bleibt Eigentümer des Splits. Bei der Standard-Haltezeit erscheint sie nur vorübergehend: im Einschwingfenster (1–2 Zyklen nach unserem eigenen Befehl — das Gerät hat ihn womöglich noch nicht ausgeführt) sowie in dem Zyklus, in dem eine Sicherheitsregel (S3/S4, verlorener Sensor) die manuelle Steuerung beendet; eine eingeschwungene Abweichung wird als `fast_source_manual` übernommen. | Bei Haltezeit = 0: nichts — er wird beim erneuten Erzwingen (~45 min) überschrieben. Standardmäßig: nichts — nach dem Einschwingfenster geht sie in `fast_source_manual` über oder verschwindet. Für dauerhaft manuelle Steuerung schalten Sie den Raum auf Aus. |
 | `fast_source_manual` | Manuelle Steuerung (§10): Der Split wurde außerhalb der Integration verstellt — der Regler hat seinen Zustand übernommen und spiegelt ihn für die Haltezeit nur (schreibt nichts). | Informativ (beabsichtigt). Die Zeit ändern Sie in der Abstimmung; 0 schaltet die Regel ab. |
 | `fast_source_min_runtime` | Sperre der Mindestlaufzeit/-stillstandszeit — die Zusatzquelle kann den Zustand vorübergehend nicht wechseln. | Nichts — Kompressorschutz; der Timer steht im Reiter Zusatzquelle. |
 | `fast_source_quiet_hours` | Ruhezeiten der Zusatzquelle — der Raum ist außerhalb seines Fensters erlaubter Zeiten (§10), der Split schaltet sich nicht ein (ein laufender beendet seine Mindestlaufzeit). | Informativ. Das Fenster ändern Sie in der Raumkonfiguration. |

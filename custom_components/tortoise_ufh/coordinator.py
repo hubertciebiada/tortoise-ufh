@@ -1243,6 +1243,9 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         ):
             fast_on = False
             fast_hvac = None
+        fast_kind = self._reader.read_fast_source_kind(
+            room_cfg.get(CONF_FAST_SOURCE_KIND)
+        )
         try:
             loops = self._build_loops(room_cfg)
             return RoomInputs(
@@ -1254,9 +1257,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     room_cfg.get(CONF_ENTITY_TEMP_OUTDOOR)
                 ),
                 loops=loops,
-                fast_source_kind=self._reader.read_fast_source_kind(
-                    room_cfg.get(CONF_FAST_SOURCE_KIND)
-                ),
+                fast_source_kind=fast_kind,
                 fast_source_on=fast_on,
                 # The global heat-pump-link entity feeds every room (B2); a
                 # legacy per-room key of the same name still overrides it.
@@ -1290,12 +1291,19 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 name,
                 exc_info=True,
             )
+            # The fast-source feedback is kept (2026-09-10): the core must see
+            # the unit whenever the writer may write to it, or the degraded
+            # cycle's OFF — written to a reachable split — would never become
+            # the S4 reference and read as a manual OFF next cycle.
             return RoomInputs(
                 mode=mode,
                 setpoint_c=setpoint,
                 room_temperature_c=None,
+                fast_source_kind=fast_kind,
+                fast_source_on=fast_on,
                 cooling_enabled=cooling_enabled,
                 last_update_age_minutes=age_minutes,
+                fast_source_hvac_mode=fast_hvac,
             )
 
     def _build_loops(self, room_cfg: dict[str, Any]) -> tuple[LoopInput, ...]:

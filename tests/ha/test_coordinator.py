@@ -1100,3 +1100,218 @@ async def test_manual_hold_skips_the_fast_source_write(
     # untouched — only the climate services are asserted here).
     assert mocks[("climate", "set_hvac_mode")] == []
     assert mocks[("climate", "set_temperature")] == []
+
+
+# -- Blind commands (DECISIONS §28 note, 2026-09-10) -------------------------
+
+
+async def _setup_live_salon(
+    hass: HomeAssistant,
+    entry_data: dict[str, Any],
+    hass_storage: dict[str, Any],
+) -> MockConfigEntry:
+    """Set up an entry whose Salon is LIVE from the very first cycle.
+
+    TRANSITIONAL is seeded through the setpoint Store (its only source since
+    v0.19.0). The caller sets the source states and any service mocks first.
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.tortoise_ufh.const import CONF_ROOM_STATE, DOMAIN
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=entry_data,
+        options={CONF_ROOM_STATE: {"Salon": ROOM_STATE_LIVE}},
+        title="Tortoise-UFH",
+        unique_id="50.5_19.5",
+        version=4,
+    )
+    entry.add_to_hass(hass)
+    store_key = f"{DOMAIN}.setpoints.{entry.entry_id}"
+    hass_storage[store_key] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": store_key,
+        "data": {"home_setpoint": 21.0, "room_offset": {}, "mode": "transitional"},
+    }
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+async def test_unavailable_split_is_neither_written_nor_cached(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+) -> None:
+    """A command to an unavailable split never counts as delivered.
+
+    The write is skipped AND not cached, so the first cycle that sees the
+    entity again writes the current command instead of trusting a
+    fire-and-forget call that could not land.
+    """
+    coordinator = _get_coordinator(setup_integration)
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    hass.states.async_set("climate.salon_split", "unavailable", {})
+    mocks = _mock_actuator_services(hass)
+    await _refresh(hass, coordinator)
+    assert coordinator.data.rooms["Salon"].outputs.fast_source.on is False
+    assert mocks[("climate", "set_hvac_mode")] == []
+
+    hass.states.async_set("climate.salon_split", "off", {})
+    await _refresh(hass, coordinator)
+    calls = mocks[("climate", "set_hvac_mode")]
+    assert [c.data["hvac_mode"] for c in calls] == ["off"]
+
+
+async def test_unknown_split_is_still_written(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+) -> None:
+    """An ``unknown`` climate entity is online: it is still written.
+
+    Only a missing or ``unavailable`` entity is unreachable. The core treats
+    the cycle as a feedback gap, so whatever the unit reports next is
+    adopted afresh rather than judged against this command.
+    """
+    coordinator = _get_coordinator(setup_integration)
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    hass.states.async_set("climate.salon_split", "unknown", {})
+    mocks = _mock_actuator_services(hass)
+    await _refresh(hass, coordinator)
+    calls = mocks[("climate", "set_hvac_mode")]
+    assert [c.data["hvac_mode"] for c in calls] == ["off"]
+
+
+async def test_missing_split_entity_is_not_written(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+) -> None:
+    """A configured climate entity that does not exist gets no command."""
+    coordinator = _get_coordinator(setup_integration)
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    hass.states.async_remove("climate.salon_split")
+    mocks = _mock_actuator_services(hass)
+    await _refresh(hass, coordinator)
+    assert mocks[("climate", "set_hvac_mode")] == []
+    assert "climate.salon_split" not in coordinator._writer._last_written_fast
+
+
+async def test_never_seen_unknown_split_is_driven_open_loop(
+    hass: HomeAssistant,
+    register_sources: None,
+    entry_data: dict[str, Any],
+    hass_storage: dict[str, Any],
+) -> None:
+    """An ``unknown`` split that never reported is still written (open-loop).
+
+    Only a missing or ``unavailable`` entity is unreachable; a device that
+    publishes its state only after a command must not be starved of one.
+    """
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    hass.states.async_set("climate.salon_split", "unknown", {})
+    hvac_calls = async_mock_service(hass, "climate", "set_hvac_mode")
+    async_mock_service(hass, "climate", "set_temperature")
+    async_mock_service(hass, "number", "set_value")
+    await _setup_live_salon(hass, entry_data, hass_storage)
+    assert [c.data["hvac_mode"] for c in hvac_calls] == ["off"]
+
+
+async def test_degraded_inputs_keep_the_fast_source_feedback(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+) -> None:
+    """The invalid-input fallback still carries the split's feedback.
+
+    The core must see the unit whenever the writer may write to it —
+    otherwise the degraded cycle's forced OFF, written to a reachable split,
+    would never become the S4 reference.
+    """
+    from custom_components.tortoise_ufh.core.models import FastSourceKind
+
+    coordinator = _get_coordinator(setup_integration)
+    hass.states.async_set("climate.salon_split", "cool", {})
+
+    def _broken_loops(room_cfg: dict[str, Any]) -> Any:
+        msg = "invalid loop input"
+        raise ValueError(msg)
+
+    coordinator._build_loops = _broken_loops
+    room_cfg = coordinator._room_configs[coordinator._room_names.index("Salon")]
+    inputs = coordinator._build_room_inputs(room_cfg, "Salon")
+    assert inputs.room_temperature_c is None
+    assert inputs.fast_source_kind is FastSourceKind.SPLIT
+    assert inputs.fast_source_on is True
+    assert inputs.fast_source_hvac_mode == "cool"
+
+
+async def test_farewell_to_unavailable_split_is_not_cached(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+) -> None:
+    """No farewell OFF, cache entry or farewell stamp for an unreachable split.
+
+    Otherwise a return to live would skip the real OFF as "already written"
+    and read the still-running unit as a manual touch.
+    """
+    from custom_components.tortoise_ufh import writers
+
+    coordinator = _get_coordinator(setup_integration)
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    hass.states.async_set("climate.salon_split", "unavailable", {})
+    mocks = _mock_actuator_services(hass)
+    coordinator.set_room_state("Salon", ROOM_STATE_OFF)
+    await hass.async_block_till_done()
+
+    assert mocks[("climate", "set_hvac_mode")] == []
+    assert "climate.salon_split" not in coordinator._writer._last_written_fast
+    assert "climate.salon_split" not in writers._RECENT_FAREWELL_MONOTONIC
+
+
+async def test_restart_during_own_boost_is_not_read_as_manual(
+    hass: HomeAssistant,
+    register_sources: None,
+    entry_data: dict[str, Any],
+    hass_storage: dict[str, Any],
+) -> None:
+    """The recorder case end-to-end: HA restarts while our boost cools.
+
+    The rebuilt coordinator's first cycle sees the climate entity and the
+    room sensor still unavailable (sensor lost -> blind force-OFF, nothing
+    written). The next cycle finds the unit still cooling: it is re-owned
+    as the controller's own boost — no manual hold, no mismatch — and the
+    setpoint-change recompute right after it does not flip that verdict.
+    """
+    from pytest_homeassistant_custom_component.common import async_mock_service
+
+    hass.states.async_set("climate.salon_split", "unavailable", {})
+    hass.states.async_set("sensor.salon_temp", "unavailable", _TEMP_ATTRS)
+    # The climate domain is never set up by the integration, so these mocks
+    # registered BEFORE setup capture the very first (blind) cycle too. The
+    # valve service is stubbed only so that LIVE first cycle finds a handler.
+    hvac_calls = async_mock_service(hass, "climate", "set_hvac_mode")
+    async_mock_service(hass, "climate", "set_temperature")
+    async_mock_service(hass, "number", "set_value")
+    entry = await _setup_live_salon(hass, entry_data, hass_storage)
+    coordinator = _get_coordinator(entry)
+    lost = coordinator.data.rooms["Salon"]
+    assert "sensor_lost" in lost.report.flags
+    assert hvac_calls == []
+
+    hass.states.async_set("climate.salon_split", "cool", {})
+    hass.states.async_set("sensor.salon_temp", "21.5", _TEMP_ATTRS)
+    coordinator._last_step_monotonic = time.monotonic() - 300.0
+    await _refresh(hass, coordinator)
+    room = coordinator.data.rooms["Salon"]
+    assert "sensor_lost" not in room.report.flags
+    assert "fast_source_manual" not in room.report.flags
+    assert "fast_source_mismatch" not in room.report.flags
+    assert room.outputs.fast_source.on is True
+    assert room.outputs.fast_source.mode is FastSourceMode.COOLING
+
+    coordinator.set_room_offset("Salon", 1.0)
+    await _refresh(hass, coordinator)
+    room = coordinator.data.rooms["Salon"]
+    assert "fast_source_manual" not in room.report.flags
+    assert "fast_source_mismatch" not in room.report.flags

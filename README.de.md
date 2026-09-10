@@ -298,7 +298,9 @@ Standard **Aus** — es wird nichts geschrieben, bis Sie ihn bewusst auf **Aktiv
 > spiegelt ihn für `fast_manual_hold_minutes` nur (Standard 60 min, gezählt ab der letzten
 > Berührung — Meldung `fast_source_manual`, nichts wird geschrieben, ein kühlender Split wird nie
 > direkt auf Heizen gekippt); danach läuft die normale Logik aus diesem Zustand weiter. Die
-> Sicherheitsregeln S3/S4 und ein verlorener Sensor beenden das Halten. Setzen Sie den Parameter
+> Sicherheitsregeln S3/S4 und ein verlorener Sensor beenden das Halten (solange der Split
+> seinen Zustand meldet; nach einem Verbindungsverlust wird das Gerät so übernommen, wie es
+> vorgefunden wird — wie nach einem Neustart). Setzen Sie den Parameter
 > auf `0` für das frühere Verhalten (`fast_source_mismatch` + erneutes Erzwingen). Für dauerhaft
 > manuelle Steuerung **schalten Sie den Raum auf `off`** — der Regler schreibt nichts, und der Weg
 > zurück nach `live` parkt die Aktoren sicher neu (der Split absolviert eine ehrliche

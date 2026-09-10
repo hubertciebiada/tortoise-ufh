@@ -84,12 +84,12 @@ def _echo(command: FastSourceCommand) -> tuple[bool, str]:
 
 
 class TestManualCoolInTransitional:
-    """Pokój Antoniego, 08-18 / 08-22 / 08-24 and the 09-04 turbo-cool script."""
+    """The child's bedroom, 08-18 / 08-22 / 08-24 and the 09-04 turbo-cool script."""
 
     @pytest.mark.unit
     def test_manual_cool_is_mirrored_then_released_through_off(self) -> None:
         """A remote-started cool is mirrored; heating only after OFF + min-OFF."""
-        ctl = RoomController(_CFG, name="antoni")
+        ctl = RoomController(_CFG, name="kids_room")
         # Cycles 1-2: idle — room at the setpoint, unit off (first sync adopts
         # OFF; the second cycle settles the OFF command for the §28 rule).
         for _ in range(2):
@@ -214,7 +214,7 @@ class TestSafetyOutranksHold:
     """
 
     def _held(self) -> RoomController:
-        ctl = RoomController(_CFG, name="antoni")
+        ctl = RoomController(_CFG, name="kids_room")
         for _ in range(2):  # adopt OFF, then settle the OFF command (§28)
             ctl.step(_inputs(23.0, on=False, hvac="off"), dt_seconds=DT)
         out = ctl.step(_inputs(22.4, on=True, hvac="cool"), dt_seconds=DT)
@@ -256,7 +256,7 @@ class TestOwnCommandSettle:
         recompute is not one) — deterministically, even when that cycle comes
         in a hair short of 300 s (the real dt is jittery).
         """
-        ctl = RoomController(_CFG, name="antoni")
+        ctl = RoomController(_CFG, name="kids_room")
         # Cold room, unit off: the first sync adopts OFF with a conservative
         # min-OFF seed; heating engages once the 31-min dwell has elapsed.
         cold = _inputs(21.0, on=False, hvac="off")
@@ -295,7 +295,7 @@ class TestOwnCommandSettle:
     @pytest.mark.unit
     def test_touch_on_a_long_idle_machine_is_adopted_next_cycle(self) -> None:
         """(b) A machine that has emitted OFF for hours adopts a touch at once."""
-        ctl = RoomController(_CFG, name="antoni")
+        ctl = RoomController(_CFG, name="kids_room")
         idle = _inputs(23.0, on=False, hvac="off")
         for _ in range(24):  # two idle hours at the setpoint, unit off
             out = ctl.step(idle, dt_seconds=DT)
