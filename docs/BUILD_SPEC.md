@@ -488,7 +488,14 @@ Algorithm (all knobs from `ControllerConfig`, §6.3):
       the normal logic then resumes from the adopted state (a reversal still passes OFF +
       min-OFF); `force_on` / `force_off` end the hold; a manual-hold room pins its multisplit
       group like a safety-forced one. Without feedback
-      (`fast_source_on is None`) the legacy free first transition is kept.
+      (`fast_source_on is None`) the legacy free first transition is kept. *Amended
+      2026-09-10 (v0.20.1, DECISIONS §28 note):* a command emitted in a cycle without feedback
+      is BLIND — never the reference a later feedback is compared against, never a restart of
+      the settle window — and a cycle without feedback un-syncs the machine, so the first
+      visible feedback after a restart or any gap always wins (also over a blind running
+      direction the unit contradicts; an ambiguous report keeps the machine's direction). A
+      manual hold survives such a gap. The adapter writes nothing (and caches nothing) to a
+      missing or `unavailable` climate entity; `unknown` is still written.
     - **Anti priority-inversion:** the split decision NEVER reduces/holds the valve; floor stays base.
       Split only *adds* boost above the threshold and releases once inside the comfort band.
     - Command (S12): `on=True, mode=HEATING|COOLING (per machine state),

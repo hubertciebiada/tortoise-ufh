@@ -416,9 +416,15 @@ udziału w chłodzeniu (kreator to wymusza).
   nosi flagę `fast_source_manual` (informacyjną). Po upływie czasu wraca normalna
   logika ze stanu, który zastała: zmiana kierunku dalej przechodzi przez OFF i pełny
   czas postoju. Zabezpieczenia S3/S4 oraz utrata czujnika przerywają utrzymanie — ich
-  komenda jest zapisywana. Przeładowanie wpisu (każdy zapis strojenia) buduje maszynę
+  komenda jest zapisywana (gdy split podaje swój stan — chwilowa utrata łączności nie
+  przerywa sterowania ręcznego). Przeładowanie wpisu (każdy zapis strojenia) buduje maszynę
   od nowa i tym samym kończy utrzymanie — pierwsza synchronizacja przyjmuje pracujące
-  urządzenie bez utrzymania. Parametr 0 wyłącza regułę (zachowanie jak dawniej:
+  urządzenie bez utrzymania. Tak samo po restarcie HA, także gdy split i jego czujnik
+  wstają dopiero po pierwszym cyklu, i po każdej przerwie w łączności ze splitem: do
+  niedostępnego urządzenia nic nie jest wysyłane, a split jest przyjmowany od nowa w
+  takim stanie, w jakim wrócił (od v0.20.1; wyłączenie pilotem w czasie takiej przerwy
+  nie uruchamia więc sterowania ręcznego). Parametr 0 wyłącza regułę
+  (zachowanie jak dawniej:
   `fast_source_mismatch` + wymuszenie po ~45 min). Do stałego ręcznego sterowania
   nadal służy stan pokoju Wyłączony.
 - **Multisplit:** pokoje, których jednostki wewnętrzne wiszą na wspólnym agregacie,
@@ -595,7 +601,7 @@ automatycznie. Pełny słownik poniżej:
 | `s2_condensation` | Ochrona przed kondensacją: zasilanie osiągnęło punkt rosy — zawór zamknięty. | Sprawdź wilgotność i temperaturę wody chłodzącej; upewnij się, że pompa respektuje globalny bezpieczny punkt rosy. |
 | `rh_stale_gated` | Wilgotność nieświeża (60–120 min) — punkt rosy liczony z zapasem do +1 K. | Sprawdź czujnik wilgotności. Powyżej 120 min pokój wypada z ochron — patrz §9. |
 | `valve_mismatch` | Siłownik od ≥3 cykli raportuje pozycję inną niż komenda („zawór nie słucha"). | Sprawdź siłownik/przekaźnik/encję; porównaj kolumny Komenda i Feedback w zakładce Zawory. |
-| `fast_source_mismatch` | Split jest w innym stanie niż komenda (np. zmieniony pilotem). Przy czasie ręcznego sterowania = 0 (§8) to stan trwały — regulator pozostaje właścicielem splita. Przy domyślnym czasie pojawia się tylko przejściowo: w oknie ustalania (1–2 cykle po naszej własnej komendzie — urządzenie mogło jej jeszcze nie wykonać), przy późnym pierwszym odczycie stanu splita (może być nieświeży, nie jest przyjmowany) oraz w cyklu, w którym zabezpieczenie (S3/S4, utrata czujnika) przerywa sterowanie ręczne; ustalony rozjazd jest przyjmowany jako `fast_source_manual`. | Przy czasie = 0: nic — zostanie nadpisany przy ponownym wymuszeniu (~45 min). Domyślnie: nic — po oknie ustalania przechodzi w `fast_source_manual` albo znika. Na stałe ręczne sterowanie przełącz pokój na Wyłączony. |
+| `fast_source_mismatch` | Split jest w innym stanie niż komenda (np. zmieniony pilotem). Przy czasie ręcznego sterowania = 0 (§8) to stan trwały — regulator pozostaje właścicielem splita. Przy domyślnym czasie pojawia się tylko przejściowo: w oknie ustalania (1–2 cykle po naszej własnej komendzie — urządzenie mogło jej jeszcze nie wykonać) oraz w cyklu, w którym zabezpieczenie (S3/S4, utrata czujnika) przerywa sterowanie ręczne; ustalony rozjazd jest przyjmowany jako `fast_source_manual`. | Przy czasie = 0: nic — zostanie nadpisany przy ponownym wymuszeniu (~45 min). Domyślnie: nic — po oknie ustalania przechodzi w `fast_source_manual` albo znika. Na stałe ręczne sterowanie przełącz pokój na Wyłączony. |
 | `fast_source_manual` | Sterowanie ręczne (§10): split został przestawiony poza integracją — regulator przyjął jego stan i przez czas ręcznego sterowania tylko go odzwierciedla (nic nie wysyła). | Informacyjne (zamierzone). Czas zmienisz w Strojeniu; 0 wyłącza regułę. |
 | `fast_source_min_runtime` | Blokada minimalnego czasu pracy/postoju — wspomaganie chwilowo nie może zmienić stanu. | Nic — ochrona sprężarki; timer w zakładce Wspomaganie. |
 | `fast_source_quiet_hours` | Ciche godziny wspomagania — pokój jest poza swoim oknem dozwolonych godzin (§10), split się nie załącza (pracujący kończy przez min. czas pracy). | Informacyjne. Okno zmienisz w konfiguracji pokoju. |

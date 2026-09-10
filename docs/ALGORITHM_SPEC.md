@@ -555,13 +555,24 @@ min-OFF wait. Rooms without a physical feedback (`fast_source_on is None`) seed 
 (`_INITIAL_FAST_TIMER_S`) so the very first transition is never blocked; the FIRST observed
 feedback wins over the machine (running unit adopted as ON, stopped as OFF) and re-seeds the timer
 conservatively to 0 — a full dwell after every restart/reload, so a restart loop cannot
-short-cycle a compressor. Later feedback disagreeing with the previous cycle's command raises the
+short-cycle a compressor. Since 2026-09-10 (DECISIONS §28 note) this holds even after commands
+emitted BLIND (no feedback — typically the first cycle after an HA restart): the machine records
+a command as the reconciliation reference — and restarts the settle counter — only in a cycle
+whose sync saw the unit, and the adapter writes nothing to a missing or `unavailable` entity
+(and caches nothing, the farewell included), so the first visible reading is the truth (the
+retired "late first feedback" guard read a split the controller had started itself before a
+restart as a manual touch). The same holds after ANY gap in the feedback: a cycle without
+feedback un-syncs the machine, so the unit found when it reappears is adopted afresh
+(conservative dwell seed, no hold) — the machine decides open-loop meanwhile and cannot know
+what reached the unit. The first sync takes the reported direction; an ambiguous report keeps
+the machine's own; a unit found drying keeps the dry release band. A manual hold survives a
+gap (a force in a cycle that did not see the unit does not end it). Later
+feedback disagreeing with the last command recorded that way raises the
 additive `"fast_source_mismatch"` flag — since 2026-09-04 (DECISIONS §28) only with
 `fast_manual_hold_minutes = 0`, or while our own emitted command pair has changed less than half a
 `cycle_seconds` ago (the settle rule: a unit that has not caught up with our fresh command is
-not a touch; adoption after our own change therefore follows at the second regular cycle), or on a
-late first feedback (the machine already emitted commands before the feedback entity appeared —
-the first reading may be stale and is never adopted), or for the one cycle in which a safety
+not a touch; adoption after our own change therefore follows at the second regular cycle), or for
+the one cycle in which a safety
 force (`force_on` / `force_off`) cancels an active hold (an honest trace, not silence); otherwise the
 divergence is adopted as USER INTENT: the machine takes the physical state and the controller
 MIRRORS it (`FastSourceMachine.mirror`, flag `"fast_source_manual"`, `target_temperature_c=None`,
@@ -814,3 +825,4 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 | 2026-07-14 | Cooling floor-valve boost hold (DECISIONS §18, v0.11.0): when the split is engaged in COOLING the floor valve holds its pre-boost position (`valve = max(valve, snapshot)`, snapshot taken before the S2 dew throttle) instead of collapsing to 0 as the split cools the air out from under the air-error PI — so the slab keeps discharging. Only mechanism #1 shipped; the integrator freeze (#2) and trend-damper suppression (#3) from the design were evaluated on the twin and dropped as redundant (the `max()` already dominates, and the integrator does not discharge). No new knob, no contract change; safety still wins over the hold (sensor-lost parks at 0, the dew throttle scales the held value, `dew_factor=0` closes). |
 | 2026-07-15 | Cooling setpoint-flicker (DECISIONS §21, v0.13.0, issue #7): opt-in, Panasonic-specific hp-link behaviour. When the pump idles in its FIXED 3 K return deadband (`compressor_freq == 0`) with genuine unmet demand (`cooling_demand` over the room reports), `core/hp_link.py::SetpointFlicker` drops the written cooling setpoint to the raw worst-room dew point (`p = ceil((safe_dew − 2) / step)·step`, `FLICKER_DEW_RESERVE_K` = `DEW_MARGIN_DEFAULT_K`) for ONE cycle to trip the compressor (`trigger = max(w + band, p + 3)`), then unconditionally restores `w` — colder average water, return stays dew-safe. A coarse grid with no drop room withholds the pulse (`flicker_dew_blocked`). Four global-only knobs (`hp_flicker_band_k` 1.5, `hp_flicker_stuck_minutes` 10, `hp_flicker_min_off_minutes` 20, `hp_flicker_max_starts_per_h` 2) + three optional pump entities (return, compressor-freq used; outlet diagnostic-only). Machine persisted per entry, ticked ONCE/cycle with the real dt; starts in cooldown (restart-safe). No I/O-contract change, no `RoomReport` field, no migration; OFF by default. |
 | 2026-09-04 | Manual hold for the fast source (DECISIONS §28, v0.20.0): a settled physical divergence of the split (on/off or refrigerant direction vs the previously emitted command — the existing S4/K4 condition) is USER INTENT — `FastSourceMachine.sync` adopts the physical state and starts a hold of the new `fast_manual_hold_minutes` knob (default 60, restarted on every new divergence); the controller MIRRORS the state (`FastSourceMachine.mirror`) on every fast-source path, flags `fast_source_manual` (panel tier `info`), the adapter writes nothing and forgets the entity's S3 cache; the hold counts down in `tick()`, `force_on`/`force_off` end it, the normal logic resumes from the adopted state (a reversal still passes OFF + min-OFF). Knob 0 = legacy `fast_source_mismatch` + 45-min re-assert. |
+| 2026-09-10 | Blind commands (DECISIONS §28 note, v0.20.1): `FastSourceMachine` records a command as the S4 reconciliation reference — and restarts the settle counter — only in a cycle whose `sync` saw the unit, and any cycle without feedback un-syncs it, so the first visible feedback after a restart or any gap is adopted as the truth (first-sync rule, now also replacing a blind running direction when the unit reports one, keeping the machine's direction on an ambiguous report and the dry band for a unit found drying; the "late first feedback" guard is retired). A force in a cycle that did not see the unit no longer ends a manual hold. Adapter: nothing is written or cached (farewell included) to a missing / `unavailable` climate entity (`unknown` is still written). Fixes a split the controller had started itself being put under a manual hold after an HA restart; a feedback blip no longer ends a manual hold. |
