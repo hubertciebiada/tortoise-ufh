@@ -3066,15 +3066,16 @@ function mfBuildModel(view) {
     const yBot = yR - D.railBot;
     const yU = D.railUpY;
     const yL = D.railLoY;
-    mfBox(L, "bracket", [X(xr), (yU + yTop) / 2, zUp + D.railT / 2], [D.railW, yTop - yU, D.railT]);
-    mfBox(L, "bracket", [X(xr), (yBot + yL) / 2, zLo + D.railT / 2], [D.railW, yL - yBot, D.railT]);
+    mfBox(L, "bracket", [X(xr), (yU + yTop) / 2, zUp + D.railT / 2], [D.railW, yTop - yU, D.railT], { wBias: -40 });
+    mfBox(L, "bracket", [X(xr), (yBot + yL) / 2, zLo + D.railT / 2], [D.railW, yL - yBot, D.railT], { wBias: -40 });
     const dz = zLo - zUp;
     const dl = Math.hypot(yU - yL, dz);
     mfBox(L, "bracket", [X(xr), (yU + yL) / 2, (zUp + zLo) / 2 + D.railT / 2], [D.railW, dl, D.railT], {
+      wBias: -40,
       rot: -Math.atan2(dz, yU - yL),
     });
     for (const [yBar, zBar] of bars) {
-      mfBox(L, "rubber", [X(xr), yBar, zBar - D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2], { wBias: -30 });
+      mfBox(L, "rubber", [X(xr), yBar, zBar - D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2]);
       mfBox(L, "rubber", [X(xr), yBar, zBar + D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2], { wBias: 30 });
     }
   }
@@ -3210,7 +3211,8 @@ function mfDrawBox(b, out) {
     svg = `<g class="r-act${b.flag ? " flag" : ""}" style="--open-mix:${mix}%">${svg}</g>`;
   }
   // wBias pushes a part towards the viewer (+) or away (-) in the painter's order:
-  // the clamp halves wrap the bar, so the front half must always come after it.
+  // the rails sit on the wall behind everything, the front half of a clamp wraps
+  // the bar and must come after it; the back half falls between them on its own.
   out.push({ w: mfP(b.c)[2] - (b.wBias || 0), svg, ext });
 }
 
