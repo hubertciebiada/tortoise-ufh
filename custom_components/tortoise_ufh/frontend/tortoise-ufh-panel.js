@@ -2930,6 +2930,7 @@ const MF_D = {
   zR: 60,
   railW: 37,
   clampW: 22,
+  clampX: 11,
   railT: 2,
   railTop: 45,
   railBot: 45,
@@ -3078,9 +3079,12 @@ function mfBuildModel(view) {
       wBias: -40,
       rot: -Math.atan2(dz, yU - yL),
     });
+    // The clamp sits at the outer end of the bar (clampX from the bar end), away
+    // from the first circuit; the rail plate behind it keeps its catalogue width.
+    const xc = xr < Lbar / 2 ? D.clampX : Lbar - D.clampX;
     for (const [yBar, zBar] of bars) {
-      mfBox(L, "rubber", [X(xr), yBar, zBar - D.clamp / 4], [D.clampW, D.clamp, D.clamp / 2]);
-      mfBox(L, "rubber", [X(xr), yBar, zBar + D.clamp / 4], [D.clampW, D.clamp, D.clamp / 2]);
+      mfBox(L, "rubber", [X(xc), yBar, zBar - D.clamp / 4], [D.clampW, D.clamp, D.clamp / 2]);
+      mfBox(L, "rubber", [X(xc), yBar, zBar + D.clamp / 4], [D.clampW, D.clamp, D.clamp / 2]);
     }
   }
   for (let i = 0; i < n; i++) {
