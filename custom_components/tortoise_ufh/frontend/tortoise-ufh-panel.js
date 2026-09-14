@@ -718,7 +718,7 @@ const STR = {
       "Ustawienia → Urządzenia i usługi → Tortoise-UFH → Konfiguruj → " +
       "Rozdzielacze (liczba obwodów, strona przyłącza głównego, sondy Z0/P0, " +
       "potem pętla pokoju na każdym obwodzie).",
-    mf_sub: "KAN-therm InoxFlow UFST · {n} {circuits}",
+    mf_sub: "{n} {circuits}",
     mf_circuits_one: "obwód",
     mf_circuits_few: "obwody",
     mf_circuits_many: "obwodów",
@@ -1316,7 +1316,7 @@ const STR = {
       "Settings → Devices & services → Tortoise-UFH → Configure → Manifolds " +
       "(circuit count, main-connection side, the Z0/P0 probes, then a room " +
       "loop on every circuit).",
-    mf_sub: "KAN-therm InoxFlow UFST · {n} {circuits}",
+    mf_sub: "{n} {circuits}",
     mf_circuits_one: "circuit",
     mf_circuits_few: "circuits",
     mf_circuits_many: "circuits",
@@ -1925,7 +1925,7 @@ const STR = {
       "hinzu: Einstellungen → Geräte & Dienste → Tortoise-UFH → Konfigurieren → " +
       "Verteiler (Anzahl der Heizkreise, Seite des Hauptanschlusses, die Sonden " +
       "Z0/P0, danach ein Raumkreis je Anschluss).",
-    mf_sub: "KAN-therm InoxFlow UFST · {n} {circuits}",
+    mf_sub: "{n} {circuits}",
     mf_circuits_one: "Heizkreis",
     mf_circuits_few: "Heizkreise",
     mf_circuits_many: "Heizkreise",
@@ -3106,7 +3106,7 @@ function mfBuildModel(view) {
       yb -= D.nutLen;
       const floorY = -D.pipeDown;
       if (kind === "return") {
-        mfCyl(L, "pipe", "y", [x, (yb + floorY) / 2, zBar], D.pipeR, yb - floorY);
+        mfTube(L, "pipe", [[x, yb + 2, zBar], [x, floorY, zBar]], D.pipeR);
       } else {
         const back = D.supplyBackZ;
         mfTube(
@@ -3285,7 +3285,7 @@ function mfDrawCyl(c, out, part) {
 function mfDrawTube(t, out) {
   const pts = t.pts.map(mfP);
   const dpath = pts.map((pt, i) => (i ? "L" : "M") + mfF1(pt[0]) + " " + mfF1(pt[1])).join(" ");
-  const w = pts.reduce((sum, pt) => sum + pt[2], 0) / pts.length;
+  const w = Math.max(...pts.map((pt) => pt[2]));
   const ext = pts.flatMap((pt) => [
     [pt[0] - t.r, pt[1] - t.r],
     [pt[0] + t.r, pt[1] + t.r],
@@ -3397,9 +3397,10 @@ function mfRenderSvg(model, view, widthPx, caps, ariaLabel) {
       continue;
     }
     if (prim.t === "tube") {
-      for (let k = 0; k + 1 < prim.pts.length; k++) {
-        mfDrawTube({ role: prim.role, r: prim.r, pts: [prim.pts[k], prim.pts[k + 1]] }, out);
-      }
+      // One path per pipe: per-edge pieces showed their overlapping ends as
+      // dots through the translucent stroke. A pipe sorts by its deepest
+      // point, so a supply pipe is laid down before the return bar it passes.
+      mfDrawTube(prim, out);
       continue;
     }
     const k = prim.axis === "z" ? 1 : Math.max(1, Math.ceil(prim.len / 50));
@@ -7171,7 +7172,9 @@ class TortoiseUfhPanel extends HTMLElement {
       return;
     }
     card.paintKey = key;
-    const caps = { supply: this._t("mf_supply"), return: this._t("mf_return") };
+    // The captions on the main stubs start with a capital (the header stats stay lower-case).
+    const cap1 = (str) => str.charAt(0).toUpperCase() + str.slice(1);
+    const caps = { supply: cap1(this._t("mf_supply")), return: cap1(this._t("mf_return")) };
     const html = mfRenderSvg(
       mfBuildModel(card.view),
       card.view,
@@ -9108,8 +9111,8 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 .r-glass .hl { display: none; }
 .r-float { fill: var(--t-primary); stroke: none; }
 /* Pipes are translucent (owner request): whatever sits behind them shows through. */
-.r-pipe-edge { fill: none; stroke: var(--t-line); stroke-linejoin: round; stroke-linecap: round; stroke-opacity: .8; }
-.r-pipe { fill: none; stroke: color-mix(in srgb, var(--t-fg) 26%, var(--t-card)); stroke-linejoin: round; stroke-linecap: round; stroke-opacity: .6; }
+.r-pipe-edge { fill: none; stroke: var(--t-line); stroke-linejoin: round; stroke-linecap: butt; stroke-opacity: .8; }
+.r-pipe { fill: none; stroke: color-mix(in srgb, var(--t-fg) 26%, var(--t-card)); stroke-linejoin: round; stroke-linecap: butt; stroke-opacity: .6; }
 /* Actuator: the front takes the opening colour (--open-mix = 0…60 % primary); the depth tints stay. */
 .r-act .f-front { fill: color-mix(in srgb, var(--t-primary) var(--open-mix, 0%), var(--t-card)); }
 .r-act .f-top { fill: color-mix(in srgb, var(--t-fg) 7%, color-mix(in srgb, var(--t-primary) var(--open-mix, 0%), var(--t-card))); }
