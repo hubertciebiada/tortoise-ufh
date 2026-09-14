@@ -2929,6 +2929,7 @@ const MF_D = {
   zS: 35,
   zR: 60,
   railW: 37,
+  clampW: 22,
   railT: 2,
   railTop: 45,
   railBot: 45,
@@ -2939,7 +2940,7 @@ const MF_D = {
   stubLen: 30,
   stubR: 16.85,
   // Flow meter on the supply bar: base, ring, sight tube with its float, cap.
-  fmBaseR: 15,
+  fmBaseR: 13.5,
   fmBaseH: 12,
   fmRingR: 13,
   fmRingH: 8,
@@ -3078,8 +3079,8 @@ function mfBuildModel(view) {
       rot: -Math.atan2(dz, yU - yL),
     });
     for (const [yBar, zBar] of bars) {
-      mfBox(L, "rubber", [X(xr), yBar, zBar - D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2]);
-      mfBox(L, "rubber", [X(xr), yBar, zBar + D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2]);
+      mfBox(L, "rubber", [X(xr), yBar, zBar - D.clamp / 4], [D.clampW, D.clamp, D.clamp / 2]);
+      mfBox(L, "rubber", [X(xr), yBar, zBar + D.clamp / 4], [D.clampW, D.clamp, D.clamp / 2]);
     }
   }
   for (let i = 0; i < n; i++) {
