@@ -145,7 +145,7 @@ from .weather import (
 )
 from .weather_comp import CoolingCompCurve, WeatherCompCurve
 
-__version__ = "0.21.0"
+__version__ = "0.21.1"
 
 __all__ = [
     "BUILDING_PROFILES",

@@ -79,10 +79,9 @@ const TABS = [
   { key: "rooms", label: "tab_rooms" },
   { key: "flags", label: "tab_flags" },
   { key: "tuning", label: "tab_tuning" },
-  { key: "valves", label: "tab_valves" },
+  { key: "manifolds", label: "tab_manifolds" },
   { key: "assist", label: "tab_assist" },
   { key: "hp", label: "tab_hp" },
-  { key: "manifolds", label: "tab_manifolds" },
 ];
 const TAB_ORDER = TABS.map((t) => t.key);
 const DEFAULT_TAB = "rooms";
@@ -181,7 +180,6 @@ const STR = {
     tab_rooms: "Pokoje",
     tab_flags: "Flagi",
     tab_tuning: "Strojenie",
-    tab_valves: "Zawory",
     tab_assist: "Wspomaganie",
     tab_hp: "Pompa ciepła",
     tab_manifolds: "Rozdzielacze",
@@ -774,7 +772,6 @@ const STR = {
     tab_rooms: "Rooms",
     tab_flags: "Flags",
     tab_tuning: "Tuning",
-    tab_valves: "Valves",
     tab_assist: "Assist",
     tab_hp: "Heat pump",
     tab_manifolds: "Manifolds",
@@ -1374,7 +1371,6 @@ const STR = {
     tab_rooms: "Räume",
     tab_flags: "Meldungen",
     tab_tuning: "Abstimmung",
-    tab_valves: "Ventile",
     tab_assist: "Zusatzquelle",
     tab_hp: "Wärmepumpe",
     tab_manifolds: "Verteiler",
@@ -3310,6 +3306,10 @@ function mfDrawTube(t, out) {
  * One label on a plate. Values that come from an entity get `ua-link` and a
  * `data-entity` attribute (the card delegates the click to `_moreInfo`).
  * `caps` holds the localised supply / return captions of the main probes.
+ * Loop names and the loop temperatures read along their pipe: rotated a
+ * quarter turn counter-clockwise about the anchor, the name climbing from the
+ * flowmeter top, the temperature running down the pipe from the probe - so
+ * they fit the 50 mm pitch without alternating rows.
  */
 function mfLabel(a, fs, view, stagger, caps) {
   const p = mfP(a.p);
@@ -3320,10 +3320,11 @@ function mfLabel(a, fs, view, stagger, caps) {
   let cap = null;
   let entity = null;
   let size = fs;
+  const rotated = a.kind === "name" || a.kind === "supply" || a.kind === "return";
   if (a.kind === "name") {
-    text = a.text.toUpperCase();
+    text = a.text;
     cls += " ua-cap";
-    size *= 0.86;
+    size *= 0.95;
   } else if (a.kind === "pct") {
     const pct = v.valve ? num(v.valve.pct) : null;
     text = pct === null ? "—" : Math.round(pct) + " %";
@@ -3348,6 +3349,22 @@ function mfLabel(a, fs, view, stagger, caps) {
   }
   const cw = text.length * size * 0.58 + 8;
   const ch = size * 1.35;
+  const link = entity ? ` data-entity="${escXml(entity)}"` : "";
+  if (rotated) {
+    // In the rotated frame +x is screen up: the name starts at the anchor and
+    // climbs, the temperature ends at the anchor and runs down the pipe.
+    const up = a.kind === "name";
+    const x0 = p[0];
+    const y0 = p[1];
+    const tx = up ? x0 + 3 : x0 - 3;
+    const rx = up ? x0 : x0 - cw;
+    let g = `<g transform="rotate(-90 ${mfF1(x0)} ${mfF1(y0)})">`;
+    g += `<rect class="ua-plate" x="${mfF1(rx)}" y="${mfF1(y0 - ch / 2)}" width="${mfF1(cw)}" height="${mfF1(ch)}" rx="3"/>`;
+    g += `<text class="${cls}"${link} x="${mfF1(tx)}" y="${mfF1(y0)}" font-size="${mfF1(size)}" text-anchor="${up ? "start" : "end"}" dominant-baseline="central">${escXml(text)}</text>`;
+    g += "</g>";
+    const box = up ? [x0 - ch / 2, y0 - cw - 3, x0 + ch / 2, y0] : [x0 - ch / 2, y0, x0 + ch / 2, y0 + cw + 3];
+    return { svg: g, box };
+  }
   const x = p[0];
   let y = p[1];
   const dy = stagger && a.i != null ? (a.i % 2) * ch * 1.05 : 0;
@@ -3356,10 +3373,6 @@ function mfLabel(a, fs, view, stagger, caps) {
   } else if (a.origin === "top") {
     y += ch / 2 + dy;
   }
-  if (a.kind === "name" && stagger) {
-    y -= dy * 2; // names alternate upwards
-  }
-  const link = entity ? ` data-entity="${escXml(entity)}"` : "";
   let svg = `<rect class="ua-plate" x="${mfF1(x - cw / 2)}" y="${mfF1(y - ch / 2)}" width="${mfF1(cw)}" height="${mfF1(ch)}" rx="3"/>`;
   svg += `<text class="${cls}"${link} x="${mfF1(x)}" y="${mfF1(y)}" font-size="${mfF1(size)}" text-anchor="middle" dominant-baseline="central">${escXml(text)}</text>`;
   if (cap) {
@@ -4619,7 +4632,6 @@ class TortoiseUfhPanel extends HTMLElement {
       rooms: roomsSection.el,
       flags: this._buildFlagsSection(),
       tuning: this._buildTuningSection(),
-      valves: this._buildValvesSection(),
       assist: this._buildAssistSection(),
       hp: this._buildHpSection(),
       manifolds: this._buildManifoldsSection(),
@@ -4846,8 +4858,6 @@ class TortoiseUfhPanel extends HTMLElement {
       this._updateFlagLegend();
     } else if (this._activeTab === "tuning") {
       this._ensureTuningLoaded();
-    } else if (this._activeTab === "valves") {
-      this._renderValves();
     } else if (this._activeTab === "assist") {
       this._renderAssist();
     } else if (this._activeTab === "hp") {
@@ -6176,334 +6186,6 @@ class TortoiseUfhPanel extends HTMLElement {
       raw = String(r.report);
     }
     D.rawPre.textContent = raw || "{}";
-  }
-
-  // --------------------------------------------------------------------------
-  // Valves tab
-  // --------------------------------------------------------------------------
-
-  /** Build the Valves section skeleton (rows populated by `_renderValves`). */
-  _buildValvesSection() {
-    const empty = h("div", { class: "empty", text: this._t("loading") });
-    const headCells = [
-      h("th", { scope: "col", text: this._t("th_room") }),
-      h("th", { scope: "col", text: this._t("val_th_command") }),
-      h("th", { scope: "col" }, [this._t("val_th_raw"), this._infoIcon("tip_val_raw")]),
-      h("th", { scope: "col" }, [
-        this._t("val_th_floor"),
-        this._infoIcon("tip_val_floor"),
-      ]),
-      h("th", { scope: "col" }, [this._t("val_th_sat"), this._infoIcon("tip_val_sat")]),
-      h("th", { scope: "col" }, [this._t("val_th_s2"), this._infoIcon("tip_val_s2")]),
-      h("th", { scope: "col" }, [
-        this._t("val_th_feedback"),
-        this._infoIcon("tip_val_feedback"),
-      ]),
-    ];
-    const thead = h("thead", null, [h("tr", null, headCells)]);
-    const tbody = h("tbody");
-    const table = h("table", { class: "valves-table" }, [thead, tbody]);
-    const wrapEl = h("div", { class: "table-wrap" }, [table]);
-    const el = h(
-      "section",
-      { class: "tab-section", role: "tabpanel", style: "display:none", dataset: { tab: "valves" } },
-      [empty, wrapEl],
-    );
-    this._valvesEls = { el, tbody, empty, wrapEl, rows: new Map() };
-    return el;
-  }
-
-  /** Reconcile the Valves table from the current view + live HA states. */
-  _renderValves() {
-    const E = this._valvesEls;
-    if (!E) {
-      return;
-    }
-    const rows = this._view;
-    if (!rows.length) {
-      for (const [, entry] of E.rows) {
-        entry.tr.remove();
-        entry.detailTr.remove();
-      }
-      E.rows.clear();
-      const loading = !this._config && !this._live;
-      E.empty.textContent = loading ? this._t("loading") : this._t("val_empty");
-      E.empty.style.display = "";
-      E.wrapEl.style.display = "none";
-      return;
-    }
-    E.empty.style.display = "none";
-    E.wrapEl.style.display = "";
-
-    const desired = new Set(rows.map((r) => r.name));
-    for (const [name, entry] of [...E.rows]) {
-      if (!desired.has(name)) {
-        entry.tr.remove();
-        entry.detailTr.remove();
-        E.rows.delete(name);
-      }
-    }
-
-    for (const r of rows) {
-      let entry = E.rows.get(r.name);
-      const loopCount = this._roomLoops(r).length;
-      // Rebuild if the loop wiring changed (e.g. after a config reload).
-      if (entry && entry.loopCount !== loopCount) {
-        entry.tr.remove();
-        entry.detailTr.remove();
-        E.rows.delete(r.name);
-        entry = undefined;
-      }
-      if (!entry) {
-        entry = this._buildValveRow(r);
-        E.rows.set(r.name, entry);
-      }
-      // Append in sorted order (moving existing nodes is cheap, no flicker).
-      E.tbody.appendChild(entry.tr);
-      E.tbody.appendChild(entry.detailTr);
-      this._updateValveRow(entry, r);
-    }
-  }
-
-  _buildValveRow(r) {
-    const p = {};
-    const loops = this._roomLoops(r);
-    const many = loops.length > 1;
-
-    // Column 1: name (+ loop disclosure caret when there is more than one loop).
-    p.caret = h(
-      "button",
-      {
-        class: "loop-caret",
-        type: "button",
-        title: this._t("val_show_loops"),
-        style: many ? "" : "display:none",
-        on: {
-          click: (e) => {
-            e.stopPropagation();
-            this._toggleValveLoops(r.name);
-          },
-        },
-      },
-      [this._icon("mdi:chevron-right", "▸")],
-    );
-    p.name = h("span", { class: "card-name", text: r.name });
-    const nameCell = h("td", { class: "col-room" }, [
-      h("div", { class: "name-cell" }, [p.caret, p.name]),
-    ]);
-
-    // Column 2: commanded valve % + mini-bar.
-    p.cmdVal = h("span", { class: "valve-val" });
-    p.cmdFill = h("span", { class: "valve-fill" });
-    const cmdCell = h("td", null, [
-      h("div", { class: "valve-mini" }, [
-        p.cmdVal,
-        h("div", { class: "valve-track" }, [p.cmdFill]),
-      ]),
-    ]);
-
-    // Column 3: raw valve % (pre-limits), with the term breakdown in the title.
-    p.raw = h("span", { class: "mono" });
-    const rawCell = h("td", null, [p.raw]);
-
-    // Column 4: heating valve-floor chip.
-    p.floor = h("span");
-    const floorCell = h("td", null, [p.floor]);
-
-    // Column 5: saturation chip.
-    p.sat = h("span");
-    const satCell = h("td", null, [p.sat]);
-
-    // Column 6: S2 cooling throttle chip.
-    p.s2 = h("span");
-    const s2Cell = h("td", null, [p.s2]);
-
-    // Column 7: aggregated loop feedback %.
-    p.feedback = h("span", { class: "mono" });
-    const fbCell = h("td", null, [p.feedback]);
-
-    const tr = h(
-      "tr",
-      {
-        class: "valve-row",
-        tabindex: "0",
-        dataset: { room: r.name },
-        on: {
-          click: (e) => {
-            if (e.target.closest("button")) {
-              return;
-            }
-            this._select(r.name);
-          },
-          keydown: (e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              this._select(r.name);
-            }
-          },
-        },
-      },
-      [nameCell, cmdCell, rawCell, floorCell, satCell, s2Cell, fbCell],
-    );
-
-    // Detail row: per-loop probes (feedback / supply / return / ΔT).
-    const loopWrap = h("div", { class: "loop-list" });
-    const loopRefs = [];
-    loops.forEach((loop, i) => {
-      const ref = this._buildLoopRow(loop, i);
-      loopRefs.push(ref);
-      loopWrap.appendChild(ref.rowEl);
-    });
-    if (!loops.length) {
-      loopWrap.appendChild(
-        h("div", { class: "loop-row muted", text: this._t("val_no_loops") }),
-      );
-    }
-    const detailCell = h("td", { colspan: "7" }, [loopWrap]);
-    const detailTr = h("tr", { class: "loop-detail", style: "display:none" }, [detailCell]);
-
-    return { tr, detailTr, parts: p, loops: loopRefs, loopCount: loops.length, expanded: false };
-  }
-
-  _buildLoopRow(loop, index) {
-    const label = h("span", {
-      class: "loop-label",
-      text: fmtStr(this._t("val_loop"), { n: index + 1 }),
-    });
-    const fbEl = h("span", { class: "mono" });
-    const valveLink = h(
-      "button",
-      {
-        class: "loop-link",
-        type: "button",
-        style: loop.valveId ? "" : "display:none",
-        title: loop.valveId || "",
-        on: {
-          click: (e) => {
-            e.stopPropagation();
-            this._moreInfo(loop.valveId);
-          },
-        },
-      },
-      [fbEl, this._icon("mdi:open-in-new", "›")],
-    );
-    const supEl = h("span", { class: "mono" });
-    const retEl = h("span", { class: "mono" });
-    const dtEl = h("span", { class: "mono" });
-    const rowEl = h("div", { class: "loop-row" }, [
-      label,
-      h("span", { class: "loop-metric" }, [valveLink]),
-      h("span", { class: "loop-metric" }, [
-        h("span", { class: "loop-cap", text: this._t("val_supply") }),
-        supEl,
-      ]),
-      h("span", { class: "loop-metric" }, [
-        h("span", { class: "loop-cap", text: this._t("val_return") }),
-        retEl,
-      ]),
-      h("span", { class: "loop-metric" }, [
-        h("span", { class: "loop-cap", text: this._t("val_dt") }),
-        dtEl,
-      ]),
-    ]);
-    return { loop, fbEl, supEl, retEl, dtEl, rowEl };
-  }
-
-  /** Toggle a room's loop-detail row open/closed (persists across polls). */
-  _toggleValveLoops(name) {
-    const entry = this._valvesEls && this._valvesEls.rows.get(name);
-    if (!entry) {
-      return;
-    }
-    entry.expanded = !entry.expanded;
-    entry.detailTr.style.display = entry.expanded ? "" : "none";
-    entry.parts.caret.classList.toggle("open", entry.expanded);
-    entry.parts.caret.title = entry.expanded
-      ? this._t("val_hide_loops")
-      : this._t("val_show_loops");
-  }
-
-  _updateValveRow(entry, r) {
-    const p = entry.parts;
-    entry.tr.classList.toggle("selected", r.name === this._selectedRoom);
-
-    // Command valve % + bar.
-    const cmd = r.valve === null ? 0 : clamp(r.valve, 0, 100);
-    p.cmdFill.style.width = cmd + "%";
-    p.cmdVal.textContent = fmt(r.valve, 0, "%");
-
-    // Raw valve % with the term contributions in the tooltip.
-    p.raw.textContent = fmt(r.rawValve, 0, "%");
-    p.raw.title = fmtStr(this._t("val_raw_tooltip"), {
-      p: signed(r.pTerm, 1, "%"),
-      i: signed(r.iTerm, 1, "%"),
-      t: signed(r.trendTerm, 1, "%"),
-      f: signed(r.ffTerm, 1, "%"),
-    });
-
-    // Floor chip (only when the heating valve floor was applied).
-    if (r.valveFloor) {
-      p.floor.className = "chip chip-warn";
-      p.floor.textContent = fmtStr(this._t("val_floor_chip"), {
-        v: fmt(r.valve, 0),
-      });
-    } else {
-      p.floor.className = "muted";
-      p.floor.textContent = "—";
-    }
-
-    // Saturation chip.
-    if (r.saturated) {
-      p.sat.className = "chip chip-warn";
-      p.sat.textContent = this._t("yes");
-    } else {
-      p.sat.className = "muted";
-      p.sat.textContent = "—";
-    }
-
-    // S2 cooling throttle: 0 → condensation, (0,1) → reduced flow, 1 → open.
-    if (r.throttle !== null && r.throttle < 1) {
-      if (r.throttle <= 0) {
-        p.s2.className = "chip chip-problem";
-        p.s2.textContent = this._t("val_s2_condensation");
-      } else {
-        p.s2.className = "chip chip-warn";
-        p.s2.textContent = fmtStr(this._t("val_s2_flow"), {
-          v: fmt(r.throttle * 100, 0),
-        });
-      }
-    } else {
-      p.s2.className = "muted";
-      p.s2.textContent = "—";
-    }
-
-    // Aggregated loop feedback + per-loop rows.
-    const positions = [];
-    for (const ref of entry.loops) {
-      const pos = this._valvePosition(ref.loop.valveId);
-      ref.fbEl.textContent =
-        pos === null
-          ? this._t("wire_missing")
-          : fmtStr(this._t("val_feedback_pos"), { v: fmt(pos, 0) });
-      const sup = this._stateNum(ref.loop.supplyId);
-      const ret = this._stateNum(ref.loop.returnId);
-      ref.supEl.textContent = fmt(sup, 1, "°");
-      ref.retEl.textContent = fmt(ret, 1, "°");
-      ref.dtEl.textContent =
-        sup !== null && ret !== null ? signed(sup - ret, 1, " K") : "—";
-      if (pos !== null) {
-        positions.push(pos);
-      }
-    }
-    if (positions.length) {
-      const avg = positions.reduce((s, v) => s + v, 0) / positions.length;
-      p.feedback.textContent = fmt(avg, 0, "%");
-      const mismatch = r.valve !== null && Math.abs(avg - r.valve) > VALVE_MISMATCH_PCT;
-      p.feedback.classList.toggle("mismatch", mismatch);
-    } else {
-      p.feedback.textContent = "—";
-      p.feedback.classList.remove("mismatch");
-    }
   }
 
   // --------------------------------------------------------------------------
@@ -9105,14 +8787,14 @@ details.flag-legend[open] > summary { margin-bottom: 12px; }
 .flag-row.is-on.sev-alarm .flag-dot { background: var(--t-error); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t-error) 28%, transparent); }
 
 /* Valves + Assist tables (share the room-table look) */
-.valves-table, .assist-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.assist-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 /* Sentence-case headers (A1) — consistent with the Rooms table. */
-.valves-table thead th, .assist-table thead th {
+.assist-table thead th {
   position: sticky; top: 0; z-index: 1; background: var(--t-card); text-align: left; white-space: nowrap;
   font-size: 12px; font-weight: 600;
   color: var(--t-muted); padding: 8px 10px; border-bottom: 1px solid var(--t-line);
 }
-.valves-table tbody td, .assist-table tbody td {
+.assist-table tbody td {
   padding: 8px 10px; border-bottom: 1px solid var(--t-line); vertical-align: middle;
 }
 .valve-row, .assist-row { cursor: pointer; transition: background-color .1s ease; }

@@ -956,9 +956,10 @@ Must render:
 - Header with global **home temperature** (editable -> `set_home_temperature` WS), **mode** selector
   (`set_mode`), the global safe dew point and algorithm/watchdog status. A whole-home stop is
   expressed as putting every room in `off` (no separate kill toggle).
-- Four **tabs** (order authoritative for keyboard navigation): **Pokoje** (rooms table),
-  **Strojenie** (tuning), **Zawory** (valves), **Wspomaganie** (fast-source assist). Later
-  additive tabs: **Flagi** (v0.10.3), **Pompa ciepła** (v0.8.0) and **Rozdzielacze** (v0.21.0):
+- **Tabs** (order authoritative for keyboard navigation): **Pokoje** (rooms table),
+  **Flagi** (v0.10.3), **Strojenie** (tuning), **Rozdzielacze** (v0.21.0; since v0.21.1 it
+  stands where the retired **Zawory** valves table was), **Wspomaganie** (fast-source
+  assist), **Pompa ciepła** (v0.8.0). The manifolds tab:
   one card per configured manifold — head stats, an axonometric drawing of a parametric
   KAN-therm InoxFlow UFST (string-built SVG, HA-sourced text escaped, repainted on resize)
   and a circuit table — rendered from `get_live.manifolds`; values with an entity open the

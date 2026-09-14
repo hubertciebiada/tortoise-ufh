@@ -192,9 +192,6 @@ Reiter:
   Bei jedem Parameter ein **„i“**-Symbol mit Erläuterung (mit der Maus überfahren,
   klicken oder tippen). Die Gruppe „Wärmepumpe — Wasser“ ist nur im Bereich Global
   sichtbar (§8).
-- **Ventile** — je Raum: Befehl, Rohwert, Minimum (Mindestöffnung), Sättigung,
-  S2-Drosselung, Rückmeldung (vom Aktor gemeldete Position); ausklappbare Heizkreise
-  mit Vorlauf/Rücklauf/ΔT. Auch die Spaltenköpfe haben „i“-Symbole.
 - **Zusatzquelle** — je Raum mit Zusatzquelle: Art, Gruppe (Multisplit), Befehl,
   Ist-Zustand der `climate`-Entität, Dwell-Timer, **erlaubte Zeiten** (Ruhezeiten-
   Fenster oder „immer“ — §10), Meldungen, Link zur Entität und die Verknüpfung
@@ -391,7 +388,7 @@ von der Ventil-Entität gemeldeten Position (dieser Kanal kann den Befehl nach e
 Reglerneustart „nachplappern“ — eine reale Störung aus dem Sommer 2026, als die
 Ventile stillstanden, aber Gehorsam meldeten). Die Reaktion ist passiv: Meldung +
 `binary_sensor`-Entität „Durchflussstörung“ + Einfrieren des Integrators; der Watchdog
-bewegt selbst kein Ventil. Im Reiter Ventile gibt es einen Chip zur
+bewegt selbst kein Ventil. Im Reiter Verteiler gibt es einen Chip zur
 Durchfluss-Gesundheit (ok / kein Durchfluss? / schließt nicht?) sowie die Schaltfläche
 für den **manuellen Aktuierungstest** — das Ventil wird bewusst für 20–30 min auf
 100 % geöffnet, und über das Ergebnis entscheidet die Antwort der Sonden (zur
@@ -673,7 +670,7 @@ Das vollständige Verzeichnis unten:
 | `s2_throttle` | Kühlung gedrosselt — der Vorlauf nähert sich dem Taupunkt (Durchfluss < 100 %). | An feuchten Tagen normal. Wenn dauerhaft: Erhöhen Sie die Wassergrenze an der Pumpe (globaler Taupunkt) oder entfeuchten Sie die Luft. |
 | `s2_condensation` | Kondensationsschutz: Der Vorlauf hat den Taupunkt erreicht — Ventil geschlossen. | Prüfen Sie Luftfeuchtigkeit und Kühlwassertemperatur; stellen Sie sicher, dass die Pumpe den globalen sicheren Taupunkt respektiert. |
 | `rh_stale_gated` | Luftfeuchtigkeit veraltet (60–120 min) — Taupunkt mit einem Zuschlag von bis zu +1 K berechnet. | Prüfen Sie den Luftfeuchtigkeitssensor. Über 120 min fällt der Raum aus den Schutzmechanismen — siehe §9. |
-| `valve_mismatch` | Der Aktor meldet seit ≥3 Zyklen eine andere Position als der Befehl („das Ventil gehorcht nicht“). | Prüfen Sie Aktor/Relais/Entität; vergleichen Sie die Spalten Befehl und Rückmeldung im Reiter Ventile. |
+| `valve_mismatch` | Der Aktor meldet seit ≥3 Zyklen eine andere Position als der Befehl („das Ventil gehorcht nicht“). | Prüfen Sie Aktor/Relais/Entität; vergleichen Sie die Spalten Befehl und Rückmeldung im Reiter Verteiler. |
 | `fast_source_mismatch` | Der Split ist in einem anderen Zustand als der Befehl (z. B. per Fernbedienung geändert). Bei Haltezeit der manuellen Steuerung = 0 (§8) ist das ein Dauerzustand — der Regler bleibt Eigentümer des Splits. Bei der Standard-Haltezeit erscheint sie nur vorübergehend: im Einschwingfenster (1–2 Zyklen nach unserem eigenen Befehl — das Gerät hat ihn womöglich noch nicht ausgeführt) sowie in dem Zyklus, in dem eine Sicherheitsregel (S3/S4, verlorener Sensor) die manuelle Steuerung beendet; eine eingeschwungene Abweichung wird als `fast_source_manual` übernommen. | Bei Haltezeit = 0: nichts — er wird beim erneuten Erzwingen (~45 min) überschrieben. Standardmäßig: nichts — nach dem Einschwingfenster geht sie in `fast_source_manual` über oder verschwindet. Für dauerhaft manuelle Steuerung schalten Sie den Raum auf Aus. |
 | `fast_source_manual` | Manuelle Steuerung (§10): Der Split wurde außerhalb der Integration verstellt — der Regler hat seinen Zustand übernommen und spiegelt ihn für die Haltezeit nur (schreibt nichts). | Informativ (beabsichtigt). Die Zeit ändern Sie in der Abstimmung; 0 schaltet die Regel ab. |
 | `fast_source_min_runtime` | Sperre der Mindestlaufzeit/-stillstandszeit — die Zusatzquelle kann den Zustand vorübergehend nicht wechseln. | Nichts — Kompressorschutz; der Timer steht im Reiter Zusatzquelle. |
@@ -708,7 +705,7 @@ Das vollständige Verzeichnis unten:
   älter als 45 min. Sehen Sie in den Abschnitt Verkabelung in den Raumdetails — dort
   sehen Sie die Rohzustände der Entitäten.
 - **Das Ventil gehorcht nicht (`valve_mismatch`)** — vergleichen Sie Befehl vs.
-  Rückmeldung (Reiter Ventile). Typische Ursachen: Aktor ohne Stromversorgung,
+  Rückmeldung (Reiter Verteiler). Typische Ursachen: Aktor ohne Stromversorgung,
   schreibgeschützte Entität, falsche Entität dem Heizkreis zugewiesen.
 - **Der Split ist in einem anderen Zustand als der Befehl** — standardmäßig Meldung
   `fast_source_manual`: Die Integration hat Ihre Änderung übernommen und schreibt für
@@ -821,7 +818,7 @@ für das ganze Haus.
   Zeuge der Ventilarbeit aus den Wassersonden des Heizkreises, der der Rückmeldung der
   Ventil-Entität nicht vertraut (Meldung `loop_no_flow`, Entität „Durchflussstörung“,
   Einfrieren des Integrators); **manueller Aktuierungstest** (Dienst
-  `tortoise_ufh.test_actuation`), ein Chip zur Durchfluss-Gesundheit im Reiter Ventile,
+  `tortoise_ufh.test_actuation`), ein Chip zur Durchfluss-Gesundheit im Reiter Verteiler,
   drei neue Abstimmungsparameter (§8). Korrekturen am Schreibpfad der Ventile: erneutes
   Erzwingen des Befehls (~45 min) und Schreiben bei einer Feedback-Abweichung — nach
   einem Ausfall des Ventilcontrollers „friert“ die Parkposition nicht mehr ein. Die

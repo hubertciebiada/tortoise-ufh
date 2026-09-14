@@ -149,7 +149,7 @@ explanation of what it did and why.
   *live* drives its hardware. A whole-house "hands off" is simply every room in
   off (see below).
 - **Sidebar panel** — a dependency-free Home Assistant panel with seven tabs (Rooms, Flags,
-  Tuning, Valves, Assist, Heat pump, Manifolds): a live per-room table (control state,
+  Tuning, Manifolds, Assist, Heat pump): a live per-room table (control state,
   measured temperature, setpoint, error, valve %, supply/return water, mode), a flag
   annunciator, controller tuning (global gains plus sparse per-room overrides), the optional
   heat-pump link, each room's full report, and a drawing of every underfloor manifold (a

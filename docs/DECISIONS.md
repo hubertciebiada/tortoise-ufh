@@ -1792,3 +1792,9 @@ circuit without a hint; the label plates are laid out by a fixed character-width
 (fine for the Roboto family the panel inherits). Tests: `tests/unit/test_manifold.py` (the
 storage form, the invariants, the view builder), `tests/ha/test_config_flow.py` (the leaf, the
 error keys, no reload on save) and `tests/ha/test_websocket.py` (`get_live.manifolds`).
+
+**v0.21.1 (2026-09-14).** The Valves tab is retired: the manifolds tab shows the same
+per-loop picture (actuator feedback, loop probes, loop flags) on the drawing and in its
+table, so the tab bar reads Pokoje · Flagi · Strojenie · Rozdzielacze · Wspomaganie ·
+Pompa ciepła. Loop names and loop temperatures on the drawing read along their pipe
+(a quarter turn counter-clockwise, no capitals) instead of alternating rows.

@@ -176,9 +176,6 @@ Zakładki:
   pokój) to **zakładki** u góry (od v0.10.1 — wcześniej chipy). Przy każdym parametrze
   ikona **„i"** z objaśnieniem (najedź myszą, kliknij lub tapnij). Grupa „Pompa ciepła —
   woda" jest widoczna tylko w zakresie Globalne (§8).
-- **Zawory** — per pokój: Komenda, Surowy, Podłoga (minimalne otwarcie), Saturacja,
-  Dławienie S2, Feedback (pozycja raportowana przez siłownik); rozwijane pętle
-  z zasilaniem/powrotem/ΔT. Nagłówki kolumn też mają ikony „i".
 - **Wspomaganie** — per pokój z szybkim źródłem: rodzaj, grupa (multisplit),
   komenda, stan rzeczywisty encji `climate`, timer dwell, **dozwolone godziny**
   (okno cichych godzin albo „zawsze" — §10), flagi, link do encji i skrót „dostrój".
@@ -363,7 +360,7 @@ czujnikach wody pętli i **nie ufa** pozycji zgłaszanej przez encję zaworu (te
 potrafi „echować" komendę po restarcie kontrolera — realna awaria z lata 2026, gdy
 zawory stały, a raportowały posłuszeństwo). Reakcja jest bierna: flaga + encja
 `binary_sensor` „usterka przepływu" + zamrożenie integratora; watchdog sam nie rusza
-zaworem. W zakładce Zawory jest chip zdrowia przepływu (ok / brak przepływu? / nie
+zaworem. W zakładce Rozdzielacze pętla bez przepływu dostaje flagę (ok / brak przepływu? / nie
 domyka?) oraz przycisk **ręcznego testu aktuacji** — zawór jest celowo otwierany na
 100 % na 20–30 min, a o wyniku decyduje odpowiedź sond (do uruchamiania po serwisie lub
 zdarzeniu zasilania; przerywany przez reguły bezpieczeństwa).
@@ -652,7 +649,7 @@ automatycznie. Pełny słownik poniżej:
   po ~5 min; zakres −10…50 °C) albo jest starszy niż 45 min. Zobacz sekcję
   Okablowanie w szczegółach pokoju — tam widać surowe stany encji.
 - **Zawór nie słucha (`valve_mismatch`)** — porównaj Komenda vs Feedback
-  (zakładka Zawory). Typowe przyczyny: siłownik bez zasilania, encja tylko do
+  (zakładka Rozdzielacze). Typowe przyczyny: siłownik bez zasilania, encja tylko do
   odczytu, zła encja przypisana do pętli.
 - **Split w innym stanie niż komenda** — domyślnie flaga `fast_source_manual`:
   integracja przyjęła Twoją zmianę i przez czas ręcznego sterowania (§8, §10) nic nie

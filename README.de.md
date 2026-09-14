@@ -144,7 +144,7 @@ für Menschen und KI lesbare Erläuterung, was er getan hat und warum.
   *Aktiv* steuert seine Hardware. Ein „Hände weg“ für das ganze Haus ist einfach jeder Raum auf
   Aus (siehe unten).
 - **Seitenleisten-Panel** — ein abhängigkeitsfreies Home-Assistant-Panel mit sieben Reitern (Räume,
-  Meldungen, Abstimmung, Ventile, Zusatzquelle, Wärmepumpe, Verteiler): eine Live-Tabelle je Raum
+  Meldungen, Abstimmung, Verteiler, Zusatzquelle, Wärmepumpe): eine Live-Tabelle je Raum
   (Regelungszustand, gemessene Temperatur, Sollwert, Regelabweichung, Ventil %, Vorlauf-/
   Rücklaufwasser, Modus), ein Meldungs-Annunciator, die Reglerabstimmung (globale Verstärkungen plus
   vereinzelte Übersteuerungen je Raum), die optionale Wärmepumpen-Anbindung, der vollständige
