@@ -3032,8 +3032,11 @@ function mfBuildModel(view) {
     // Cut the bar midway between neighbouring circuits: every fitting then sits
     // in the middle of its own segment, so no neighbouring segment (nearer by
     // its centre) is painted over a flowmeter or a eurocone nut.
+    // The end pieces are cut off too, so the outermost circuits get their own
+    // centred segments as well (the end piece towards the plug is nearer by
+    // its centre and used to be painted over the last flowmeter and actuator).
     const cuts = [];
-    for (let cx = xFirst + D.pitch / 2; cx < xLast; cx += D.pitch) {
+    for (let cx = xFirst - D.pitch / 2; cx <= xLast + D.pitch / 2; cx += D.pitch) {
       cuts.push(X(cx) - (X(Lbar / 2) - Lbar / 2));
     }
     mfCyl(L, "steel", "x", [X(Lbar / 2), yBar, zBar], rb, Lbar, { cuts });
@@ -3071,8 +3074,8 @@ function mfBuildModel(view) {
       rot: -Math.atan2(dz, yU - yL),
     });
     for (const [yBar, zBar] of bars) {
-      mfBox(L, "rubber", [X(xr), yBar, zBar - D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2]);
-      mfBox(L, "rubber", [X(xr), yBar, zBar + D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2]);
+      mfBox(L, "rubber", [X(xr), yBar, zBar - D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2], { wBias: -30 });
+      mfBox(L, "rubber", [X(xr), yBar, zBar + D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2], { wBias: 30 });
     }
   }
   for (let i = 0; i < n; i++) {
@@ -3206,7 +3209,9 @@ function mfDrawBox(b, out) {
     const mix = Math.round(b.tint * 0.6);
     svg = `<g class="r-act${b.flag ? " flag" : ""}" style="--open-mix:${mix}%">${svg}</g>`;
   }
-  out.push({ w: mfP(b.c)[2], svg, ext });
+  // wBias pushes a part towards the viewer (+) or away (-) in the painter's order:
+  // the clamp halves wrap the bar, so the front half must always come after it.
+  out.push({ w: mfP(b.c)[2] - (b.wBias || 0), svg, ext });
 }
 
 function mfDrawCyl(c, out, part) {
