@@ -9113,6 +9113,8 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 /* Pipes are translucent (owner request): whatever sits behind them shows through. */
 .r-pipe-edge { fill: none; stroke: var(--t-line); stroke-linejoin: round; stroke-linecap: butt; stroke-opacity: .8; }
 .r-pipe { fill: none; stroke: color-mix(in srgb, var(--t-fg) 26%, var(--t-card)); stroke-linejoin: round; stroke-linecap: butt; stroke-opacity: .6; }
+/* Pipes are drawn as strokes 16 mm wide in model units, so they must scale with the drawing - the non-scaling rule above is for outlines only. */
+.dash-unit-svg path.r-pipe, .dash-unit-svg path.r-pipe-edge { vector-effect: none; }
 /* Actuator: the front takes the opening colour (--open-mix = 0…60 % primary); the depth tints stay. */
 .r-act .f-front { fill: color-mix(in srgb, var(--t-primary) var(--open-mix, 0%), var(--t-card)); }
 .r-act .f-top { fill: color-mix(in srgb, var(--t-fg) 7%, color-mix(in srgb, var(--t-primary) var(--open-mix, 0%), var(--t-card))); }
