@@ -3035,7 +3035,10 @@ function mfBuildModel(view) {
     // The end pieces are cut off too, so the outermost circuits get their own
     // centred segments as well (the end piece towards the plug is nearer by
     // its centre and used to be painted over the last flowmeter and actuator).
-    const cuts = [];
+    // The pieces under the rails are cut off as well: a clamp's front half must
+    // come after the bar under it and before the fittings next to it, which the
+    // depth of a segment centred on the clamp gives without any bias.
+    const cuts = [D.railW, Lbar - D.railW].map((cx) => X(cx) - (X(Lbar / 2) - Lbar / 2));
     for (let cx = xFirst - D.pitch / 2; cx <= xLast + D.pitch / 2; cx += D.pitch) {
       cuts.push(X(cx) - (X(Lbar / 2) - Lbar / 2));
     }
@@ -3076,7 +3079,7 @@ function mfBuildModel(view) {
     });
     for (const [yBar, zBar] of bars) {
       mfBox(L, "rubber", [X(xr), yBar, zBar - D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2]);
-      mfBox(L, "rubber", [X(xr), yBar, zBar + D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2], { wBias: 30 });
+      mfBox(L, "rubber", [X(xr), yBar, zBar + D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2]);
     }
   }
   for (let i = 0; i < n; i++) {
@@ -3210,9 +3213,8 @@ function mfDrawBox(b, out) {
     const mix = Math.round(b.tint * 0.6);
     svg = `<g class="r-act${b.flag ? " flag" : ""}" style="--open-mix:${mix}%">${svg}</g>`;
   }
-  // wBias pushes a part towards the viewer (+) or away (-) in the painter's order:
-  // the rails sit on the wall behind everything, the front half of a clamp wraps
-  // the bar and must come after it; the back half falls between them on its own.
+  // wBias pushes a part towards the viewer (+) or away (-) in the painter's order;
+  // only the rails use it: they sit on the wall behind everything.
   out.push({ w: mfP(b.c)[2] - (b.wBias || 0), svg, ext });
 }
 
