@@ -2971,7 +2971,6 @@ const MF_D = {
   drainR: 11,
   drainH: 22,
   drainX: 55,
-  probeDrop: 10,
   supplyBackZ: 18,
 };
 
@@ -3032,7 +3031,6 @@ function mfBuildModel(view) {
     const sup = kind === "supply";
     mfCyl(L, "steel", "x", [X(Lbar / 2), yBar, zBar], rb, Lbar);
     mfCyl(L, "brass", "x", [X(-D.stubLen / 2), yBar, zBar], D.stubR, D.stubLen);
-    mfBox(L, "probe", [X(-D.stubLen / 2), yBar, zBar + D.stubR + 3], [12, 13, 10]);
     const mainReading = sup ? main.supply : main.return;
     if (mainReading && mainReading.entity_id) {
       anchors.push({
@@ -3106,7 +3104,6 @@ function mfBuildModel(view) {
       yb -= D.outLen;
       mfCyl(L, "brass", "y", [x, yb - D.nutLen / 2, zBar], D.nutR, D.nutLen, { seg: 6 });
       yb -= D.nutLen;
-      const yProbe = yb - D.probeDrop - 7;
       const floorY = -D.pipeDown;
       if (kind === "return") {
         mfCyl(L, "pipe", "y", [x, (yb + floorY) / 2, zBar], D.pipeR, yb - floorY);
@@ -3126,9 +3123,8 @@ function mfBuildModel(view) {
           D.pipeR,
         );
       }
-      mfBox(L, "probe", [x, yProbe, zBar], [13, 15, 13]);
       if (assigned) {
-        anchors.push({ kind, i, p: [x, yProbe - 9, zBar + 8], origin: "top" });
+        anchors.push({ kind, i, p: [x, yb - 5, zBar + 8], origin: "top" });
       }
     }
     if (assigned) {
@@ -6927,6 +6923,7 @@ class TortoiseUfhPanel extends HTMLElement {
         E.cards.delete(id);
       }
     }
+    let prevEl = null;
     for (const view of views) {
       const id = String(view.id);
       const circuits = Math.max(1, Number(view.circuits) || 1);
@@ -6941,8 +6938,13 @@ class TortoiseUfhPanel extends HTMLElement {
         card = this._buildManifoldCard(id, circuits);
         E.cards.set(id, card);
       }
-      // Append in payload order (moving existing nodes is cheap, no flicker).
-      E.grid.appendChild(card.el);
+      // Keep payload order, but never detach a node that already sits in place:
+      // re-inserting a card on every poll made mobile browsers drop the scroll
+      // position back to the top of the tab.
+      if (card.el.parentNode !== E.grid || card.el.previousElementSibling !== prevEl) {
+        E.grid.insertBefore(card.el, prevEl ? prevEl.nextSibling : E.grid.firstChild);
+      }
+      prevEl = card.el;
       this._updateManifoldCard(card, view);
     }
   }
@@ -7170,13 +7172,30 @@ class TortoiseUfhPanel extends HTMLElement {
     }
     card.paintKey = key;
     const caps = { supply: this._t("mf_supply"), return: this._t("mf_return") };
-    card.art.innerHTML = mfRenderSvg(
+    const html = mfRenderSvg(
       mfBuildModel(card.view),
       card.view,
       w,
       caps,
       String(card.view.name || ""),
     );
+    // Morph the existing <svg> instead of replacing it: the element (and the
+    // page height under the reader's thumb) stays, only its content changes.
+    const svgEl = card.art.querySelector("svg");
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html;
+    const fresh = tpl.content.firstElementChild;
+    if (!svgEl || !fresh) {
+      card.art.innerHTML = html;
+      return;
+    }
+    for (const attr of ["viewBox", "aria-label"]) {
+      const val = fresh.getAttribute(attr);
+      if (val !== null && val !== svgEl.getAttribute(attr)) {
+        svgEl.setAttribute(attr, val);
+      }
+    }
+    svgEl.replaceChildren(...fresh.childNodes);
   }
 
   // --------------------------------------------------------------------------
@@ -9080,17 +9099,17 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 .r-bracket.f-front { fill: color-mix(in srgb, var(--t-fg) 18%, var(--t-card)); }
 .r-bracket.f-top { fill: color-mix(in srgb, var(--t-fg) 26%, var(--t-card)); }
 .r-bracket.f-right { fill: color-mix(in srgb, var(--t-fg) 32%, var(--t-card)); }
-.r-rubber.f-front, .r-probe.f-front { fill: color-mix(in srgb, var(--t-fg) 34%, var(--t-card)); }
-.r-rubber.f-top, .r-probe.f-top { fill: color-mix(in srgb, var(--t-fg) 42%, var(--t-card)); }
-.r-rubber.f-right, .r-probe.f-right { fill: color-mix(in srgb, var(--t-fg) 48%, var(--t-card)); }
+.r-rubber.f-front { fill: color-mix(in srgb, var(--t-fg) 34%, var(--t-card)); }
+.r-rubber.f-top { fill: color-mix(in srgb, var(--t-fg) 42%, var(--t-card)); }
+.r-rubber.f-right { fill: color-mix(in srgb, var(--t-fg) 48%, var(--t-card)); }
 .r-dark.f-side, .r-dark.f-top, .r-dark.f-front, .r-dark.f-right { fill: color-mix(in srgb, var(--t-fg) 40%, var(--t-card)); }
 .r-glass.f-side { fill: var(--t-card); fill-opacity: .5; }
 .r-glass.f-top { fill: color-mix(in srgb, var(--t-fg) 7%, var(--t-card)); fill-opacity: .6; }
 .r-glass .hl { display: none; }
 .r-float { fill: var(--t-primary); stroke: none; }
 /* Pipes are translucent (owner request): whatever sits behind them shows through. */
-.r-pipe-edge { fill: none; stroke: var(--t-line); stroke-linejoin: round; stroke-linecap: round; stroke-opacity: .55; }
-.r-pipe { fill: none; stroke: color-mix(in srgb, var(--t-fg) 12%, var(--t-card)); stroke-linejoin: round; stroke-linecap: round; stroke-opacity: .55; }
+.r-pipe-edge { fill: none; stroke: var(--t-line); stroke-linejoin: round; stroke-linecap: round; stroke-opacity: .8; }
+.r-pipe { fill: none; stroke: color-mix(in srgb, var(--t-fg) 26%, var(--t-card)); stroke-linejoin: round; stroke-linecap: round; stroke-opacity: .6; }
 /* Actuator: the front takes the opening colour (--open-mix = 0…60 % primary); the depth tints stay. */
 .r-act .f-front { fill: color-mix(in srgb, var(--t-primary) var(--open-mix, 0%), var(--t-card)); }
 .r-act .f-top { fill: color-mix(in srgb, var(--t-fg) 7%, color-mix(in srgb, var(--t-primary) var(--open-mix, 0%), var(--t-card))); }
