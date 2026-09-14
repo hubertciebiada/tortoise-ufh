@@ -108,6 +108,8 @@ tortoise-ufh/
       controller.py                  # RoomController (black box) + BuildingController (orchestrator)
       fast_source.py                 # FastSourceMachine (split direction/dwell; annex 2026-07-10)
       trend.py                       # TrendEstimator (filtered dT/dt trend; annex 2026-07-10)
+      manifold.py                    # manifold (distributor) view model for the panel's
+                                     #   Manifolds tab — presentation only (2026-09-14, v0.21.0)
       dew_point.py                   # Magnus dew point + cooling throttle
       weather_comp.py                # WeatherCompCurve / CoolingCompCurve (feedforward)
       ufh_loop.py                    # LoopGeometry + loop_power (EN 1264) — used by simulator
@@ -909,13 +911,22 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   leaves: `add_room` / `edit_room` (name immutable) / `remove_room` (with entity-registry and
   setpoint-Store cleanup) / `settings` — the settings form carries the per-room control-state
   selects (off/live) + the advanced global controller knobs, merged over existing options
-  so the panel-managed `CONF_ROOM_TUNING` map is preserved. Use `entity_validator.py` (unit-only,
-  hardware-agnostic).
+  so the panel-managed `CONF_ROOM_TUNING` map is preserved — plus `heat_pump` (B2) and, since
+  v0.21.0, the `manifolds` sub-menu (`add_manifold` / `edit_manifold` → `edit_manifold_attrs` /
+  `remove_manifold`, each add/edit ending in `manifold_loops`: one optional loop picker
+  `position_{n}` + label `label_{n}` per circuit). Manifolds persist in
+  `entry.data[CONF_MANIFOLDS]` as `core/manifold.py::ManifoldConfig.to_dict()` (a loop is its
+  VALVE entity id; one loop on one circuit of one manifold, validated by the core); additive
+  and optional — no entry-version bump, a pre-0.21.0 entry simply has none. Use
+  `entity_validator.py` (unit-only, hardware-agnostic).
 - **`websocket.py`**: register WS commands `tortoise_ufh/get_config` (global settings + per-room
   config views: offset, `control_state`, assigned entities, resolved diagnostic-sensor entity ids
   for the panel's history charts, and the global dew-point sensor's entity id),
   `tortoise_ufh/get_live`
-  (returns `BuildingOutputs.to_dict()` + setpoints + per-room `control_state` + statuses),
+  (returns `BuildingOutputs.to_dict()` + setpoints + per-room `control_state` + statuses, and —
+  since v0.21.0 — `manifolds`: one `core/manifold.py::ManifoldView.to_dict()` per configured
+  manifold, resolved at request time from `entry.data[CONF_MANIFOLDS]`, the rooms' loop wiring,
+  the latest room outputs/report and a plain snapshot of the referenced entity states),
   `tortoise_ufh/set_home_temperature`, `tortoise_ufh/set_room_offset`,
   `tortoise_ufh/set_room_state` (`{room, state ∈ ROOM_STATES}`), `tortoise_ufh/set_mode`,
   `tortoise_ufh/get_tuning` (knob descriptors with ranges/units from
@@ -946,7 +957,12 @@ Must render:
   (`set_mode`), the global safe dew point and algorithm/watchdog status. A whole-home stop is
   expressed as putting every room in `off` (no separate kill toggle).
 - Four **tabs** (order authoritative for keyboard navigation): **Pokoje** (rooms table),
-  **Strojenie** (tuning), **Zawory** (valves), **Wspomaganie** (fast-source assist).
+  **Strojenie** (tuning), **Zawory** (valves), **Wspomaganie** (fast-source assist). Later
+  additive tabs: **Flagi** (v0.10.3), **Pompa ciepła** (v0.8.0) and **Rozdzielacze** (v0.21.0):
+  one card per configured manifold — head stats, an axonometric drawing of a parametric
+  KAN-therm InoxFlow UFST (string-built SVG, HA-sourced text escaped, repainted on resize)
+  and a circuit table — rendered from `get_live.manifolds`; values with an entity open the
+  native more-info dialog.
 - **Pokoje**: a table, one row per room, columns
   `[control-state] | Pokój | Pomiar | Zadana | Uchył | Zawór % | Zasilanie | Powrót | Tryb | Temp.`
   — the leading control is a two-button per-room **control-state** toggle (off / live

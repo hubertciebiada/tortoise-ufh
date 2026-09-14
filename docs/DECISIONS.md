@@ -1740,3 +1740,55 @@ sensor-lost in rooms whose sensor comes up later than the integration while the 
 reachable, and `force_off` then bypasses min-ON — harmless in the reported room only because
 its split entity was unavailable too.
 because its split entity was unavailable too.
+
+## 29. Manifolds tab — a physical picture of the distributors, presentation only (2026-09-14, v0.21.0)
+
+**Problem (owner):** the panel shows loops as rows of numbers; the owner wanted to see the
+two distributors as they hang on the wall — which room loop sits on which circuit, how far each
+actuator is open, the water temperatures on the circuit outlets and on the main connection —
+in the panel, without a second tool. The accepted look is the owner's mock-up (an axonometric
+KAN-therm InoxFlow UFST drawn from the maker's dimensions, yaw 25° / pitch 20° like the OAS
+air-handling-unit drawing) with translucent pipes.
+
+**Decisions:**
+
+- **Presentation only, outside the control path.** The manifold definitions live in
+  `entry.data[CONF_MANIFOLDS]`, next to the rooms, but nothing in the coordinator reads them:
+  `get_live` resolves the views at request time (`core/manifold.py::build_manifold_views`,
+  pure) from the stored definitions, the rooms' loop wiring, the latest outputs/report and a
+  plain snapshot of the referenced entity states — never the `SourceReader` (no stale cache,
+  no plausibility bookkeeping mutated by a panel poll). Saving a manifold changes only
+  `entry.data` and re-affirms the options unchanged, so the update listener finds nothing
+  reload-worthy and the PID state survives.
+- **A loop is its valve entity.** A circuit assignment is `{position, entity_valve, label}`;
+  the core resolves the valve id to `(room, loop index)` and from there to that loop's supply /
+  return probes (the rooms' parallel entity lists). Chosen over a per-room parallel list or a
+  loop index because it is robust against rooms being rewired or removed (a dangling valve
+  simply frees its circuit), it never touches the `room_entities` step (whose
+  suggested-value-only form would drop valves and probes if resent partially), and the
+  uniqueness rules — one loop on one circuit of one manifold — validate in the frozen
+  dataclasses (`ManifoldConfig.__post_init__`, `validate_manifolds`).
+- **Opening shown = feedback first, command second.** A manifold is a picture of the hardware,
+  so the actuator's reported position wins; a valve without feedback shows the room's commanded
+  position, and `command_pct` travels alongside for the panel. An implausible feedback
+  (outside 0..100) is ignored like S8 does. A room in `off` therefore still shows where its
+  valves physically stand instead of the idle command.
+- **Circuit flags** are the valve-side subset of the room flags (`s1_floor_overheat`,
+  `s2_condensation`, `valve_mismatch`) plus the per-loop S6 verdict (`loop_no_flow` only on the
+  loop whose `loop_flow_status` says so) and the per-loop self-test failure — rendered with the
+  panel's existing `FLAG_LABELS` chips.
+- **No config-entry version bump.** The key is optional and additive, exactly like the
+  heat-pump link and the global supply probe; a pre-0.21.0 entry has no manifolds and
+  `get_live.manifolds` is `[]`. (A bump would only block downgrades.)
+- **The drawing is a string-built SVG** (the accepted mock-up's renderer, 1:1) — the one place
+  the panel uses `innerHTML`; every HA-sourced text (labels, entity ids) passes through
+  `escXml`, every number is our own geometry. One `ResizeObserver` repaints a card when its
+  column changes width or the tab becomes visible; the SVG is rebuilt only when the view
+  payload or the width changed.
+
+**Trade-offs / not done:** the drawing is the InoxFlow UFST geometry regardless of the owner's
+actual hardware (the subtitle says so); a stored valve no room wires any more renders as a free
+circuit without a hint; the label plates are laid out by a fixed character-width estimate
+(fine for the Roboto family the panel inherits). Tests: `tests/unit/test_manifold.py` (the
+storage form, the invariants, the view builder), `tests/ha/test_config_flow.py` (the leaf, the
+error keys, no reload on save) and `tests/ha/test_websocket.py` (`get_live.manifolds`).

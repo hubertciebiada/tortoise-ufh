@@ -36,7 +36,8 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   controller delegates to), `TrendEstimator` (`trend.py`: filtered dT/dt), dew point,
   weather-comp feedforward, EN 1264 loop power, safety rules, the S6 hydraulic no-flow
   watchdog + actuation self-test (`flow_watchdog.py`), the opt-in heat-pump link
-  (`hp_link.py`), metrics. No HA import, ever. Vendored inside the integration for a self-contained HACS
+  (`hp_link.py`), the presentation-only manifold view model for the panel's Manifolds tab
+  (`manifold.py`, v0.21.0), metrics. No HA import, ever. Vendored inside the integration for a self-contained HACS
   install; imports its siblings relatively (`from .X import ...`).
 - **Adapter** — `custom_components/tortoise_ufh/`. Thin HA shim: `TortoiseUfhCoordinator`
   (`DataUpdateCoordinator`, 5-min nominal; feeds the core the REAL measured dt, clamped, and
@@ -51,9 +52,11 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   specs (`CONTROLLER_NUMBER_KNOBS`) and `CONF_CONTROLLER` live in `const.py`. Imports the
   core via `.core`; is imported by nothing.
 - **Panel** — `custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js`. Self-contained
-  vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Six tabs — Rooms (table
-  with the per-room two-state control), Flags, Tuning, Valves, Assist, Heat pump — rendering
-  the black-box report. Fully localised PL/EN/DE from one per-language `STR` table with a
+  vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Seven tabs — Rooms (table
+  with the per-room two-state control), Flags, Tuning, Valves, Assist, Heat pump, Manifolds
+  (v0.21.0: an axonometric KAN-therm InoxFlow UFST drawing + circuit table per configured
+  distributor, from `get_live.manifolds`; the panel's one string-built SVG, HA text escaped) —
+  rendering the black-box report. Fully localised PL/EN/DE from one per-language `STR` table with a
   guaranteed English fallback (`_resolveLang` maps the HA locale; unknown ⇒ English); the HA-side
   UI strings live in `translations/{en,pl,de}.json` (mirrors, key-parity enforced by
   `tests/unit/test_panel_i18n.py`).

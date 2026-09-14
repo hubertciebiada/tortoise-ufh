@@ -113,7 +113,8 @@
           "edit_room": "Edytuj pomieszczenie",
           "remove_room": "Usuń pomieszczenie",
           "settings": "Ustawienia sterowania i strojenia",
-          "heat_pump": "Pompa ciepła"
+          "heat_pump": "Pompa ciepła",
+          "manifolds": "Rozdzielacze"
         }
       },
       "settings": {
@@ -238,6 +239,106 @@
           "entity_hp_outlet_temp": "Sonda wody wylotu/zasilania pompy. W tej wersji tylko diagnostyka — pokazywana w zakładce Pompa ciepła; żadna logika jej jeszcze nie używa (zarezerwowana pod przyszłą ochronę przeciwrosową po stronie zasilania).",
           "entity_hp_compressor_freq": "Częstotliwość sprężarki w Hz (0 = wyłączona). Służy do wykrycia postoju pompy w martwej strefie. Przykład Panasonic: sensor.panasonic_heat_pump_main_compressor_freq."
         }
+      },
+      "manifolds": {
+        "title": "Rozdzielacze",
+        "description": "Zdefiniuj rozdzielacze podłogówki i przypisz pętle pomieszczeń do obwodów. To tylko prezentacja — zakładka Rozdzielacze w panelu je rysuje; nic tu nie zmienia sterowania.",
+        "menu_options": {
+          "add_manifold": "Dodaj rozdzielacz",
+          "edit_manifold": "Edytuj rozdzielacz",
+          "remove_manifold": "Usuń rozdzielacz"
+        }
+      },
+      "add_manifold": {
+        "title": "Dodaj rozdzielacz",
+        "description": "Nazwij rozdzielacz, podaj liczbę obwodów i stronę przyłącza głównego, opcjonalnie czujniki temperatury na głównym zasilaniu i powrocie. Pętle pomieszczeń przypiszesz do obwodów w następnym kroku.",
+        "data": {
+          "name": "Nazwa rozdzielacza",
+          "circuits": "Liczba obwodów",
+          "side": "Strona przyłącza głównego",
+          "entity_supply_main": "Czujnik temperatury głównego zasilania (opcjonalny)",
+          "entity_return_main": "Czujnik temperatury głównego powrotu (opcjonalny)"
+        },
+        "data_description": {
+          "side": "Który koniec belek ma wlot zasilania i wylot powrotu; obwód 1 to pozycja tuż obok.",
+          "entity_supply_main": "Sonda na belce zasilającej rozdzielacza, przed obwodami (Z0).",
+          "entity_return_main": "Sonda na belce powrotnej rozdzielacza, za obwodami (P0)."
+        }
+      },
+      "edit_manifold": {
+        "title": "Edytuj rozdzielacz",
+        "description": "Wybierz rozdzielacz do edycji. Nazwy nie da się zmienić (zmiana nazwy = usuń + dodaj).",
+        "data": {
+          "selected_manifold": "Rozdzielacz"
+        }
+      },
+      "edit_manifold_attrs": {
+        "title": "Edytuj rozdzielacz: {manifold_name}",
+        "description": "Zaktualizuj atrybuty rozdzielacza {manifold_name}, potem przypisanie obwodów. Obwody powyżej zmniejszonej liczby tracą pętlę.",
+        "data": {
+          "circuits": "Liczba obwodów",
+          "side": "Strona przyłącza głównego",
+          "entity_supply_main": "Czujnik temperatury głównego zasilania (opcjonalny)",
+          "entity_return_main": "Czujnik temperatury głównego powrotu (opcjonalny)"
+        },
+        "data_description": {
+          "side": "Który koniec belek ma wlot zasilania i wylot powrotu; obwód 1 to pozycja tuż obok.",
+          "entity_supply_main": "Sonda na belce zasilającej rozdzielacza, przed obwodami (Z0).",
+          "entity_return_main": "Sonda na belce powrotnej rozdzielacza, za obwodami (P0)."
+        }
+      },
+      "manifold_loops": {
+        "title": "Obwody rozdzielacza {manifold_name}",
+        "description": "Przypisz pętlę pomieszczenia do każdego z {circuits} obwodów, licząc od strony przyłącza głównego. Pętla to jej encja zaworu; etykieta to napis na rysunku (pusta = nazwa pomieszczenia). Zostaw obwód pusty, gdy nic nie jest podłączone.",
+        "data": {
+          "position_1": "Obwód 1 — pętla",
+          "label_1": "Obwód 1 — etykieta",
+          "position_2": "Obwód 2 — pętla",
+          "label_2": "Obwód 2 — etykieta",
+          "position_3": "Obwód 3 — pętla",
+          "label_3": "Obwód 3 — etykieta",
+          "position_4": "Obwód 4 — pętla",
+          "label_4": "Obwód 4 — etykieta",
+          "position_5": "Obwód 5 — pętla",
+          "label_5": "Obwód 5 — etykieta",
+          "position_6": "Obwód 6 — pętla",
+          "label_6": "Obwód 6 — etykieta",
+          "position_7": "Obwód 7 — pętla",
+          "label_7": "Obwód 7 — etykieta",
+          "position_8": "Obwód 8 — pętla",
+          "label_8": "Obwód 8 — etykieta",
+          "position_9": "Obwód 9 — pętla",
+          "label_9": "Obwód 9 — etykieta",
+          "position_10": "Obwód 10 — pętla",
+          "label_10": "Obwód 10 — etykieta",
+          "position_11": "Obwód 11 — pętla",
+          "label_11": "Obwód 11 — etykieta",
+          "position_12": "Obwód 12 — pętla",
+          "label_12": "Obwód 12 — etykieta",
+          "position_13": "Obwód 13 — pętla",
+          "label_13": "Obwód 13 — etykieta",
+          "position_14": "Obwód 14 — pętla",
+          "label_14": "Obwód 14 — etykieta",
+          "position_15": "Obwód 15 — pętla",
+          "label_15": "Obwód 15 — etykieta",
+          "position_16": "Obwód 16 — pętla",
+          "label_16": "Obwód 16 — etykieta",
+          "position_17": "Obwód 17 — pętla",
+          "label_17": "Obwód 17 — etykieta",
+          "position_18": "Obwód 18 — pętla",
+          "label_18": "Obwód 18 — etykieta",
+          "position_19": "Obwód 19 — pętla",
+          "label_19": "Obwód 19 — etykieta",
+          "position_20": "Obwód 20 — pętla",
+          "label_20": "Obwód 20 — etykieta"
+        }
+      },
+      "remove_manifold": {
+        "title": "Usuń rozdzielacz",
+        "description": "Wybierz rozdzielacz do usunięcia. Zmienia się tylko rysunek; pomieszczenia i ich pętle zostają skonfigurowane.",
+        "data": {
+          "selected_manifold": "Rozdzielacz"
+        }
       }
     },
     "error": {
@@ -253,11 +354,17 @@
       "invalid_device_class": "Encja ma nieprawidłową klasę urządzenia",
       "entity_unavailable": "Encja jest obecnie niedostępna — może pojawić się później",
       "valve_no_set_position": "Ta encja valve nie obsługuje ustawiania pozycji (SET_POSITION). Wybierz zawór z obsługą pozycji lub encję number.",
-      "quiet_window_invalid": "Podaj obie godziny okna (od i do, różne od siebie) albo żadną."
+      "quiet_window_invalid": "Podaj obie godziny okna (od i do, różne od siebie) albo żadną.",
+      "empty_manifold_name": "Nazwa rozdzielacza nie może być pusta",
+      "duplicate_manifold_name": "Rozdzielacz o tej nazwie już istnieje",
+      "invalid_manifold": "Nieprawidłowa definicja rozdzielacza",
+      "loop_assigned_twice": "Jedna pętla została przypisana do dwóch obwodów tego rozdzielacza",
+      "loop_assigned_elsewhere": "Jedna z pętli jest już przypisana na innym rozdzielaczu"
     },
     "abort": {
       "no_rooms": "Brak pomieszczeń do zarządzania",
-      "cannot_remove_last_room": "Nie można usunąć ostatniego pomieszczenia — wymagane jest co najmniej jedno pomieszczenie"
+      "cannot_remove_last_room": "Nie można usunąć ostatniego pomieszczenia — wymagane jest co najmniej jedno pomieszczenie",
+      "no_manifolds": "Brak rozdzielaczy do zarządzania"
     }
   },
   "entity": {
@@ -348,6 +455,12 @@
       "options": {
         "off": "Wyłączony",
         "live": "Steruje"
+      }
+    },
+    "manifold_side": {
+      "options": {
+        "left": "Lewa",
+        "right": "Prawa"
       }
     }
   },

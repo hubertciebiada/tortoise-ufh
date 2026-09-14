@@ -69,6 +69,26 @@ from .hp_link import (
     heating_curve,
     round_to_step_c,
 )
+from .manifold import (
+    LOOP_FLAG_NO_FLOW,
+    LOOP_FLAG_TEST_FAILED,
+    LOOP_ROOM_FLAGS,
+    MANIFOLD_CIRCUITS_MAX,
+    MANIFOLD_CIRCUITS_MIN,
+    MANIFOLD_SIDE_LEFT,
+    MANIFOLD_SIDE_RIGHT,
+    MANIFOLD_SIDES,
+    OPEN_THRESHOLD_PCT,
+    EntityReading,
+    ManifoldConfig,
+    ManifoldLoopConfig,
+    ManifoldPositionView,
+    ManifoldView,
+    RoomLoopSources,
+    ValveReading,
+    build_manifold_views,
+    validate_manifolds,
+)
 from .metrics import (
     SimMetrics,
     assert_comfort,
@@ -125,7 +145,7 @@ from .weather import (
 )
 from .weather_comp import CoolingCompCurve, WeatherCompCurve
 
-__version__ = "0.20.1"
+__version__ = "0.21.0"
 
 __all__ = [
     "BUILDING_PROFILES",
@@ -137,7 +157,16 @@ __all__ = [
     "HEATING_SUPPLY_MIN_C",
     "HEISHAMON_MODE_OPTIONS",
     "K_PEX",
+    "LOOP_FLAG_NO_FLOW",
+    "LOOP_FLAG_TEST_FAILED",
+    "LOOP_ROOM_FLAGS",
+    "MANIFOLD_CIRCUITS_MAX",
+    "MANIFOLD_CIRCUITS_MIN",
+    "MANIFOLD_SIDES",
+    "MANIFOLD_SIDE_LEFT",
+    "MANIFOLD_SIDE_RIGHT",
     "MODERN_BUNGALOW_ROOMS",
+    "OPEN_THRESHOLD_PCT",
     "SCENARIO_LIBRARY",
     "T_FLOOR_MAX_C",
     "VALID_IRRADIANCE_UNITS",
@@ -151,6 +180,7 @@ __all__ = [
     "ChannelProfile",
     "ControllerConfig",
     "CoolingCompCurve",
+    "EntityReading",
     "FastSourceCommand",
     "FastSourceKind",
     "FastSourceMachine",
@@ -159,6 +189,10 @@ __all__ = [
     "HeatPumpMode",
     "LoopGeometry",
     "LoopInput",
+    "ManifoldConfig",
+    "ManifoldLoopConfig",
+    "ManifoldPositionView",
+    "ManifoldView",
     "Mode",
     "ModelOrder",
     "Orientation",
@@ -169,6 +203,7 @@ __all__ = [
     "RoomConfig",
     "RoomController",
     "RoomInputs",
+    "RoomLoopSources",
     "RoomOutputs",
     "RoomReport",
     "SafetyAction",
@@ -185,6 +220,7 @@ __all__ = [
     "SimulationLog",
     "SyntheticWeather",
     "TrendEstimator",
+    "ValveReading",
     "WeatherCompCurve",
     "WeatherPoint",
     "WeatherSource",
@@ -195,6 +231,7 @@ __all__ = [
     "assert_no_condensation",
     "assert_no_freezing",
     "assert_no_prolonged_cold",
+    "build_manifold_views",
     "cold_snap",
     "condensation_margin",
     "cooling_demand",
@@ -219,6 +256,7 @@ __all__ = [
     "spring_transition",
     "steady_heating",
     "thin_screed",
+    "validate_manifolds",
     "well_insulated",
     "window_allows",
 ]

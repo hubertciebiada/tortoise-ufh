@@ -3,8 +3,8 @@
  *
  * A dependency-free custom element (no CDN / external imports / build step,
  * CSP-safe) that renders the per-room underfloor-heating control state as a
- * health hero + a four-tab workspace (Rooms table, Tuning, Valves and
- * Assist) + a master/detail room inspector (a sticky side column on wide
+ * health hero + a tabbed workspace (Rooms table, Flags, Tuning, Valves,
+ * Assist, Heat pump and Manifolds) + a master/detail room inspector (a sticky side column on wide
  * screens, a right-side overlay drawer on narrow ones), and lets an admin
  * edit the global home temperature, mode, per-room offset and each room's
  * two-state control (off / live). Tuning knobs and the harder decision
@@ -82,6 +82,7 @@ const TABS = [
   { key: "valves", label: "tab_valves" },
   { key: "assist", label: "tab_assist" },
   { key: "hp", label: "tab_hp" },
+  { key: "manifolds", label: "tab_manifolds" },
 ];
 const TAB_ORDER = TABS.map((t) => t.key);
 const DEFAULT_TAB = "rooms";
@@ -183,6 +184,7 @@ const STR = {
     tab_valves: "Zawory",
     tab_assist: "Wspomaganie",
     tab_hp: "Pompa ciepła",
+    tab_manifolds: "Rozdzielacze",
     manage_rooms: "Zarządzaj pokojami",
     menu_btn: "Menu boczne",
     loading: "Ładowanie…",
@@ -712,6 +714,30 @@ const STR = {
     hp_flicker_return: "Powrót / wlot",
     hp_flicker_outlet: "Wylot / zasilanie",
     hp_flicker_freq: "Sprężarka",
+    // Zakładka Rozdzielacze (v0.21.0) — rysunek KAN-therm InoxFlow UFST.
+    mf_empty:
+      "Brak skonfigurowanych rozdzielaczy. Dodaj je w opcjach integracji: " +
+      "Ustawienia → Urządzenia i usługi → Tortoise-UFH → Konfiguruj → " +
+      "Rozdzielacze (liczba obwodów, strona przyłącza głównego, sondy Z0/P0, " +
+      "potem pętla pokoju na każdym obwodzie).",
+    mf_sub: "KAN-therm InoxFlow UFST · {n} {circuits}",
+    mf_circuits_one: "obwód",
+    mf_circuits_few: "obwody",
+    mf_circuits_many: "obwodów",
+    mf_supply: "zasilanie",
+    mf_return: "powrót",
+    mf_dt: "ΔT",
+    mf_open: "otwarte",
+    mf_flags: "flagi",
+    mf_th_loop: "Pętla",
+    mf_th_open: "Otwarcie",
+    mf_th_supply: "Zasilanie",
+    mf_th_return: "Powrót",
+    mf_th_dt: "ΔT",
+    mf_th_state: "Stan",
+    mf_state_ok: "ok",
+    mf_free: "wolna",
+    mf_link_tip: "Otwórz historię encji {id}",
   },
   en: {
     status_running: "Running · cycle {age}",
@@ -751,6 +777,7 @@ const STR = {
     tab_valves: "Valves",
     tab_assist: "Assist",
     tab_hp: "Heat pump",
+    tab_manifolds: "Manifolds",
     manage_rooms: "Manage rooms",
     menu_btn: "Sidebar menu",
     loading: "Loading…",
@@ -1286,6 +1313,30 @@ const STR = {
     test_failed: "failed",
     test_aborted: "aborted",
     test_untested: "untested",
+    // Manifolds tab (v0.21.0) — the KAN-therm InoxFlow UFST drawing.
+    mf_empty:
+      "No manifolds configured. Add them in the integration options: " +
+      "Settings → Devices & services → Tortoise-UFH → Configure → Manifolds " +
+      "(circuit count, main-connection side, the Z0/P0 probes, then a room " +
+      "loop on every circuit).",
+    mf_sub: "KAN-therm InoxFlow UFST · {n} {circuits}",
+    mf_circuits_one: "circuit",
+    mf_circuits_few: "circuits",
+    mf_circuits_many: "circuits",
+    mf_supply: "supply",
+    mf_return: "return",
+    mf_dt: "ΔT",
+    mf_open: "open",
+    mf_flags: "flags",
+    mf_th_loop: "Loop",
+    mf_th_open: "Opening",
+    mf_th_supply: "Supply",
+    mf_th_return: "Return",
+    mf_th_dt: "ΔT",
+    mf_th_state: "State",
+    mf_state_ok: "ok",
+    mf_free: "free",
+    mf_link_tip: "Open the history of {id}",
   },
   de: {
     status_running: "Läuft · Zyklus {age}",
@@ -1326,6 +1377,7 @@ const STR = {
     tab_valves: "Ventile",
     tab_assist: "Zusatzquelle",
     tab_hp: "Wärmepumpe",
+    tab_manifolds: "Verteiler",
     manage_rooms: "Räume verwalten",
     menu_btn: "Seitenmenü",
     loading: "Wird geladen…",
@@ -1871,6 +1923,30 @@ const STR = {
     test_failed: "nicht bestanden",
     test_aborted: "abgebrochen",
     test_untested: "ungetestet",
+    // Reiter Verteiler (v0.21.0) — die Zeichnung des KAN-therm InoxFlow UFST.
+    mf_empty:
+      "Keine Verteiler konfiguriert. Fügen Sie sie in den Integrationsoptionen " +
+      "hinzu: Einstellungen → Geräte & Dienste → Tortoise-UFH → Konfigurieren → " +
+      "Verteiler (Anzahl der Heizkreise, Seite des Hauptanschlusses, die Sonden " +
+      "Z0/P0, danach ein Raumkreis je Anschluss).",
+    mf_sub: "KAN-therm InoxFlow UFST · {n} {circuits}",
+    mf_circuits_one: "Heizkreis",
+    mf_circuits_few: "Heizkreise",
+    mf_circuits_many: "Heizkreise",
+    mf_supply: "Vorlauf",
+    mf_return: "Rücklauf",
+    mf_dt: "ΔT",
+    mf_open: "offen",
+    mf_flags: "Meldungen",
+    mf_th_loop: "Heizkreis",
+    mf_th_open: "Öffnung",
+    mf_th_supply: "Vorlauf",
+    mf_th_return: "Rücklauf",
+    mf_th_dt: "ΔT",
+    mf_th_state: "Zustand",
+    mf_state_ok: "ok",
+    mf_free: "frei",
+    mf_link_tip: "Verlauf von {id} öffnen",
   },
 };
 
@@ -2830,6 +2906,536 @@ function niceTicks(min, max, count) {
 
 // --- Custom element ---------------------------------------------------------
 
+// --- Manifold drawing (Manifolds tab) ----------------------------------------
+//
+// A parametric KAN-therm InoxFlow UFST manifold in millimetres — x along the
+// bars, y up, z towards the viewer. The dimensions follow the maker's drawings
+// (50 mm circuit pitch, 235 mm between the bar axes, 84 mm depth with the
+// return bar 25 mm in front of the supply bar, Ø36 bars, flow meters on the
+// supply bar, M30×1.5 inserts under Möhlenhoff-sized actuators on the return
+// bar, the drain / vent section on the far end). One model per manifold,
+// projected axonometrically (yaw 25°, pitch 20° — the view of the sibling OAS
+// panel's air-handling-unit drawing) and painted back-to-front into an SVG
+// STRING. That string is this module's one use of innerHTML: every number is
+// our own geometry and everything that originates in Home Assistant (labels,
+// entity ids) passes through `escXml`.
+
+const MF_D = {
+  // Bars: circuit pitch, outer diameter, axis distance, margins to the rails.
+  pitch: 50,
+  barOD: 36,
+  barGap: 235,
+  edgeIn: 45,
+  edgeOut: 95,
+  plugLen: 7.5,
+  plugR: 21,
+  // Depth of the two bar axes and the rails / clamps holding them.
+  zS: 35,
+  zR: 60,
+  railW: 37,
+  railT: 2,
+  railTop: 45,
+  railBot: 45,
+  railUpY: 150,
+  railLoY: 95,
+  clamp: 44,
+  // Main connection stubs (G1") and their probe blocks.
+  stubLen: 30,
+  stubR: 16.85,
+  // Flow meter on the supply bar: base, ring, sight tube with its float, cap.
+  fmBaseR: 15,
+  fmBaseH: 12,
+  fmRingR: 13,
+  fmRingH: 8,
+  fmTubeR: 8,
+  fmTubeH: 28,
+  fmCapR: 7,
+  fmCapH: 6,
+  floatR: 5,
+  floatH: 7,
+  // Valve insert + adapter + actuator on the return bar.
+  vBodyR: 14,
+  vBodyH: 10,
+  adR: 15,
+  adH: 6,
+  actW: 44.3,
+  actH: 48,
+  actD: 48.4,
+  actTop: 4.2,
+  // Circuit outlets (G¾"), nuts and the pipes running down to the floor.
+  outR: 14,
+  outLen: 17,
+  nutR: 16,
+  nutLen: 12,
+  pipeR: 8,
+  pipeDown: 150,
+  // Vent / drain section and probe placement.
+  ventR: 5.5,
+  ventH: 22,
+  drainR: 11,
+  drainH: 22,
+  drainX: 55,
+  probeDrop: 10,
+  supplyBackZ: 18,
+};
+
+/** Valve opening at or above which a circuit counts as open (mirrors the core). */
+const MF_OPEN_THRESHOLD_PCT = 5;
+
+/** Escape text for interpolation into the SVG string (text and attributes). */
+function escXml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function mfCyl(list, role, axis, c, r, len, extra) {
+  list.push(Object.assign({ t: "cyl", role, axis, c, r, len }, extra || {}));
+}
+
+function mfBox(list, role, c, size, extra) {
+  list.push(Object.assign({ t: "box", role, c, s: size }, extra || {}));
+}
+
+function mfTube(list, role, pts, r) {
+  list.push({ t: "tube", role, pts, r });
+}
+
+/**
+ * Build the primitive list + label anchors for one manifold view.
+ *
+ * Every circuit position gets its hardware (flow meter, valve, actuator,
+ * outlets, pipes); only ASSIGNED positions get label anchors (name, opening,
+ * supply / return), and the main probes only when an entity is configured.
+ */
+function mfBuildModel(view) {
+  const D = MF_D;
+  const L = [];
+  const n = Math.max(1, Number(view.circuits) || 1);
+  const positions = Array.isArray(view.positions) ? view.positions : [];
+  const xFirst = D.edgeIn;
+  const xLast = xFirst + D.pitch * (n - 1);
+  const Lbar = xLast + D.edgeOut;
+  const mirror = view.side === "right";
+  const xmin = -D.stubLen;
+  const xmax = Lbar + D.plugLen;
+  const X = (x) => (mirror ? xmax - x : x - xmin);
+  const yR = 0;
+  const yS = D.barGap;
+  const rb = D.barOD / 2;
+  const anchors = [];
+  const bars = [
+    [yS, D.zS, "supply"],
+    [yR, D.zR, "return"],
+  ];
+  const main = view.main || {};
+  for (const [yBar, zBar, kind] of bars) {
+    const sup = kind === "supply";
+    mfCyl(L, "steel", "x", [X(Lbar / 2), yBar, zBar], rb, Lbar);
+    mfCyl(L, "brass", "x", [X(-D.stubLen / 2), yBar, zBar], D.stubR, D.stubLen);
+    mfBox(L, "probe", [X(-D.stubLen / 2), yBar, zBar + D.stubR + 3], [12, 13, 10]);
+    const mainReading = sup ? main.supply : main.return;
+    if (mainReading && mainReading.entity_id) {
+      anchors.push({
+        kind: sup ? "mainS" : "mainR",
+        p: [X(-D.stubLen / 2), yBar + (sup ? D.stubR + 6 : -D.stubR - 6), zBar + D.stubR],
+        origin: sup ? "bottom" : "top",
+      });
+    }
+    mfCyl(L, "steel", "x", [X(Lbar + D.plugLen / 2), yBar, zBar], D.plugR, D.plugLen + 1, {
+      seg: 6,
+    });
+    const xd = X(Lbar - D.drainX);
+    mfCyl(L, "brass", "y", [xd, yBar + rb + D.ventH / 2, zBar], D.ventR, D.ventH);
+    mfCyl(L, "dark", "y", [xd, yBar + rb + D.ventH + 3, zBar], 4, 6);
+    mfCyl(L, "brass", "y", [xd, yBar - rb - 5, zBar], 8, 10);
+    mfCyl(L, "dark", "y", [xd, yBar - rb - 10 - D.drainH / 2, zBar], D.drainR, D.drainH);
+    mfCyl(L, "brass", "y", [xd, yBar - rb - 10 - D.drainH - 7, zBar], 5, 14);
+  }
+  const zUp = D.zS - D.clamp / 2 - D.railT;
+  const zLo = D.zR - D.clamp / 2 - D.railT;
+  for (const xr of [D.railW / 2, Lbar - D.railW / 2]) {
+    const yTop = yS + D.railTop;
+    const yBot = yR - D.railBot;
+    const yU = D.railUpY;
+    const yL = D.railLoY;
+    mfBox(L, "bracket", [X(xr), (yU + yTop) / 2, zUp + D.railT / 2], [D.railW, yTop - yU, D.railT]);
+    mfBox(L, "bracket", [X(xr), (yBot + yL) / 2, zLo + D.railT / 2], [D.railW, yL - yBot, D.railT]);
+    const dz = zLo - zUp;
+    const dl = Math.hypot(yU - yL, dz);
+    mfBox(L, "bracket", [X(xr), (yU + yL) / 2, (zUp + zLo) / 2 + D.railT / 2], [D.railW, dl, D.railT], {
+      rot: -Math.atan2(dz, yU - yL),
+    });
+    for (const [yBar, zBar] of bars) {
+      mfBox(L, "rubber", [X(xr), yBar, zBar - D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2]);
+      mfBox(L, "rubber", [X(xr), yBar, zBar + D.clamp / 4], [D.railW - 4, D.clamp, D.clamp / 2]);
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    const x = X(xFirst + i * D.pitch);
+    const v = positions[i] || {};
+    const assigned = v.room_name != null;
+    const pctRaw = assigned && v.valve ? num(v.valve.pct) : null;
+    const pct = pctRaw === null ? 0 : clamp(pctRaw, 0, 100);
+    const flagged = assigned && Array.isArray(v.flags) && v.flags.length > 0;
+    let y = yS + rb;
+    mfCyl(L, "brass", "y", [x, y + D.fmBaseH / 2, D.zS], D.fmBaseR, D.fmBaseH, { seg: 6 });
+    y += D.fmBaseH;
+    mfCyl(L, "brass", "y", [x, y + D.fmRingH / 2, D.zS], D.fmRingR, D.fmRingH);
+    y += D.fmRingH;
+    mfCyl(L, "float", "y", [x, y + 4 + ((D.fmTubeH - 8) * pct) / 100, D.zS], D.floatR, D.floatH);
+    mfCyl(L, "glass", "y", [x, y + D.fmTubeH / 2, D.zS], D.fmTubeR, D.fmTubeH);
+    y += D.fmTubeH;
+    mfCyl(L, "dark", "y", [x, y + D.fmCapH / 2, D.zS], D.fmCapR, D.fmCapH, { r2: D.fmCapR - 1.5 });
+    y = yR + rb;
+    mfCyl(L, "brass", "y", [x, y + D.vBodyH / 2, D.zR], D.vBodyR, D.vBodyH, { seg: 6 });
+    y += D.vBodyH;
+    mfCyl(L, "grey", "y", [x, y + D.adH / 2, D.zR], D.adR, D.adH);
+    y += D.adH;
+    mfBox(L, "act", [x, y + D.actH / 2, D.zR], [D.actW, D.actH, D.actD], { tint: pct, flag: flagged });
+    mfBox(L, "act", [x, y + D.actH + D.actTop / 2, D.zR], [D.actW - 5, D.actTop, D.actD - 5], {
+      tint: pct,
+      flag: flagged,
+    });
+    if (assigned) {
+      anchors.push({ kind: "pct", i, p: [x, y + D.actH * 0.5, D.zR + D.actD / 2], origin: "center" });
+    }
+    for (const [yBar, zBar, kind] of bars) {
+      let yb = yBar - rb;
+      mfCyl(L, "steel", "y", [x, yb - D.outLen / 2, zBar], D.outR, D.outLen, { seg: 6 });
+      yb -= D.outLen;
+      mfCyl(L, "brass", "y", [x, yb - D.nutLen / 2, zBar], D.nutR, D.nutLen, { seg: 6 });
+      yb -= D.nutLen;
+      const yProbe = yb - D.probeDrop - 7;
+      const floorY = -D.pipeDown;
+      if (kind === "return") {
+        mfCyl(L, "pipe", "y", [x, (yb + floorY) / 2, zBar], D.pipeR, yb - floorY);
+      } else {
+        const back = D.supplyBackZ;
+        mfTube(
+          L,
+          "pipe",
+          [
+            [x, yb + 2, zBar],
+            [x, yb - 24, zBar],
+            [x, yb - 40, zBar - 5],
+            [x, yb - 58, back + 6],
+            [x, yb - 72, back],
+            [x, floorY, back],
+          ],
+          D.pipeR,
+        );
+      }
+      mfBox(L, "probe", [x, yProbe, zBar], [13, 15, 13]);
+      if (assigned) {
+        anchors.push({ kind, i, p: [x, yProbe - 9, zBar + 8], origin: "top" });
+      }
+    }
+    if (assigned) {
+      anchors.push({
+        kind: "name",
+        i,
+        text: String(v.loop_label || v.room_name || ""),
+        p: [x, yS + 72 + 10, D.zS],
+        origin: "bottom",
+      });
+    }
+  }
+  return { prims: L, anchors, B: Lbar };
+}
+
+// Axonometric projection (yaw 25°, pitch 20°); the model has z towards the
+// viewer, so z' = -z before projecting.
+const MF_YAW = (25 * Math.PI) / 180;
+const MF_PITCH = (20 * Math.PI) / 180;
+const MF_U = [Math.cos(MF_YAW), 0, Math.sin(MF_YAW)];
+const MF_V = [-Math.sin(MF_PITCH) * Math.sin(MF_YAW), Math.cos(MF_PITCH), Math.sin(MF_PITCH) * Math.cos(MF_YAW)];
+const MF_W = [-Math.cos(MF_PITCH) * Math.sin(MF_YAW), -Math.sin(MF_PITCH), Math.cos(MF_PITCH) * Math.cos(MF_YAW)];
+const mfDot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const mfAdd = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const mfMul = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+const mfCross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const mfFlip = (v) => [v[0], v[1], -v[2]];
+function mfP(p) {
+  const q = mfFlip(p);
+  return [mfDot(q, MF_U), -mfDot(q, MF_V), mfDot(q, MF_W)];
+}
+// A face is visible when its outward normal points at the viewer.
+const mfFacing = (nrm) => mfDot(mfFlip(nrm), MF_W) < 0;
+const MF_LIGHT = (() => {
+  const l = [0.35, 0.8, 0.55];
+  return mfMul(l, 1 / Math.hypot(l[0], l[1], l[2]));
+})();
+const mfF1 = (v) => (Math.round(v * 10) / 10).toFixed(1);
+const mfPoly = (pts) => pts.map((pt) => mfF1(pt[0]) + "," + mfF1(pt[1])).join(" ");
+const MF_AXES = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+
+function mfDrawBox(b, out) {
+  const [w, hh, d] = b.s;
+  const th = b.rot || 0;
+  const rot = (v) =>
+    th ? [v[0], v[1] * Math.cos(th) - v[2] * Math.sin(th), v[1] * Math.sin(th) + v[2] * Math.cos(th)] : v;
+  const corner = (sx, sy, sz) => mfAdd(b.c, rot([(sx * w) / 2, (sy * hh) / 2, (sz * d) / 2]));
+  const faces = [
+    [[0, 0, 1], [[-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]]],
+    [[0, 1, 0], [[-1, 1, -1], [1, 1, -1], [1, 1, 1], [-1, 1, 1]]],
+    [[1, 0, 0], [[1, -1, -1], [1, 1, -1], [1, 1, 1], [1, -1, 1]]],
+    [[0, 0, -1], [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1]]],
+    [[0, -1, 0], [[-1, -1, -1], [1, -1, -1], [1, -1, 1], [-1, -1, 1]]],
+    [[-1, 0, 0], [[-1, -1, -1], [-1, 1, -1], [-1, 1, 1], [-1, -1, 1]]],
+  ];
+  let svg = "";
+  const ext = [];
+  for (const [n0, cs] of faces) {
+    const nrm = rot(n0);
+    const pp = cs.map((c) => mfP(corner(c[0], c[1], c[2])));
+    ext.push(...pp);
+    if (!mfFacing(nrm)) {
+      continue;
+    }
+    const ax = Math.abs(nrm[0]);
+    const ay = Math.abs(nrm[1]);
+    const az = Math.abs(nrm[2]);
+    const tone = ay >= ax && ay >= az ? "top" : ax >= az ? "right" : "front";
+    svg += `<polygon class="f-${tone} r-${b.role}" points="${mfPoly(pp)}"/>`;
+  }
+  if (b.tint != null) {
+    const mix = Math.round(b.tint * 0.6);
+    svg = `<g class="r-act${b.flag ? " flag" : ""}" style="--open-mix:${mix}%">${svg}</g>`;
+  }
+  out.push({ w: mfP(b.c)[2], svg, ext });
+}
+
+function mfDrawCyl(c, out, part) {
+  const which = part || "whole";
+  const hasA = which === "whole" || which === "first";
+  const hasB = which === "whole" || which === "last";
+  const a = MF_AXES[c.axis];
+  const e1 = c.axis === "y" ? [1, 0, 0] : [0, 1, 0];
+  const e2 = mfCross(a, e1);
+  const rA = c.r;
+  const rB = c.r2 != null ? c.r2 : c.r;
+  const cA = mfAdd(c.c, mfMul(a, -c.len / 2));
+  const cB = mfAdd(c.c, mfMul(a, c.len / 2));
+  const pA = mfP(cA);
+  const pB = mfP(cB);
+  const p0 = mfP(c.c);
+  const E1 = [mfP(mfAdd(c.c, e1))[0] - p0[0], mfP(mfAdd(c.c, e1))[1] - p0[1]];
+  const E2 = [mfP(mfAdd(c.c, e2))[0] - p0[0], mfP(mfAdd(c.c, e2))[1] - p0[1]];
+  const d = [pB[0] - pA[0], pB[1] - pA[1]];
+  const cr2 = (u, v) => u[0] * v[1] - u[1] * v[0];
+  const pt = (pc, rr, t) => [
+    pc[0] + rr * (E1[0] * Math.cos(t) + E2[0] * Math.sin(t)),
+    pc[1] + rr * (E1[1] * Math.cos(t) + E2[1] * Math.sin(t)),
+  ];
+  const nearIsB = mfFacing(a);
+  let body;
+  if (Math.hypot(d[0], d[1]) < 0.5) {
+    body = "";
+  } else {
+    const t0 = Math.atan2(cr2(E2, d), cr2(E1, d));
+    const arc = (pc, rr, from, dir, N) => {
+      const pts = [];
+      for (let k = 0; k <= N; k++) {
+        pts.push(pt(pc, rr, from + (dir * Math.PI * k) / N));
+      }
+      return pts;
+    };
+    // The end-B arc bulges away from A (further along d), the end-A arc away from B.
+    const away = (pc, rr, from, sign) => {
+      const m = pt(pc, rr, from + (sign * Math.PI) / 2);
+      return (m[0] - pc[0]) * d[0] + (m[1] - pc[1]) * d[1];
+    };
+    const dirB = away(pB, rB, t0, 1) > away(pB, rB, t0, -1) ? 1 : -1;
+    const dirA = away(pA, rA, t0 + Math.PI, 1) < away(pA, rA, t0 + Math.PI, -1) ? 1 : -1;
+    const arcB = arc(pB, rB, t0, dirB, 10);
+    const arcA = arc(pA, rA, t0 + Math.PI, dirA, 10);
+    body = `<polygon class="f-side nostroke r-${c.role}" points="${mfPoly([...arcB, ...arcA])}"/>`;
+    let edge =
+      `M${mfPoly([pt(pA, rA, t0), pt(pB, rB, t0)]).replace(" ", " L")} ` +
+      `M${mfPoly([pt(pA, rA, t0 + Math.PI), pt(pB, rB, t0 + Math.PI)]).replace(" ", " L")}`;
+    if (hasB) {
+      edge += " M" + mfPoly(arcB).replace(/ /g, " L");
+    }
+    if (hasA) {
+      edge += " M" + mfPoly(arcA).replace(/ /g, " L");
+    }
+    body += `<path class="cyl-edge" d="${edge}"/>`;
+    // A highlight on the lit side, only on the visible half of the shell.
+    const th = Math.atan2(mfDot(e2, MF_LIGHT), mfDot(e1, MF_LIGHT));
+    const nl = mfAdd(mfMul(e1, Math.cos(th)), mfMul(e2, Math.sin(th)));
+    if (mfFacing(nl) && c.role !== "glass" && c.role !== "float") {
+      const q = [pt(pA, rA, th - 0.4), pt(pB, rB, th - 0.4), pt(pB, rB, th + 0.4), pt(pA, rA, th + 0.4)];
+      body += `<polygon class="hl" points="${mfPoly(q)}"/>`;
+    }
+  }
+  const capTone = c.axis === "y" ? "top" : c.axis === "x" ? "right" : "front";
+  const pc = nearIsB ? pB : pA;
+  const rr = nearIsB ? rB : rA;
+  const capHere = nearIsB ? hasB : hasA;
+  const cap = capHere
+    ? `<circle class="f-${capTone} r-${c.role}" r="${rr}" transform="matrix(${mfF1(E1[0])} ${mfF1(E1[1])} ${mfF1(E2[0])} ${mfF1(E2[1])} ${mfF1(pc[0])} ${mfF1(pc[1])})"/>`
+    : "";
+  const rx = Math.max(rA, rB) * (Math.hypot(E1[0], E1[1]) + Math.hypot(E2[0], E2[1]));
+  const ext = [
+    [pA[0] - rx, pA[1] - rx],
+    [pA[0] + rx, pA[1] + rx],
+    [pB[0] - rx, pB[1] - rx],
+    [pB[0] + rx, pB[1] + rx],
+  ];
+  out.push({ w: p0[2], svg: `<g class="r-${c.role}">${body}${cap}</g>`, ext });
+}
+
+function mfDrawTube(t, out) {
+  const pts = t.pts.map(mfP);
+  const dpath = pts.map((pt, i) => (i ? "L" : "M") + mfF1(pt[0]) + " " + mfF1(pt[1])).join(" ");
+  const w = pts.reduce((sum, pt) => sum + pt[2], 0) / pts.length;
+  const ext = pts.flatMap((pt) => [
+    [pt[0] - t.r, pt[1] - t.r],
+    [pt[0] + t.r, pt[1] + t.r],
+  ]);
+  out.push({
+    w,
+    svg:
+      `<path class="r-pipe-edge" d="${dpath}" style="stroke-width:${2 * t.r + 1.4}"/>` +
+      `<path class="r-pipe" d="${dpath}" style="stroke-width:${2 * t.r}"/>`,
+    ext,
+  });
+}
+
+/**
+ * One label on a plate. Values that come from an entity get `ua-link` and a
+ * `data-entity` attribute (the card delegates the click to `_moreInfo`).
+ * `caps` holds the localised supply / return captions of the main probes.
+ */
+function mfLabel(a, fs, view, stagger, caps) {
+  const p = mfP(a.p);
+  const positions = Array.isArray(view.positions) ? view.positions : [];
+  const v = a.i != null ? positions[a.i] || {} : null;
+  let text;
+  let cls = "ua-text";
+  let cap = null;
+  let entity = null;
+  let size = fs;
+  if (a.kind === "name") {
+    text = a.text.toUpperCase();
+    cls += " ua-cap";
+    size *= 0.86;
+  } else if (a.kind === "pct") {
+    const pct = v.valve ? num(v.valve.pct) : null;
+    text = pct === null ? "—" : Math.round(pct) + " %";
+    const flagged = Array.isArray(v.flags) && v.flags.length > 0;
+    cls += " ua-val" + (flagged ? " ua-err" : "");
+    entity = v.valve ? v.valve.entity_id : null;
+  } else if (a.kind === "supply" || a.kind === "return") {
+    const r = (a.kind === "supply" ? v.supply : v.return) || {};
+    text = fmt(r.value, 1, " °C");
+    cls += " ua-val";
+    entity = r.entity_id;
+  } else {
+    const main = view.main || {};
+    const r = (a.kind === "mainS" ? main.supply : main.return) || {};
+    text = fmt(r.value, 1, " °C");
+    cls += " ua-val";
+    entity = r.entity_id;
+    cap = a.kind === "mainS" ? caps.supply : caps.return;
+  }
+  if (entity) {
+    cls += " ua-link";
+  }
+  const cw = text.length * size * 0.58 + 8;
+  const ch = size * 1.35;
+  const x = p[0];
+  let y = p[1];
+  const dy = stagger && a.i != null ? (a.i % 2) * ch * 1.05 : 0;
+  if (a.origin === "bottom") {
+    y -= ch / 2 + dy;
+  } else if (a.origin === "top") {
+    y += ch / 2 + dy;
+  }
+  if (a.kind === "name" && stagger) {
+    y -= dy * 2; // names alternate upwards
+  }
+  const link = entity ? ` data-entity="${escXml(entity)}"` : "";
+  let svg = `<rect class="ua-plate" x="${mfF1(x - cw / 2)}" y="${mfF1(y - ch / 2)}" width="${mfF1(cw)}" height="${mfF1(ch)}" rx="3"/>`;
+  svg += `<text class="${cls}"${link} x="${mfF1(x)}" y="${mfF1(y)}" font-size="${mfF1(size)}" text-anchor="middle" dominant-baseline="central">${escXml(text)}</text>`;
+  if (cap) {
+    const capCls = a.kind === "mainS" ? "ua-sup" : "ua-ret";
+    const cy = a.origin === "bottom" ? y - ch * 0.95 : y + ch * 0.95;
+    const capW = cap.length * size * 0.5 + 8;
+    svg += `<rect class="ua-plate" x="${mfF1(x - capW / 2)}" y="${mfF1(cy - ch * 0.42)}" width="${mfF1(capW)}" height="${mfF1(ch * 0.84)}" rx="3"/>`;
+    svg += `<text class="ua-text ua-cap ${capCls}" x="${mfF1(x)}" y="${mfF1(cy)}" font-size="${mfF1(size * 0.86)}" text-anchor="middle" dominant-baseline="central">${escXml(cap)}</text>`;
+  }
+  return { svg, box: [x - cw / 2, y - ch, x + cw / 2, y + ch] };
+}
+
+/**
+ * Render one manifold view into an SVG string sized for `widthPx`.
+ *
+ * Long cylinders are split into segments so the painter's order (far to near
+ * by projected depth) interleaves correctly with the parts crossing them;
+ * label plates are laid out last and widen the viewBox as needed.
+ */
+function mfRenderSvg(model, view, widthPx, caps, ariaLabel) {
+  const out = [];
+  for (const prim of model.prims) {
+    if (prim.t === "box") {
+      mfDrawBox(prim, out);
+      continue;
+    }
+    if (prim.t === "tube") {
+      for (let k = 0; k + 1 < prim.pts.length; k++) {
+        mfDrawTube({ role: prim.role, r: prim.r, pts: [prim.pts[k], prim.pts[k + 1]] }, out);
+      }
+      continue;
+    }
+    const k = prim.axis === "z" ? 1 : Math.max(1, Math.ceil(prim.len / 50));
+    if (k === 1 || prim.r2 != null) {
+      mfDrawCyl(prim, out);
+      continue;
+    }
+    const a = MF_AXES[prim.axis];
+    const seg = prim.len / k;
+    for (let i = 0; i < k; i++) {
+      const c = mfAdd(prim.c, mfMul(a, -prim.len / 2 + seg * (i + 0.5)));
+      mfDrawCyl(Object.assign({}, prim, { c, len: seg }), out, i === 0 ? "first" : i === k - 1 ? "last" : "mid");
+    }
+  }
+  out.sort((a, b) => b.w - a.w);
+  let minX = 1e9;
+  let minY = 1e9;
+  let maxX = -1e9;
+  let maxY = -1e9;
+  const ext = (pt) => {
+    minX = Math.min(minX, pt[0]);
+    maxX = Math.max(maxX, pt[0]);
+    minY = Math.min(minY, pt[1]);
+    maxY = Math.max(maxY, pt[1]);
+  };
+  out.forEach((o) => o.ext.forEach(ext));
+  const vbW0 = maxX - minX + 40;
+  const scale = widthPx / vbW0;
+  const fs = 11.5 / scale;
+  const pitchPx = MF_D.pitch * MF_U[0] * scale;
+  const stagger = pitchPx < 60;
+  const labels = model.anchors.map((a) => mfLabel(a, fs, view, stagger, caps));
+  labels.forEach((l) => {
+    ext([l.box[0], l.box[1]]);
+    ext([l.box[2], l.box[3]]);
+  });
+  const m = 8;
+  const vb = [minX - m, minY - m, maxX - minX + 2 * m, maxY - minY + 2 * m];
+  return (
+    `<svg class="mf-svg" viewBox="${vb.map(mfF1).join(" ")}" role="img" aria-label="${escXml(ariaLabel)}">` +
+    out.map((o) => o.svg).join("") +
+    labels.map((l) => l.svg).join("") +
+    "</svg>"
+  );
+}
+
 class TortoiseUfhPanel extends HTMLElement {
   // --------------------------------------------------------------------------
   // Lifecycle, wiring & timers
@@ -2869,6 +3475,8 @@ class TortoiseUfhPanel extends HTMLElement {
     this._tuningEls = null; // stable Tuning-section refs
     this._tuningLoading = false; // in-flight guard for the lazy fetch
     this._hpEls = null; // stable Heat-pump-section refs (B2)
+    this._manifoldEls = null; // Manifolds-section refs + cards by manifold id
+    this._mfRO = null; // ResizeObserver repainting a manifold drawing on resize
     // Errors are suppressed until this epoch-ms (a save reloads the entry, so
     // get_live / get_tuning briefly return not_found — that is expected).
     this._suppressErrorUntil = 0;
@@ -2998,6 +3606,7 @@ class TortoiseUfhPanel extends HTMLElement {
   disconnectedCallback() {
     this._stopTimers();
     this._disconnectChartRO();
+    this._disconnectMfRO();
     document.removeEventListener("visibilitychange", this._onVisibility);
   }
 
@@ -4003,7 +4612,7 @@ class TortoiseUfhPanel extends HTMLElement {
     const hero = this._buildHero();
     const tabbar = this._buildTabs();
 
-    // Four sections, built once and toggled with `display` (never rebuilt), so
+    // The tab sections, built once and toggled with `display` (never rebuilt), so
     // switching tabs is instant and never disturbs scroll or in-flight fetches.
     const roomsSection = this._buildRoomsSection();
     const sections = {
@@ -4013,6 +4622,7 @@ class TortoiseUfhPanel extends HTMLElement {
       valves: this._buildValvesSection(),
       assist: this._buildAssistSection(),
       hp: this._buildHpSection(),
+      manifolds: this._buildManifoldsSection(),
     };
     this._tabs.sections = sections;
 
@@ -4242,6 +4852,8 @@ class TortoiseUfhPanel extends HTMLElement {
       this._renderAssist();
     } else if (this._activeTab === "hp") {
       this._renderHp();
+    } else if (this._activeTab === "manifolds") {
+      this._renderManifolds();
     }
   }
 
@@ -6564,6 +7176,327 @@ class TortoiseUfhPanel extends HTMLElement {
   }
 
   // --------------------------------------------------------------------------
+  // Manifolds tab
+  // --------------------------------------------------------------------------
+
+  /**
+   * Build the Manifolds section skeleton: an empty-state line and the card
+   * grid (cards are reconciled per manifold id by `_renderManifolds`). One
+   * ResizeObserver serves every card's drawing container, so a card repaints
+   * when its column changes width or when the tab becomes visible (width 0
+   * -> real width).
+   */
+  _buildManifoldsSection() {
+    const empty = h("div", { class: "empty", text: this._t("loading") });
+    const grid = h("div", { class: "mf-grid", style: "display:none" });
+    const el = h(
+      "section",
+      { class: "tab-section", role: "tabpanel", style: "display:none", dataset: { tab: "manifolds" } },
+      [empty, grid],
+    );
+    this._disconnectMfRO();
+    if (typeof ResizeObserver !== "undefined") {
+      this._mfRO = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const card = this._manifoldEls && this._manifoldEls.byArt.get(entry.target);
+          if (card) {
+            this._paintManifold(card);
+          }
+        }
+      });
+    }
+    this._manifoldEls = { el, empty, grid, cards: new Map(), byArt: new Map() };
+    return el;
+  }
+
+  _disconnectMfRO() {
+    if (this._mfRO) {
+      this._mfRO.disconnect();
+      this._mfRO = null;
+    }
+  }
+
+  /** Reconcile the manifold cards from the polled live payload. */
+  _renderManifolds() {
+    const E = this._manifoldEls;
+    if (!E) {
+      return;
+    }
+    const views =
+      this._live && Array.isArray(this._live.manifolds) ? this._live.manifolds : [];
+    if (!views.length) {
+      for (const [, card] of E.cards) {
+        this._dropManifoldCard(card);
+      }
+      E.cards.clear();
+      E.empty.textContent = this._live ? this._t("mf_empty") : this._t("loading");
+      E.empty.style.display = "";
+      E.grid.style.display = "none";
+      return;
+    }
+    E.empty.style.display = "none";
+    E.grid.style.display = "";
+
+    const desired = new Set(views.map((v) => String(v.id)));
+    for (const [id, card] of [...E.cards]) {
+      if (!desired.has(id)) {
+        this._dropManifoldCard(card);
+        E.cards.delete(id);
+      }
+    }
+    for (const view of views) {
+      const id = String(view.id);
+      const circuits = Math.max(1, Number(view.circuits) || 1);
+      let card = E.cards.get(id);
+      // Rebuild when the circuit count changed (the table rows are fixed).
+      if (card && card.circuits !== circuits) {
+        this._dropManifoldCard(card);
+        E.cards.delete(id);
+        card = undefined;
+      }
+      if (!card) {
+        card = this._buildManifoldCard(id, circuits);
+        E.cards.set(id, card);
+      }
+      // Append in payload order (moving existing nodes is cheap, no flicker).
+      E.grid.appendChild(card.el);
+      this._updateManifoldCard(card, view);
+    }
+  }
+
+  _dropManifoldCard(card) {
+    if (this._mfRO) {
+      this._mfRO.unobserve(card.art);
+    }
+    if (this._manifoldEls) {
+      this._manifoldEls.byArt.delete(card.art);
+    }
+    card.el.remove();
+  }
+
+  /**
+   * A value that MAY link to an entity's native dialog: a plain-text button
+   * (keyboard reachable) that only shows a pointer cursor when linked.
+   */
+  _mfLink(extraClass) {
+    const btn = h("button", {
+      class: "mf-link" + (extraClass ? " " + extraClass : ""),
+      type: "button",
+      disabled: true,
+    });
+    btn.addEventListener("click", () => this._moreInfo(btn.dataset.entity || null));
+    return btn;
+  }
+
+  _setMfLink(btn, text, entityId) {
+    btn.textContent = text;
+    if (entityId) {
+      btn.disabled = false;
+      btn.dataset.entity = entityId;
+      btn.title = fmtStr(this._t("mf_link_tip"), { id: entityId });
+      btn.classList.add("linked");
+    } else {
+      btn.disabled = true;
+      delete btn.dataset.entity;
+      btn.removeAttribute("title");
+      btn.classList.remove("linked");
+    }
+  }
+
+  /** Localised "circuit(s)" word for the card subtitle (Polish plural rules). */
+  _mfCircuitsWord(n) {
+    if (n === 1) {
+      return this._t("mf_circuits_one");
+    }
+    if (this._lang === "pl") {
+      const m10 = n % 10;
+      const m100 = n % 100;
+      if (m10 >= 2 && m10 <= 4 && !(m100 >= 12 && m100 <= 14)) {
+        return this._t("mf_circuits_few");
+      }
+    }
+    return this._t("mf_circuits_many");
+  }
+
+  /** Build one manifold card: head with stats, drawing container, circuit table. */
+  _buildManifoldCard(id, circuits) {
+    const p = {};
+    p.title = h("span", { class: "mf-title" });
+    p.sub = h("span", { class: "mf-sub" });
+    const stat = (capKey, cls) => {
+      const val = this._mfLink("stat-val");
+      const el = h("span", { class: "stat" + (cls ? " " + cls : "") }, [
+        h("span", { class: "stat-cap", text: this._t(capKey) }),
+        val,
+      ]);
+      return { el, val };
+    };
+    p.supply = stat("mf_supply");
+    p.return = stat("mf_return");
+    p.dt = stat("mf_dt");
+    p.open = stat("mf_open");
+    p.flags = stat("mf_flags", "sev-warn");
+    p.flags.el.style.display = "none";
+    const stats = h("span", { class: "mf-stats" }, [
+      p.supply.el,
+      p.return.el,
+      p.dt.el,
+      p.open.el,
+      p.flags.el,
+    ]);
+    const head = h("div", { class: "mf-head" }, [p.title, p.sub, stats]);
+
+    // The drawing: an SVG string swapped in by `_paintManifold`; clicks on a
+    // labelled value (data-entity) open the native entity dialog.
+    const art = h("div", {
+      class: "mf-art",
+      on: {
+        click: (e) => {
+          const target =
+            e.target && e.target.closest ? e.target.closest("[data-entity]") : null;
+          if (target) {
+            this._moreInfo(target.getAttribute("data-entity"));
+          }
+        },
+      },
+    });
+
+    const headKeys = ["mf_th_loop", "mf_th_open", "mf_th_supply", "mf_th_return", "mf_th_dt", "mf_th_state"];
+    const headCells = headKeys.map((key, i) =>
+      h("th", { scope: "col", class: i >= 2 && i <= 4 ? "n" : null, text: this._t(key) }),
+    );
+    const tbody = h("tbody");
+    const rows = [];
+    for (let i = 0; i < circuits; i++) {
+      const r = {};
+      r.label = h("td", { class: "mf-loop" });
+      r.barFill = h("i");
+      r.pct = this._mfLink();
+      r.supply = this._mfLink();
+      r.return = this._mfLink();
+      r.dt = h("span");
+      r.chips = h("div", { class: "mf-chips" });
+      r.tr = h("tr", { dataset: { position: String(i + 1) } }, [
+        r.label,
+        h("td", null, [h("span", { class: "mf-bar" }, [r.barFill]), r.pct]),
+        h("td", { class: "n" }, [r.supply]),
+        h("td", { class: "n" }, [r.return]),
+        h("td", { class: "n" }, [r.dt]),
+        h("td", null, [r.chips]),
+      ]);
+      tbody.appendChild(r.tr);
+      rows.push(r);
+    }
+    const table = h("table", { class: "mf-loops" }, [h("thead", null, [h("tr", null, headCells)]), tbody]);
+    const el = h("div", { class: "mf-card", dataset: { manifold: id } }, [
+      head,
+      art,
+      h("div", { class: "mf-tbl" }, [table]),
+    ]);
+
+    const card = { el, parts: p, art, rows, circuits, view: null, paintKey: null };
+    if (this._mfRO) {
+      this._mfRO.observe(art);
+    }
+    this._manifoldEls.byArt.set(art, card);
+    return card;
+  }
+
+  /** Update a manifold card's head, table and (when changed) drawing in place. */
+  _updateManifoldCard(card, view) {
+    const p = card.parts;
+    const n = card.circuits;
+    p.title.textContent = String(view.name || "");
+    p.sub.textContent = fmtStr(this._t("mf_sub"), { n, circuits: this._mfCircuitsWord(n) });
+
+    const main = view.main || {};
+    const mainS = main.supply || {};
+    const mainR = main.return || {};
+    const sVal = num(mainS.value);
+    const rVal = num(mainR.value);
+    this._setMfLink(p.supply.val, fmt(sVal, 1, " °C"), mainS.entity_id);
+    this._setMfLink(p.return.val, fmt(rVal, 1, " °C"), mainR.entity_id);
+    this._setMfLink(
+      p.dt.val,
+      sVal !== null && rVal !== null ? signed(sVal - rVal, 1, " K") : "—",
+      null,
+    );
+
+    const positions = Array.isArray(view.positions) ? view.positions : [];
+    let open = 0;
+    let flaggedCount = 0;
+    let flagRank = 0;
+    for (let i = 0; i < n; i++) {
+      const r = card.rows[i];
+      const v = positions[i] || {};
+      const assigned = v.room_name != null;
+      const valve = v.valve || {};
+      const supply = v.supply || {};
+      const ret = v.return || {};
+      const flags = assigned && Array.isArray(v.flags) ? v.flags : [];
+      const pct = assigned ? num(valve.pct) : null;
+
+      r.tr.classList.toggle("mf-free", !assigned);
+      r.label.textContent =
+        `${i + 1}. ` + (assigned ? String(v.loop_label || v.room_name) : this._t("mf_free"));
+      r.barFill.style.width = (pct === null ? 0 : clamp(pct, 0, 100)) + "%";
+      this._setMfLink(r.pct, pct === null ? "—" : fmt(pct, 0, " %"), assigned ? valve.entity_id : null);
+      this._setMfLink(r.supply, fmt(assigned ? supply.value : null, 1, " °C"), assigned ? supply.entity_id : null);
+      this._setMfLink(r.return, fmt(assigned ? ret.value : null, 1, " °C"), assigned ? ret.entity_id : null);
+      const dt = assigned ? num(v.delta_k) : null;
+      r.dt.textContent = dt === null ? "—" : signed(dt, 1, " K");
+
+      r.chips.textContent = "";
+      if (!assigned) {
+        r.chips.appendChild(h("span", { class: "muted", text: "—" }));
+      } else if (flags.length) {
+        for (const code of flags) {
+          r.chips.appendChild(this._chip(code));
+          flagRank = Math.max(flagRank, SEV_RANK[this._flagSev(code)] || 0);
+        }
+        flaggedCount += 1;
+      } else {
+        r.chips.appendChild(h("span", { class: "chip chip-ok", text: this._t("mf_state_ok") }));
+      }
+      if (pct !== null && pct >= MF_OPEN_THRESHOLD_PCT) {
+        open += 1;
+      }
+    }
+    this._setMfLink(p.open.val, `${open}/${n}`, null);
+    p.flags.el.style.display = flaggedCount ? "" : "none";
+    p.flags.el.className = "stat sev-" + this._sevName(flagRank);
+    this._setMfLink(p.flags.val, String(flaggedCount), null);
+
+    card.view = view;
+    this._paintManifold(card);
+  }
+
+  /**
+   * Repaint a card's drawing when its data or its width changed. A hidden
+   * tab has width 0 and is skipped; the ResizeObserver repaints it when it
+   * becomes visible.
+   */
+  _paintManifold(card) {
+    const w = card.art.clientWidth;
+    if (!w || !card.view) {
+      return;
+    }
+    const key = JSON.stringify(card.view) + "|" + Math.round(w);
+    if (key === card.paintKey) {
+      return;
+    }
+    card.paintKey = key;
+    const caps = { supply: this._t("mf_supply"), return: this._t("mf_return") };
+    card.art.innerHTML = mfRenderSvg(
+      mfBuildModel(card.view),
+      card.view,
+      w,
+      caps,
+      String(card.view.name || ""),
+    );
+  }
+
+  // --------------------------------------------------------------------------
   // Tuning tab
   // --------------------------------------------------------------------------
 
@@ -8433,6 +9366,78 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 .tip-sw-blank { background: transparent; }
 .tip-lab { color: var(--t-muted); }
 .tip-val { margin-left: auto; font-weight: 600; }
+/* Manifolds tab: one card per distributor — head with stats, the axonometric
+   drawing, the circuit table. The drawing classes mirror the accepted
+   mock-up (f-* faces, r-* roles, ua-* label plates) on the panel tokens. */
+.mf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 620px), 1fr)); gap: 16px; align-items: start; }
+.mf-card {
+  --mf-supply: var(--t-heat); --mf-return: var(--t-cool);
+  border: 1px solid var(--t-line); border-radius: var(--t-radius); background: var(--t-card);
+  padding: 14px; display: flex; flex-direction: column; gap: 12px; min-width: 0;
+}
+.mf-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.mf-title { font-size: 16px; font-weight: 600; }
+.mf-sub { font-size: 12px; color: var(--t-muted); }
+.mf-stats { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.mf-stats .stat-cap { font-size: 11px; color: var(--t-muted); letter-spacing: .02em; }
+.mf-stats .stat-val { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mf-art { min-height: 40px; }
+.mf-svg { display: block; width: 100%; height: auto; }
+.mf-svg path, .mf-svg circle, .mf-svg polygon, .mf-svg rect { vector-effect: non-scaling-stroke; }
+.mf-svg text { font-family: inherit; }
+/* Solids as in the OAS air-handling-unit drawing: front = card, top 7 %, right 14 % of the text colour, cylinders 11 %. */
+.f-front { fill: var(--t-card); stroke: var(--t-line); }
+.f-top { fill: color-mix(in srgb, var(--t-fg) 7%, var(--t-card)); stroke: var(--t-line); }
+.f-right { fill: color-mix(in srgb, var(--t-fg) 14%, var(--t-card)); stroke: var(--t-line); }
+.f-side { fill: color-mix(in srgb, var(--t-fg) 11%, var(--t-card)); stroke: var(--t-line); }
+.nostroke { stroke: none; }
+.cyl-edge { fill: none; stroke: var(--t-line); stroke-linejoin: round; }
+.hl { fill: var(--t-card); fill-opacity: .42; stroke: none; }
+/* Rails and clamps darker, so the frame reads as background for the bars. */
+.r-bracket.f-front { fill: color-mix(in srgb, var(--t-fg) 18%, var(--t-card)); }
+.r-bracket.f-top { fill: color-mix(in srgb, var(--t-fg) 26%, var(--t-card)); }
+.r-bracket.f-right { fill: color-mix(in srgb, var(--t-fg) 32%, var(--t-card)); }
+.r-rubber.f-front, .r-probe.f-front { fill: color-mix(in srgb, var(--t-fg) 34%, var(--t-card)); }
+.r-rubber.f-top, .r-probe.f-top { fill: color-mix(in srgb, var(--t-fg) 42%, var(--t-card)); }
+.r-rubber.f-right, .r-probe.f-right { fill: color-mix(in srgb, var(--t-fg) 48%, var(--t-card)); }
+.r-dark.f-side, .r-dark.f-top, .r-dark.f-front, .r-dark.f-right { fill: color-mix(in srgb, var(--t-fg) 40%, var(--t-card)); }
+.r-glass.f-side { fill: var(--t-card); fill-opacity: .5; }
+.r-glass.f-top { fill: color-mix(in srgb, var(--t-fg) 7%, var(--t-card)); fill-opacity: .6; }
+.r-glass .hl { display: none; }
+.r-float { fill: var(--t-primary); stroke: none; }
+/* Pipes are translucent (owner request): whatever sits behind them shows through. */
+.r-pipe-edge { fill: none; stroke: var(--t-line); stroke-linejoin: round; stroke-linecap: round; stroke-opacity: .55; }
+.r-pipe { fill: none; stroke: color-mix(in srgb, var(--t-fg) 12%, var(--t-card)); stroke-linejoin: round; stroke-linecap: round; stroke-opacity: .55; }
+/* Actuator: the front takes the opening colour (--open-mix = 0…60 % primary); the depth tints stay. */
+.r-act .f-front { fill: color-mix(in srgb, var(--t-primary) var(--open-mix, 0%), var(--t-card)); }
+.r-act .f-top { fill: color-mix(in srgb, var(--t-fg) 7%, color-mix(in srgb, var(--t-primary) var(--open-mix, 0%), var(--t-card))); }
+.r-act .f-right { fill: color-mix(in srgb, var(--t-fg) 14%, color-mix(in srgb, var(--t-primary) var(--open-mix, 0%), var(--t-card))); }
+.r-act.flag .f-front { fill: color-mix(in srgb, var(--t-error) 30%, var(--t-card)); }
+/* Label plates: card colour at 72 %, values 600, captions muted; a value with an entity is a hidden link (cursor only). */
+.ua-plate { fill: var(--t-card); fill-opacity: .72; stroke: none; pointer-events: none; }
+.ua-text { fill: var(--t-fg); font-variant-numeric: tabular-nums; }
+.ua-cap { fill: var(--t-muted); }
+.ua-val { font-weight: 600; }
+.ua-sup { fill: var(--mf-supply); }
+.ua-ret { fill: var(--mf-return); }
+.ua-err { fill: var(--t-error); }
+.ua-link { cursor: pointer; pointer-events: all; }
+/* Table / head values: plain text that only gains a pointer when it links to an entity. */
+.mf-link { border: 0; background: transparent; color: inherit; font: inherit; padding: 0; cursor: default; text-align: inherit; }
+.mf-link:disabled { color: inherit; opacity: 1; }
+.mf-link.linked { cursor: pointer; }
+.mf-link:focus-visible { outline: 2px solid var(--t-primary); outline-offset: 2px; border-radius: 4px; }
+.mf-tbl { overflow-x: auto; }
+table.mf-loops { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+.mf-loops th { text-align: left; font-size: 11px; font-weight: 600; color: var(--t-muted); letter-spacing: .02em; padding: 4px 8px; border-bottom: 1px solid var(--t-line); }
+.mf-loops td { padding: 5px 8px; border-bottom: 1px solid var(--t-line); }
+.mf-loops td.n, .mf-loops th.n { text-align: right; white-space: nowrap; }
+.mf-loops tr:last-child td { border-bottom: 0; }
+.mf-loops tr.mf-free td { color: var(--t-muted); }
+.mf-loop { white-space: nowrap; }
+.mf-bar { display: inline-block; vertical-align: middle; width: 56px; height: 6px; border-radius: 3px; background: var(--t-chip); margin-right: 8px; overflow: hidden; }
+.mf-bar i { display: block; height: 100%; width: 0; background: var(--t-primary); }
+.mf-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 `;
 
 if (!customElements.get("tortoise-ufh-panel")) {

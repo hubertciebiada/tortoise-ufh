@@ -453,6 +453,45 @@ def test_v013_surfaces_have_their_str_keys() -> None:
     assert not missing, f"missing STR keys: {missing}"
 
 
+# New v0.21.0 surface: the Manifolds tab (drawing + circuit table + empty
+# state). Pinned so a rename cannot silently drop a manifold surface.
+_REQUIRED_V021_KEYS = (
+    "tab_manifolds",
+    "mf_empty",
+    "mf_sub",
+    "mf_circuits_one",
+    "mf_circuits_few",
+    "mf_circuits_many",
+    "mf_supply",
+    "mf_return",
+    "mf_dt",
+    "mf_open",
+    "mf_flags",
+    "mf_th_loop",
+    "mf_th_open",
+    "mf_th_supply",
+    "mf_th_return",
+    "mf_th_dt",
+    "mf_th_state",
+    "mf_state_ok",
+    "mf_free",
+    "mf_link_tip",
+)
+
+
+@pytest.mark.unit
+def test_v021_surfaces_have_their_str_keys() -> None:
+    """The v0.21.0 Manifolds-tab STR keys exist in all languages."""
+    sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
+    missing = [
+        f"{lang}:{key}"
+        for key in _REQUIRED_V021_KEYS
+        for lang in ("pl", "en", "de")
+        if key not in sections[lang]
+    ]
+    assert not missing, f"missing STR keys: {missing}"
+
+
 @pytest.mark.unit
 def test_flicker_flags_registered_and_consumed() -> None:
     """The 3 global flicker flags are FLAG_LABELS rows AND rendered (no orphans).

@@ -132,8 +132,15 @@ voneinander verschieden — §10).
 
 Nach dem Erstellen des Eintrags lässt sich alles in den **Integrationsoptionen**
 ändern (Einstellungen → Geräte & Dienste → Tortoise-UFH → Konfigurieren): Räume
-hinzufügen/bearbeiten/entfernen, Regelungs- und Abstimmungseinstellungen sowie der
-optionale Abschnitt **Wärmepumpe** (§11).
+hinzufügen/bearbeiten/entfernen, Regelungs- und Abstimmungseinstellungen, der
+optionale Abschnitt **Wärmepumpe** (§11) sowie **Verteiler** (seit v0.21.0) — die
+Beschreibung der Heizkreisverteiler (Name, 1–20 Heizkreise, Seite des
+Hauptanschlusses, optionale Temperatursonden am Hauptvorlauf Z0 und -rücklauf P0) und
+im zweiten Schritt ein Raumkreis je Anschluss (Auswahl der Ventil-Entität, optionale
+Beschriftung; leerer Anschluss = freie Position). Ein Kreis kann nur auf einem
+Anschluss eines Verteilers sitzen. Reine Darstellung für den Reiter Verteiler des
+Panels (§5) — nichts davon ändert die Regelung, und das Speichern lädt den Regler
+nicht neu.
 
 ## 5. Seitenleisten-Panel
 
@@ -196,6 +203,19 @@ Reiter:
   vs. Pumpenmodus (synchron/abweichend), Schalter des WW-Flags, Wasser-Sollwerte mit
   ihren Bestandteilen und das Signal „Pumpe für Fußbodenheizung verfügbar“. Ohne
   Konfiguration wird eine Anleitung angezeigt, wo man sie aktiviert.
+- **Verteiler** (seit v0.21.0) — eine Karte je Verteiler: Kopfzeile (Name, „KAN-therm
+  InoxFlow UFST · n Heizkreise“, Temperatur von Hauptvorlauf und -rücklauf aus den
+  Sonden Z0/P0, ΔT, Zähler der offenen Heizkreise, Meldungen), eine **axonometrische
+  Zeichnung** des Verteilers mit Live-Werten an den Heizkreisen (die Ventilöffnung
+  färbt den Stellantrieb und hebt den Schwimmer des Durchflussmessers; über jedem
+  Kreis seine Beschriftung, am Antrieb die Öffnung, unter den Anschlüssen Vorlauf und
+  Rücklauf) sowie eine **Tabelle der Heizkreise** (Heizkreis · Öffnung mit Balken ·
+  Vorlauf · Rücklauf · ΔT · Zustand mit den kreisbezogenen Meldungen: kein Durchfluss
+  S6, Ventilabweichung, fehlgeschlagener Stelltest, S1/S2). Jeder Wert mit einer
+  Entität ist ein versteckter Link (nur Cursor) zum nativen Entitätsdialog mit
+  Verlauf. Die Öffnung ist die vom Antrieb gemeldete Position, ersatzweise der Befehl
+  des Reglers; ein Anschluss ohne Kreis wird ohne Beschriftungen gezeichnet. Ohne
+  Verteiler zeigt der Reiter, wo sie konfiguriert werden (§4).
 
 Das **Verlaufs**-Diagramm in den Raumdetails (seit v0.16.0) glättet die Serien
 der Temperatur und des Sollwerts mit Eimer-Mittelwerten — ca. 2-Minuten im

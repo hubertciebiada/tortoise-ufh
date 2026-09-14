@@ -148,11 +148,13 @@ explanation of what it did and why.
   *off* excludes it from control (the core idles it and nothing is ever written),
   *live* drives its hardware. A whole-house "hands off" is simply every room in
   off (see below).
-- **Sidebar panel** — a dependency-free Home Assistant panel with six tabs (Rooms, Flags,
-  Tuning, Valves, Assist, Heat pump): a live per-room table (control state, measured
-  temperature, setpoint, error, valve %, supply/return water, mode), a flag annunciator,
-  controller tuning (global gains plus sparse per-room overrides), the optional heat-pump
-  link, and each room's full report. History charts smooth the temperature series with
+- **Sidebar panel** — a dependency-free Home Assistant panel with seven tabs (Rooms, Flags,
+  Tuning, Valves, Assist, Heat pump, Manifolds): a live per-room table (control state,
+  measured temperature, setpoint, error, valve %, supply/return water, mode), a flag
+  annunciator, controller tuning (global gains plus sparse per-room overrides), the optional
+  heat-pump link, each room's full report, and a drawing of every underfloor manifold (a
+  parametric KAN-therm InoxFlow UFST) with the live valve openings and loop water
+  temperatures on its circuits. History charts smooth the temperature series with
   bucket means, draw the valve as a step line and mark split activity with a colour-coded
   mode band (red = heating, orange = drying, blue = cooling).
 - **Hardware-agnostic** — you map Home Assistant entities to roles at setup; units are
@@ -237,6 +239,14 @@ same time: when demands conflict (routine in the transitional season), the room 
 outside its comfort band wins the direction, a unit inside its minimum-ON time keeps it,
 and the losing room waits its minimum-OFF time with the `fast_source_group_conflict` flag
 visible in its report. Leave the field empty for independent units.
+
+**Manifolds (optional, v0.21.0):** in the integration options (Configure → Manifolds)
+describe each underfloor distributor — its circuit count, which end carries the main
+connection, optional temperature probes on the main supply and return — and place a room
+loop (identified by its valve entity) on each circuit, with an optional label. The panel's
+Manifolds tab then draws the distributors with the live valve openings, the loop
+supply/return temperatures and ΔT; every value that has an entity opens that entity's
+history. Presentation only: nothing in the control path reads it.
 
 Day-to-day control lives in the **Tortoise-UFH sidebar panel** (added automatically, admin
 only). From the panel you can:

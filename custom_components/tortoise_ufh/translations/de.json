@@ -113,7 +113,8 @@
           "edit_room": "Raum bearbeiten",
           "remove_room": "Raum entfernen",
           "settings": "Regelungs- und Abstimmungseinstellungen",
-          "heat_pump": "Wärmepumpe"
+          "heat_pump": "Wärmepumpe",
+          "manifolds": "Verteiler"
         }
       },
       "settings": {
@@ -238,6 +239,106 @@
           "entity_hp_outlet_temp": "Vorlauf-/Austrittswassersonde der Pumpe. In dieser Version nur Diagnose — im Wärmepumpen-Tab angezeigt; noch keine Logik nutzt sie (reserviert für einen künftigen vorlaufseitigen Kondensationsschutz).",
           "entity_hp_compressor_freq": "Verdichterfrequenz in Hz (0 = aus). Dient zur Erkennung, dass die Pumpe in ihrem Totband stillsteht. Panasonic-Beispiel: sensor.panasonic_heat_pump_main_compressor_freq."
         }
+      },
+      "manifolds": {
+        "title": "Verteiler",
+        "description": "Definieren Sie die Heizkreisverteiler und ordnen Sie jeden Raumkreis seinem Anschluss zu. Nur Darstellung — der Reiter Verteiler des Panels zeichnet sie; nichts hier ändert die Regelung.",
+        "menu_options": {
+          "add_manifold": "Verteiler hinzufügen",
+          "edit_manifold": "Verteiler bearbeiten",
+          "remove_manifold": "Verteiler entfernen"
+        }
+      },
+      "add_manifold": {
+        "title": "Verteiler hinzufügen",
+        "description": "Benennen Sie den Verteiler, geben Sie die Anzahl der Heizkreise und die Seite des Hauptanschlusses an, optional die Temperatursonden am Hauptvorlauf und -rücklauf. Die Raumkreise ordnen Sie im nächsten Schritt den Anschlüssen zu.",
+        "data": {
+          "name": "Name des Verteilers",
+          "circuits": "Anzahl der Heizkreise",
+          "side": "Seite des Hauptanschlusses",
+          "entity_supply_main": "Temperatursensor Hauptvorlauf (optional)",
+          "entity_return_main": "Temperatursensor Hauptrücklauf (optional)"
+        },
+        "data_description": {
+          "side": "Welches Ende der Balken den Vorlaufeintritt und den Rücklaufaustritt trägt; Heizkreis 1 ist die Position direkt daneben.",
+          "entity_supply_main": "Sonde am Vorlaufbalken des Verteilers, vor den Heizkreisen (Z0).",
+          "entity_return_main": "Sonde am Rücklaufbalken des Verteilers, nach den Heizkreisen (P0)."
+        }
+      },
+      "edit_manifold": {
+        "title": "Verteiler bearbeiten",
+        "description": "Wählen Sie den zu bearbeitenden Verteiler. Sein Name kann nicht geändert werden (Umbenennen = entfernen + hinzufügen).",
+        "data": {
+          "selected_manifold": "Verteiler"
+        }
+      },
+      "edit_manifold_attrs": {
+        "title": "Verteiler bearbeiten: {manifold_name}",
+        "description": "Aktualisieren Sie die Attribute von {manifold_name}, danach die Zuordnung der Heizkreise. Anschlüsse oberhalb einer verringerten Anzahl verlieren ihren Kreis.",
+        "data": {
+          "circuits": "Anzahl der Heizkreise",
+          "side": "Seite des Hauptanschlusses",
+          "entity_supply_main": "Temperatursensor Hauptvorlauf (optional)",
+          "entity_return_main": "Temperatursensor Hauptrücklauf (optional)"
+        },
+        "data_description": {
+          "side": "Welches Ende der Balken den Vorlaufeintritt und den Rücklaufaustritt trägt; Heizkreis 1 ist die Position direkt daneben.",
+          "entity_supply_main": "Sonde am Vorlaufbalken des Verteilers, vor den Heizkreisen (Z0).",
+          "entity_return_main": "Sonde am Rücklaufbalken des Verteilers, nach den Heizkreisen (P0)."
+        }
+      },
+      "manifold_loops": {
+        "title": "Heizkreise von {manifold_name}",
+        "description": "Ordnen Sie jedem der {circuits} Anschlüsse einen Raumkreis zu, gezählt vom Ende mit dem Hauptanschluss. Ein Kreis ist seine Ventil-Entität; die Beschriftung erscheint in der Zeichnung (leer = Raumname). Lassen Sie einen Anschluss leer, wenn nichts angeschlossen ist.",
+        "data": {
+          "position_1": "Anschluss 1 — Heizkreis",
+          "label_1": "Anschluss 1 — Beschriftung",
+          "position_2": "Anschluss 2 — Heizkreis",
+          "label_2": "Anschluss 2 — Beschriftung",
+          "position_3": "Anschluss 3 — Heizkreis",
+          "label_3": "Anschluss 3 — Beschriftung",
+          "position_4": "Anschluss 4 — Heizkreis",
+          "label_4": "Anschluss 4 — Beschriftung",
+          "position_5": "Anschluss 5 — Heizkreis",
+          "label_5": "Anschluss 5 — Beschriftung",
+          "position_6": "Anschluss 6 — Heizkreis",
+          "label_6": "Anschluss 6 — Beschriftung",
+          "position_7": "Anschluss 7 — Heizkreis",
+          "label_7": "Anschluss 7 — Beschriftung",
+          "position_8": "Anschluss 8 — Heizkreis",
+          "label_8": "Anschluss 8 — Beschriftung",
+          "position_9": "Anschluss 9 — Heizkreis",
+          "label_9": "Anschluss 9 — Beschriftung",
+          "position_10": "Anschluss 10 — Heizkreis",
+          "label_10": "Anschluss 10 — Beschriftung",
+          "position_11": "Anschluss 11 — Heizkreis",
+          "label_11": "Anschluss 11 — Beschriftung",
+          "position_12": "Anschluss 12 — Heizkreis",
+          "label_12": "Anschluss 12 — Beschriftung",
+          "position_13": "Anschluss 13 — Heizkreis",
+          "label_13": "Anschluss 13 — Beschriftung",
+          "position_14": "Anschluss 14 — Heizkreis",
+          "label_14": "Anschluss 14 — Beschriftung",
+          "position_15": "Anschluss 15 — Heizkreis",
+          "label_15": "Anschluss 15 — Beschriftung",
+          "position_16": "Anschluss 16 — Heizkreis",
+          "label_16": "Anschluss 16 — Beschriftung",
+          "position_17": "Anschluss 17 — Heizkreis",
+          "label_17": "Anschluss 17 — Beschriftung",
+          "position_18": "Anschluss 18 — Heizkreis",
+          "label_18": "Anschluss 18 — Beschriftung",
+          "position_19": "Anschluss 19 — Heizkreis",
+          "label_19": "Anschluss 19 — Beschriftung",
+          "position_20": "Anschluss 20 — Heizkreis",
+          "label_20": "Anschluss 20 — Beschriftung"
+        }
+      },
+      "remove_manifold": {
+        "title": "Verteiler entfernen",
+        "description": "Wählen Sie den zu entfernenden Verteiler. Nur die Zeichnung ist betroffen; Räume und ihre Heizkreise bleiben konfiguriert.",
+        "data": {
+          "selected_manifold": "Verteiler"
+        }
       }
     },
     "error": {
@@ -253,11 +354,17 @@
       "invalid_device_class": "Die Entität hat eine falsche Geräteklasse",
       "entity_unavailable": "Die Entität ist derzeit nicht verfügbar — sie kann später online gehen",
       "valve_no_set_position": "Diese valve-Entität unterstützt das Setzen einer Position (SET_POSITION) nicht. Wählen Sie ein positionsfähiges Ventil oder eine number-Entität.",
-      "quiet_window_invalid": "Legen Sie beide Fensterzeiten fest (Anfang und Ende, voneinander verschieden) oder keine."
+      "quiet_window_invalid": "Legen Sie beide Fensterzeiten fest (Anfang und Ende, voneinander verschieden) oder keine.",
+      "empty_manifold_name": "Der Verteilername darf nicht leer sein",
+      "duplicate_manifold_name": "Ein Verteiler mit diesem Namen existiert bereits",
+      "invalid_manifold": "Ungültige Verteilerdefinition",
+      "loop_assigned_twice": "Ein Heizkreis wurde zwei Anschlüssen dieses Verteilers zugeordnet",
+      "loop_assigned_elsewhere": "Einer der Heizkreise ist bereits einem anderen Verteiler zugeordnet"
     },
     "abort": {
       "no_rooms": "Es gibt keine Räume zum Verwalten",
-      "cannot_remove_last_room": "Der letzte Raum kann nicht entfernt werden — mindestens ein Raum ist erforderlich"
+      "cannot_remove_last_room": "Der letzte Raum kann nicht entfernt werden — mindestens ein Raum ist erforderlich",
+      "no_manifolds": "Es gibt keine Verteiler zum Verwalten"
     }
   },
   "entity": {
@@ -348,6 +455,12 @@
       "options": {
         "off": "Aus",
         "live": "Aktiv"
+      }
+    },
+    "manifold_side": {
+      "options": {
+        "left": "Links",
+        "right": "Rechts"
       }
     }
   },

@@ -113,7 +113,8 @@
           "edit_room": "Edit a room",
           "remove_room": "Remove a room",
           "settings": "Control & tuning settings",
-          "heat_pump": "Heat pump"
+          "heat_pump": "Heat pump",
+          "manifolds": "Manifolds"
         }
       },
       "settings": {
@@ -238,6 +239,106 @@
           "entity_hp_outlet_temp": "The pump outlet/supply water probe. Diagnostic only in this version — shown on the Heat pump tab; no logic uses it yet (reserved for a future supply-side condensation guard).",
           "entity_hp_compressor_freq": "Compressor frequency in Hz (0 = off). Used to detect the pump idling in its deadband. Panasonic example: sensor.panasonic_heat_pump_main_compressor_freq."
         }
+      },
+      "manifolds": {
+        "title": "Manifolds",
+        "description": "Define the underfloor manifolds (distributors) and place each room loop on its circuit. Presentation only — the panel's Manifolds tab draws them; nothing here changes the control.",
+        "menu_options": {
+          "add_manifold": "Add a manifold",
+          "edit_manifold": "Edit a manifold",
+          "remove_manifold": "Remove a manifold"
+        }
+      },
+      "add_manifold": {
+        "title": "Add a Manifold",
+        "description": "Name the manifold, give its circuit count and the end that carries the main connection, optionally the temperature probes on the main supply and return. You will place the room loops on the circuits in the next step.",
+        "data": {
+          "name": "Manifold name",
+          "circuits": "Number of circuits",
+          "side": "Main connection side",
+          "entity_supply_main": "Main supply temperature sensor (optional)",
+          "entity_return_main": "Main return temperature sensor (optional)"
+        },
+        "data_description": {
+          "side": "Which end of the bars carries the supply inlet and the return outlet; circuit 1 is the position next to it.",
+          "entity_supply_main": "Probe on the manifold's supply bar, before the circuits (Z0).",
+          "entity_return_main": "Probe on the manifold's return bar, after the circuits (P0)."
+        }
+      },
+      "edit_manifold": {
+        "title": "Edit a Manifold",
+        "description": "Pick the manifold to edit. Its name cannot be changed (rename = remove + add).",
+        "data": {
+          "selected_manifold": "Manifold"
+        }
+      },
+      "edit_manifold_attrs": {
+        "title": "Edit Manifold: {manifold_name}",
+        "description": "Update the attributes of {manifold_name}, then the circuit assignment. Circuits beyond a reduced count lose their loop.",
+        "data": {
+          "circuits": "Number of circuits",
+          "side": "Main connection side",
+          "entity_supply_main": "Main supply temperature sensor (optional)",
+          "entity_return_main": "Main return temperature sensor (optional)"
+        },
+        "data_description": {
+          "side": "Which end of the bars carries the supply inlet and the return outlet; circuit 1 is the position next to it.",
+          "entity_supply_main": "Probe on the manifold's supply bar, before the circuits (Z0).",
+          "entity_return_main": "Probe on the manifold's return bar, after the circuits (P0)."
+        }
+      },
+      "manifold_loops": {
+        "title": "Circuits of {manifold_name}",
+        "description": "Place a room loop on each of the {circuits} circuits, counted from the main-connection end. A loop is its valve entity; the label is what the drawing shows (empty = the room name). Leave a circuit empty when nothing is connected.",
+        "data": {
+          "position_1": "Circuit 1 — loop",
+          "label_1": "Circuit 1 — label",
+          "position_2": "Circuit 2 — loop",
+          "label_2": "Circuit 2 — label",
+          "position_3": "Circuit 3 — loop",
+          "label_3": "Circuit 3 — label",
+          "position_4": "Circuit 4 — loop",
+          "label_4": "Circuit 4 — label",
+          "position_5": "Circuit 5 — loop",
+          "label_5": "Circuit 5 — label",
+          "position_6": "Circuit 6 — loop",
+          "label_6": "Circuit 6 — label",
+          "position_7": "Circuit 7 — loop",
+          "label_7": "Circuit 7 — label",
+          "position_8": "Circuit 8 — loop",
+          "label_8": "Circuit 8 — label",
+          "position_9": "Circuit 9 — loop",
+          "label_9": "Circuit 9 — label",
+          "position_10": "Circuit 10 — loop",
+          "label_10": "Circuit 10 — label",
+          "position_11": "Circuit 11 — loop",
+          "label_11": "Circuit 11 — label",
+          "position_12": "Circuit 12 — loop",
+          "label_12": "Circuit 12 — label",
+          "position_13": "Circuit 13 — loop",
+          "label_13": "Circuit 13 — label",
+          "position_14": "Circuit 14 — loop",
+          "label_14": "Circuit 14 — label",
+          "position_15": "Circuit 15 — loop",
+          "label_15": "Circuit 15 — label",
+          "position_16": "Circuit 16 — loop",
+          "label_16": "Circuit 16 — label",
+          "position_17": "Circuit 17 — loop",
+          "label_17": "Circuit 17 — label",
+          "position_18": "Circuit 18 — loop",
+          "label_18": "Circuit 18 — label",
+          "position_19": "Circuit 19 — loop",
+          "label_19": "Circuit 19 — label",
+          "position_20": "Circuit 20 — loop",
+          "label_20": "Circuit 20 — label"
+        }
+      },
+      "remove_manifold": {
+        "title": "Remove a Manifold",
+        "description": "Pick the manifold to remove. Only the drawing is affected; rooms and their loops stay configured.",
+        "data": {
+          "selected_manifold": "Manifold"
+        }
       }
     },
     "error": {
@@ -253,11 +354,17 @@
       "invalid_device_class": "Entity has an incorrect device class",
       "entity_unavailable": "Entity is currently unavailable — it may come online later",
       "valve_no_set_position": "This valve entity does not support setting a position (SET_POSITION). Pick a position-capable valve or a number entity.",
-      "quiet_window_invalid": "Set both window times (start and end, different from each other) or neither."
+      "quiet_window_invalid": "Set both window times (start and end, different from each other) or neither.",
+      "empty_manifold_name": "Manifold name cannot be empty",
+      "duplicate_manifold_name": "A manifold with this name already exists",
+      "invalid_manifold": "Invalid manifold definition",
+      "loop_assigned_twice": "One loop was placed on two circuits of this manifold",
+      "loop_assigned_elsewhere": "One of the loops is already placed on another manifold"
     },
     "abort": {
       "no_rooms": "There are no rooms to manage",
-      "cannot_remove_last_room": "Cannot remove the last room — at least one room is required"
+      "cannot_remove_last_room": "Cannot remove the last room — at least one room is required",
+      "no_manifolds": "There are no manifolds to manage"
     }
   },
   "entity": {
@@ -348,6 +455,12 @@
       "options": {
         "off": "Off",
         "live": "Live"
+      }
+    },
+    "manifold_side": {
+      "options": {
+        "left": "Left",
+        "right": "Right"
       }
     }
   },

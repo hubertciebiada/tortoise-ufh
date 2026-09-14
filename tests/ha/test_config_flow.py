@@ -20,6 +20,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.tortoise_ufh.config_flow import (
     CONF_CONTROLLER,
     CONF_HAS_FAST_SOURCE,
+    CONF_SELECTED_MANIFOLD,
     CONF_SELECTED_ROOM,
 )
 from custom_components.tortoise_ufh.const import (
@@ -240,6 +241,7 @@ async def test_options_menu_lists_all_leaves(
         "remove_room",
         "settings",
         "heat_pump",
+        "manifolds",
     }
 
 
@@ -924,3 +926,297 @@ async def test_add_room_quiet_window_normalised_and_persisted(
     gabinet = entry.data[CONF_ROOMS][-1]
     assert gabinet[CONF_FAST_WINDOW_START] == "07:00"
     assert gabinet[CONF_FAST_WINDOW_END] == "22:30"
+
+
+# -- Manifolds leaf (2026-09-14, v0.21.0): presentation-only distributors ------
+
+
+def _manifold_dict(**over: Any) -> dict[str, Any]:
+    """A stored East manifold: Salon on circuit 1, Lazienka on circuit 3."""
+    base: dict[str, Any] = {
+        "manifold_id": "east",
+        "name": "East",
+        "circuits": 3,
+        "side": "left",
+        "entity_supply_main": "sensor.salon_supply",
+        "entity_return_main": None,
+        "loops": [
+            {"position": 1, "entity_valve": "number.salon_valve", "label": "Living"},
+            {"position": 3, "entity_valve": "number.lazienka_valve", "label": ""},
+        ],
+    }
+    return {**base, **over}
+
+
+async def _open_manifold_leaf(
+    hass: HomeAssistant, entry: MockConfigEntry, leaf: str
+) -> Any:
+    """Open options -> Manifolds sub-menu -> ``leaf``; return the resulting step."""
+    result = await _open_menu_leaf(hass, entry, "manifolds")
+    assert result["type"] is FlowResultType.MENU
+    assert result["step_id"] == "manifolds"
+    assert set(result["menu_options"]) == {
+        "add_manifold",
+        "edit_manifold",
+        "remove_manifold",
+    }
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": leaf}
+    )
+
+
+async def test_options_flow_add_manifold_places_loops_without_reload(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Add-manifold collects the attributes, then one loop + label per circuit.
+
+    The saved list is the storage form of the core ``ManifoldConfig`` (the id
+    is the name's slug, an empty probe is ``None``, free circuits are simply
+    absent from ``loops``). Manifolds are presentation only, so the save must
+    NOT rebuild the coordinator.
+    """
+    from custom_components.tortoise_ufh.const import CONF_MANIFOLDS
+
+    entry = setup_integration
+    coordinator_before = entry.runtime_data.coordinator
+
+    result = await _open_manifold_leaf(hass, entry, "add_manifold")
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "add_manifold"
+    attr_keys = {str(key) for key in result["data_schema"].schema}
+    assert attr_keys == {
+        "name",
+        "circuits",
+        "side",
+        "entity_supply_main",
+        "entity_return_main",
+    }
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "name": "East",
+            "circuits": 3.0,
+            "side": "left",
+            "entity_supply_main": "sensor.salon_supply",
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manifold_loops"
+    assert result["description_placeholders"] == {
+        "manifold_name": "East",
+        "circuits": "3",
+    }
+    loop_keys = {str(key) for key in result["data_schema"].schema}
+    assert loop_keys == {
+        "position_1",
+        "position_2",
+        "position_3",
+        "label_1",
+        "label_2",
+        "label_3",
+    }
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "position_1": "number.salon_valve",
+            "label_1": "Living",
+            "position_3": "number.lazienka_valve",
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.data[CONF_MANIFOLDS] == [_manifold_dict()]
+    # Nothing reload-worthy changed: same coordinator instance, options intact.
+    assert entry.runtime_data.coordinator is coordinator_before
+    assert CONF_MANIFOLDS not in entry.options
+
+
+async def test_options_flow_add_manifold_rejects_empty_and_duplicate_name(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """An empty name and a name whose slug already exists are rejected."""
+    from custom_components.tortoise_ufh.const import CONF_MANIFOLDS
+
+    entry = setup_integration
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_MANIFOLDS: [_manifold_dict()]}
+    )
+    await hass.async_block_till_done()
+
+    result = await _open_manifold_leaf(hass, entry, "add_manifold")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"name": "  ", "circuits": 2.0, "side": "left"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "empty_manifold_name"}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"name": "east", "circuits": 2.0, "side": "left"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "duplicate_manifold_name"}
+
+
+async def test_options_flow_add_manifold_validates_main_probe_unit(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """The optional main probes get the same °C-only check as every picker."""
+    entry = setup_integration
+    hass.states.async_set(
+        "sensor.bad_temp",
+        "70.0",
+        {"unit_of_measurement": "°F", "device_class": "temperature"},
+    )
+
+    result = await _open_manifold_leaf(hass, entry, "add_manifold")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "name": "West",
+            "circuits": 2.0,
+            "side": "right",
+            "entity_return_main": "sensor.bad_temp",
+        },
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "add_manifold"
+    assert result["errors"] == {"base": "invalid_unit"}
+
+
+async def test_options_flow_manifold_loops_reject_a_loop_used_twice(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """One loop on two circuits, or on a second manifold, is refused."""
+    from custom_components.tortoise_ufh.const import CONF_MANIFOLDS
+
+    entry = setup_integration
+    # East already holds the Salon loop.
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_MANIFOLDS: [_manifold_dict()]}
+    )
+    await hass.async_block_till_done()
+
+    result = await _open_manifold_leaf(hass, entry, "add_manifold")
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"name": "West", "circuits": 2.0, "side": "left"}
+    )
+    assert result["step_id"] == "manifold_loops"
+
+    # Same loop on two circuits of this manifold.
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"position_1": "number.lazienka_valve", "position_2": "number.lazienka_valve"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "manifold_loops"
+    assert result["errors"] == {"base": "loop_assigned_twice"}
+
+    # A loop that already sits on East.
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"position_1": "number.salon_valve"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "loop_assigned_elsewhere"}
+
+    # Nothing was persisted by the rejected submissions.
+    assert [m["name"] for m in entry.data[CONF_MANIFOLDS]] == ["East"]
+
+
+async def test_options_flow_edit_manifold_keeps_identity_and_reassigns(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Editing keeps id + name, pre-fills the circuits and applies the new layout.
+
+    Shrinking the circuit count drops the assignment beyond it (Lazienka sat
+    on circuit 3); the loops step then shows the remaining Salon assignment as
+    its suggested value.
+    """
+    from custom_components.tortoise_ufh.const import CONF_MANIFOLDS
+
+    entry = setup_integration
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_MANIFOLDS: [_manifold_dict()]}
+    )
+    await hass.async_block_till_done()
+
+    result = await _open_manifold_leaf(hass, entry, "edit_manifold")
+    assert result["step_id"] == "edit_manifold"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SELECTED_MANIFOLD: "East"}
+    )
+    assert result["step_id"] == "edit_manifold_attrs"
+    assert result["description_placeholders"] == {"manifold_name": "East"}
+    attr_keys = {str(key) for key in result["data_schema"].schema}
+    assert "name" not in attr_keys
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"circuits": 2.0, "side": "right"}
+    )
+    assert result["step_id"] == "manifold_loops"
+    schema = result["data_schema"].schema
+    suggested = {
+        str(key): key.description["suggested_value"]
+        for key in schema
+        if getattr(key, "description", None)
+    }
+    assert suggested == {"position_1": "number.salon_valve", "label_1": "Living"}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"position_1": "number.lazienka_valve", "position_2": "number.salon_valve"},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.data[CONF_MANIFOLDS] == [
+        _manifold_dict(
+            circuits=2,
+            side="right",
+            entity_supply_main=None,
+            loops=[
+                {"position": 1, "entity_valve": "number.lazienka_valve", "label": ""},
+                {"position": 2, "entity_valve": "number.salon_valve", "label": ""},
+            ],
+        )
+    ]
+
+
+async def test_options_flow_remove_manifold(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Removing a manifold drops only that manifold; rooms are untouched."""
+    from custom_components.tortoise_ufh.const import CONF_MANIFOLDS
+
+    entry = setup_integration
+    west = _manifold_dict(manifold_id="west", name="West", circuits=2, loops=[])
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_MANIFOLDS: [_manifold_dict(), west]}
+    )
+    await hass.async_block_till_done()
+    rooms_before = entry.data[CONF_ROOMS]
+
+    result = await _open_manifold_leaf(hass, entry, "remove_manifold")
+    assert result["step_id"] == "remove_manifold"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_SELECTED_MANIFOLD: "East"}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.data[CONF_MANIFOLDS] == [west]
+    assert entry.data[CONF_ROOMS] == rooms_before
+
+
+async def test_options_flow_manifold_leaves_abort_without_manifolds(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Edit / remove abort cleanly when no manifold is configured yet."""
+    entry = setup_integration
+    for leaf in ("edit_manifold", "remove_manifold"):
+        result = await _open_manifold_leaf(hass, entry, leaf)
+        assert result["type"] is FlowResultType.ABORT
+        assert result["reason"] == "no_manifolds"

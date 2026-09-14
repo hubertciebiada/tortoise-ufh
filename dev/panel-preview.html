@@ -453,7 +453,88 @@
           sensor_lost_rooms: 1,
           // B2 (v0.8.0): the heat-pump link view (HeatPumpRuntime.to_dict).
           heat_pump: sampleHeatPump(scenario),
+          // v0.21.0: the resolved manifold views (ManifoldView.to_dict).
+          manifolds: sampleManifolds(scenario),
         };
+      }
+
+      // --- Sample manifolds (match ManifoldView.to_dict; v0.21.0) ------------
+      // Two distributors over the three sample rooms: "Wschód" (5 circuits,
+      // main connection on the left, both main probes) carries the two Salon
+      // loops, the Kuchnia loop and a free circuit; "Zachód" (3 circuits,
+      // main connection on the right, no main probes) carries the Łazienka
+      // loop and two free circuits. The cooling scenario flips the ΔT sign
+      // and flags the Łazienka circuit (S6 no-flow).
+      function sampleManifolds(scenario) {
+        const cooling = scenario === "cooling";
+        const sup = cooling ? 17.2 : 34.6;
+        const loop = (position, room, index, label, valveId, pct, ts, tr, flags) => ({
+          position,
+          room_name: room,
+          loop_index: index,
+          loop_label: label,
+          valve: { pct, command_pct: pct, entity_id: valveId },
+          supply: { value: ts, entity_id: valveId ? valveId.replace("valve", "supply").replace("number.", "sensor.") : null },
+          return: { value: tr, entity_id: valveId ? valveId.replace("valve", "return").replace("number.", "sensor.") : null },
+          delta_k: ts !== null && tr !== null ? ts - tr : null,
+          flags: flags || [],
+        });
+        const free = (position) => ({
+          position,
+          room_name: null,
+          loop_index: null,
+          loop_label: null,
+          valve: { pct: null, command_pct: null, entity_id: null },
+          supply: { value: null, entity_id: null },
+          return: { value: null, entity_id: null },
+          delta_k: null,
+          flags: [],
+        });
+        const d = (k) => (cooling ? -k : k);
+        return [
+          {
+            id: "wschod",
+            name: "Wschód",
+            circuits: 5,
+            side: "left",
+            main: {
+              supply: { value: sup, entity_id: "sensor.wschod_z0" },
+              return: { value: sup - d(4.1), entity_id: "sensor.wschod_p0" },
+            },
+            positions: [
+              loop(1, "Salon", 0, "Salon 1", "number.salon_valve_1", 62, sup - 0.3, sup - 0.3 - d(5.2)),
+              loop(2, "Salon", 1, "Salon 2", "number.salon_valve_2", 62, sup - 0.4, sup - 0.4 - d(4.8)),
+              free(3),
+              loop(4, "Kuchnia", 0, "Kuchnia", "number.kuchnia_valve", 0, null, null),
+              free(5),
+            ],
+          },
+          {
+            id: "zachod",
+            name: "Zachód",
+            circuits: 3,
+            side: "right",
+            main: {
+              supply: { value: null, entity_id: null },
+              return: { value: null, entity_id: null },
+            },
+            positions: [
+              loop(
+                1,
+                "Łazienka",
+                0,
+                "Łazienka",
+                "number.lazienka_valve",
+                cooling ? 12 : 100,
+                sup - 0.6,
+                cooling ? sup - 0.6 : sup - 0.6 - 0.2,
+                cooling ? [] : ["loop_no_flow"],
+              ),
+              free(2),
+              free(3),
+            ],
+          },
+        ];
       }
 
       // --- Sample heat-pump payload (matches HeatPumpRuntime.to_dict) -------

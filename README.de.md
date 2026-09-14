@@ -143,12 +143,13 @@ für Menschen und KI lesbare Erläuterung, was er getan hat und warum.
   *Aus* nimmt ihn von der Regelung aus (der Kern lässt ihn ruhen und es wird nie etwas geschrieben),
   *Aktiv* steuert seine Hardware. Ein „Hände weg“ für das ganze Haus ist einfach jeder Raum auf
   Aus (siehe unten).
-- **Seitenleisten-Panel** — ein abhängigkeitsfreies Home-Assistant-Panel mit sechs Reitern (Räume,
-  Meldungen, Abstimmung, Ventile, Zusatzquelle, Wärmepumpe): eine Live-Tabelle je Raum
+- **Seitenleisten-Panel** — ein abhängigkeitsfreies Home-Assistant-Panel mit sieben Reitern (Räume,
+  Meldungen, Abstimmung, Ventile, Zusatzquelle, Wärmepumpe, Verteiler): eine Live-Tabelle je Raum
   (Regelungszustand, gemessene Temperatur, Sollwert, Regelabweichung, Ventil %, Vorlauf-/
   Rücklaufwasser, Modus), ein Meldungs-Annunciator, die Reglerabstimmung (globale Verstärkungen plus
-  vereinzelte Übersteuerungen je Raum), die optionale Wärmepumpen-Anbindung und der vollständige
-  Bericht jedes Raums.
+  vereinzelte Übersteuerungen je Raum), die optionale Wärmepumpen-Anbindung, der vollständige
+  Bericht jedes Raums und eine Zeichnung jedes Heizkreisverteilers (ein parametrischer KAN-therm
+  InoxFlow UFST) mit den aktuellen Ventilöffnungen und Wassertemperaturen seiner Heizkreise.
 - **Hardwareunabhängig** — Sie ordnen bei der Einrichtung Home-Assistant-Entitäten den Rollen zu;
   Einheiten werden geprüft (°C, %, W), Marken nicht.
 - **Eingebauter Gebäudesimulator** — ein digitaler Zwilling (3R3C-RC-Modell je Raum, ZOH über
@@ -235,6 +236,14 @@ weitesten außerhalb seines Komfortbands liegt, die Richtung, eine Einheit inner
 Mindest-EIN-Zeit behält sie, und der verlierende Raum wartet seine Mindest-AUS-Zeit ab, wobei die
 Meldung `fast_source_group_conflict` in seinem Bericht sichtbar ist. Lassen Sie das Feld für
 unabhängige Einheiten leer.
+
+**Verteiler (optional, v0.21.0):** Beschreiben Sie in den Integrationsoptionen (Konfigurieren →
+Verteiler) jeden Heizkreisverteiler — Anzahl der Heizkreise, welches Ende den Hauptanschluss
+trägt, optionale Temperatursonden am Hauptvorlauf und -rücklauf — und ordnen Sie jedem Anschluss
+einen Raumkreis (identifiziert über seine Ventil-Entität) mit optionaler Beschriftung zu. Der
+Reiter Verteiler des Panels zeichnet die Verteiler dann mit den aktuellen Ventilöffnungen, den
+Vorlauf-/Rücklauftemperaturen der Kreise und ΔT; jeder Wert mit einer Entität öffnet deren
+Verlauf. Nur Darstellung: Nichts im Regelungspfad liest diese Daten.
 
 Die tägliche Steuerung findet im **Tortoise-UFH-Seitenleisten-Panel** statt (automatisch
 hinzugefügt, nur für Administratoren). Vom Panel aus können Sie:

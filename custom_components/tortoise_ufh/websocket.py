@@ -55,6 +55,7 @@ from .const import (
     CONF_FAST_WINDOW_END,
     CONF_FAST_WINDOW_START,
     CONF_HEAT_PUMP,
+    CONF_MANIFOLDS,
     CONF_ROOM_AREA,
     CONF_ROOM_NAME,
     CONF_ROOM_TUNING,
@@ -71,7 +72,9 @@ from .const import (
     ROOM_STATES,
 )
 from .core.config import ControllerConfig
+from .core.manifold import ManifoldConfig, RoomLoopSources, build_manifold_views
 from .core.models import Mode
+from .readers import UNAVAILABLE_STATES, is_valve_domain
 from .tuning import (
     coerce_tuning_values,
     flicker_open_max_pct,
@@ -86,7 +89,7 @@ from .tuning import (
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
-    from .coordinator import TortoiseUfhCoordinator
+    from .coordinator import CoordinatorData, TortoiseUfhCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -347,6 +350,9 @@ class LiveResult:
             plain dict (see
             :meth:`~coordinator.HeatPumpRuntime.to_dict`), or ``None`` when
             the link is not configured.
+        manifolds: One :meth:`~core.manifold.ManifoldView.to_dict` per
+            configured manifold (additive 2026-09-14, v0.21.0; the panel's
+            Manifolds tab). Empty when no manifold is configured.
 
     Raises:
         ValueError: If ``mode`` is not a recognised mode string or
@@ -361,6 +367,7 @@ class LiveResult:
     mode: str
     sensor_lost_rooms: int = 0
     heat_pump: dict[str, Any] | None = None
+    manifolds: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         """Validate the global fields of the live reply."""
@@ -387,6 +394,7 @@ class LiveResult:
             "mode": self.mode,
             "sensor_lost_rooms": self.sensor_lost_rooms,
             "heat_pump": dict(self.heat_pump) if self.heat_pump is not None else None,
+            "manifolds": [dict(manifold) for manifold in self.manifolds],
         }
 
 
@@ -552,6 +560,124 @@ def _resolve_global_sensor_entity(
     return registry.async_get_entity_id("sensor", DOMAIN, f"{entry_id}_{key}")
 
 
+def _entity_number(hass: HomeAssistant, entity_id: str) -> float | None:
+    """Read an entity's current numeric value straight from the state machine.
+
+    A ``valve``-domain actuator reports its position in ``current_position``
+    (its state is ``open`` / ``closed``); everything else is its numeric
+    state. Deliberately NOT the coordinator's :class:`~readers.SourceReader`
+    (no stale cache, no plausibility bookkeeping): the manifold drawing is a
+    snapshot of what the entities say right now, refreshed on every panel
+    poll, and must never mutate the control path's read state.
+
+    Args:
+        hass: The running Home Assistant instance.
+        entity_id: The entity to read.
+
+    Returns:
+        The finite numeric value, or ``None`` when absent / unavailable /
+        non-numeric.
+    """
+    state = hass.states.get(entity_id)
+    if state is None:
+        return None
+    raw: Any = (
+        state.attributes.get("current_position")
+        if is_valve_domain(entity_id)
+        else state.state
+    )
+    if raw is None or str(raw).lower() in UNAVAILABLE_STATES:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _manifold_views(
+    hass: HomeAssistant, coordinator: TortoiseUfhCoordinator, data: CoordinatorData
+) -> list[dict[str, Any]]:
+    """Build the ``get_live`` ``manifolds`` payload (v0.21.0).
+
+    Reads the manifold definitions from ``entry.data[CONF_MANIFOLDS]`` at
+    request time (they are presentation only and never cached by the
+    coordinator), pairs every room's loop wiring with its latest outputs /
+    report, snapshots the referenced entities and hands all of it to the pure
+    :func:`~core.manifold.build_manifold_views`. A single corrupted manifold
+    dict is skipped with a warning (the D7 rule of ``get_config``).
+
+    Args:
+        hass: The running Home Assistant instance.
+        coordinator: The live coordinator.
+        data: The coordinator's latest cycle payload.
+
+    Returns:
+        A list of :meth:`~core.manifold.ManifoldView.to_dict` dicts, in
+        configuration order; empty when nothing is configured.
+    """
+    raw_manifolds: Any = coordinator.config_entry.data.get(CONF_MANIFOLDS, [])
+    manifolds: list[ManifoldConfig] = []
+    for raw in raw_manifolds or []:
+        try:
+            manifolds.append(ManifoldConfig.from_dict(raw))
+        except (KeyError, TypeError, ValueError):
+            _LOGGER.warning(
+                "Skipping manifold %r with an invalid persisted config in get_live",
+                raw,
+                exc_info=True,
+            )
+    if not manifolds:
+        return []
+
+    rooms: list[RoomLoopSources] = []
+    entity_ids: set[str] = set()
+    for room_cfg in _room_configs(coordinator):
+        name = str(room_cfg.get(CONF_ROOM_NAME, ""))
+        if not name:
+            continue
+        valves = tuple(str(v) or None for v in room_cfg.get(CONF_ENTITY_VALVES) or [])
+        supplies = tuple(str(v) or None for v in room_cfg.get(CONF_ENTITY_SUPPLY) or [])
+        returns = tuple(str(v) or None for v in room_cfg.get(CONF_ENTITY_RETURN) or [])
+        entity_ids.update(e for e in (*valves, *supplies, *returns) if e)
+        runtime = data.rooms.get(name)
+        report = runtime.report if runtime is not None else None
+        try:
+            rooms.append(
+                RoomLoopSources(
+                    name=name,
+                    valves=valves,
+                    supplies=supplies,
+                    returns=returns,
+                    valve_command_pct=(
+                        runtime.outputs.valve_position_pct
+                        if runtime is not None
+                        else None
+                    ),
+                    flags=report.flags if report is not None else (),
+                    loop_flow_status=(
+                        report.loop_flow_status if report is not None else ()
+                    ),
+                    actuation_test_loops=(
+                        report.actuation_test_loops if report is not None else ()
+                    ),
+                )
+            )
+        except ValueError:
+            _LOGGER.warning(
+                "Skipping room %r with invalid loop wiring in get_live",
+                name,
+                exc_info=True,
+            )
+    for manifold in manifolds:
+        entity_ids.update(
+            e for e in (manifold.entity_supply_main, manifold.entity_return_main) if e
+        )
+
+    readings = {entity_id: _entity_number(hass, entity_id) for entity_id in entity_ids}
+    return [view.to_dict() for view in build_manifold_views(manifolds, rooms, readings)]
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -704,6 +830,9 @@ def ws_get_live(
 ) -> None:
     """Return the per-room live outputs, setpoints, statuses and dew point.
 
+    Since v0.21.0 the reply also carries ``manifolds`` — the resolved manifold
+    views the panel's Manifolds tab draws (see :func:`_manifold_views`).
+
     Args:
         hass: The running Home Assistant instance.
         connection: The active websocket connection.
@@ -741,6 +870,7 @@ def ws_get_live(
         mode=data.mode,
         sensor_lost_rooms=data.sensor_lost_rooms,
         heat_pump=data.heat_pump.to_dict() if data.heat_pump is not None else None,
+        manifolds=tuple(_manifold_views(hass, coordinator, data)),
     )
     connection.send_result(msg["id"], result.to_dict())
 

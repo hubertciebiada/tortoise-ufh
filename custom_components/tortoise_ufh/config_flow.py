@@ -30,7 +30,7 @@ Units:
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
@@ -46,6 +46,7 @@ from homeassistant.helpers.selector import (
     NumberSelectorMode,
     SelectSelector,
     SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TimeSelector,
 )
@@ -65,7 +66,9 @@ from .const import (
     CONF_ENTITY_HP_RETURN_TEMP,
     CONF_ENTITY_HUMIDITY,
     CONF_ENTITY_RETURN,
+    CONF_ENTITY_RETURN_MAIN,
     CONF_ENTITY_SUPPLY,
+    CONF_ENTITY_SUPPLY_MAIN,
     CONF_ENTITY_TEMP_OUTDOOR,
     CONF_ENTITY_TEMP_ROOM,
     CONF_ENTITY_VALVES,
@@ -75,6 +78,10 @@ from .const import (
     CONF_FAST_WINDOW_START,
     CONF_HEAT_PUMP,
     CONF_HOME_SETPOINT,
+    CONF_MANIFOLD_CIRCUITS,
+    CONF_MANIFOLD_NAME,
+    CONF_MANIFOLD_SIDE,
+    CONF_MANIFOLDS,
     CONF_ROOM_AREA,
     CONF_ROOM_NAME,
     CONF_ROOM_OFFSET,
@@ -86,6 +93,7 @@ from .const import (
     DEFAULT_COOLING_ENABLED,
     DEFAULT_FAST_SOURCE_KIND,
     DEFAULT_HOME_SETPOINT_C,
+    DEFAULT_MANIFOLD_CIRCUITS,
     DEFAULT_ROOM_OFFSET_C,
     DEFAULT_ROOM_STATE,
     DOMAIN,
@@ -100,6 +108,15 @@ from .const import (
     VALID_TEMP_UNITS,
 )
 from .core.config import ControllerConfig
+from .core.manifold import (
+    MANIFOLD_CIRCUITS_MAX,
+    MANIFOLD_CIRCUITS_MIN,
+    MANIFOLD_SIDE_LEFT,
+    MANIFOLD_SIDES,
+    ManifoldConfig,
+    ManifoldLoopConfig,
+    validate_manifolds,
+)
 from .device import room_slug
 from .entity_validator import EntityValidator
 from .tuning import flicker_open_max_pct, global_controller
@@ -124,6 +141,9 @@ _ENTITY_UNAVAILABLE: str = "entity_unavailable"
 
 CONF_SELECTED_ROOM: str = "selected_room"
 """Options-flow room-picker field key (edit-room / remove-room steps)."""
+
+CONF_SELECTED_MANIFOLD: str = "selected_manifold"
+"""Options-flow manifold-picker field key (edit / remove-manifold steps)."""
 
 _SETPOINT_STORE_VERSION: int = 1
 """Schema version of the coordinator's per-entry setpoint :class:`Store`.
@@ -689,6 +709,89 @@ def _first_entity_error(
     return error
 
 
+def _position_key(position: int) -> str:
+    """Return the manifold-loops form key of a circuit's loop (valve) picker.
+
+    Args:
+        position: 1-based circuit position.
+
+    Returns:
+        The form key, e.g. ``"position_3"``.
+    """
+    return f"position_{position}"
+
+
+def _label_key(position: int) -> str:
+    """Return the manifold-loops form key of a circuit's label field.
+
+    Args:
+        position: 1-based circuit position.
+
+    Returns:
+        The form key, e.g. ``"label_3"``.
+    """
+    return f"label_{position}"
+
+
+def _manifold_schema_dict(
+    *, include_name: bool, defaults: ManifoldConfig | None = None
+) -> dict[Any, Any]:
+    """Build the manifold-attributes schema fragment (name / circuits / side / probes).
+
+    Shared by the add-manifold and edit-manifold steps so the fields are
+    declared once. The name is included only when adding — a manifold name is
+    immutable once created (rename = remove + add), exactly like a room name.
+
+    Args:
+        include_name: Whether to include the required manifold-name field.
+        defaults: The existing manifold pre-filling the fields when editing,
+            or ``None`` for the library defaults (the add case).
+
+    Returns:
+        A voluptuous schema dict (marker -> selector).
+    """
+    schema: dict[Any, Any] = {}
+    if include_name:
+        schema[vol.Required(CONF_MANIFOLD_NAME)] = TextSelector()
+    schema[
+        vol.Required(
+            CONF_MANIFOLD_CIRCUITS,
+            default=defaults.circuits if defaults else DEFAULT_MANIFOLD_CIRCUITS,
+        )
+    ] = NumberSelector(
+        NumberSelectorConfig(
+            min=MANIFOLD_CIRCUITS_MIN,
+            max=MANIFOLD_CIRCUITS_MAX,
+            step=1,
+            mode=NumberSelectorMode.BOX,
+        )
+    )
+    schema[
+        vol.Required(
+            CONF_MANIFOLD_SIDE,
+            default=defaults.side if defaults else MANIFOLD_SIDE_LEFT,
+        )
+    ] = SelectSelector(
+        SelectSelectorConfig(
+            options=list(MANIFOLD_SIDES), translation_key="manifold_side"
+        )
+    )
+    probes = (
+        (CONF_ENTITY_SUPPLY_MAIN, defaults.entity_supply_main if defaults else None),
+        (CONF_ENTITY_RETURN_MAIN, defaults.entity_return_main if defaults else None),
+    )
+    for key, existing in probes:
+        marker = (
+            vol.Optional(key, description={"suggested_value": existing})
+            if existing
+            else vol.Optional(key)
+        )
+        schema[marker] = EntitySelector(
+            EntitySelectorConfig(domain=["sensor"], device_class=["temperature"])
+        )
+    return schema
+
+
 # ---------------------------------------------------------------------------
 # Config flow
 # ---------------------------------------------------------------------------
@@ -1024,6 +1127,12 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
       delete its orphaned entity-registry entries and prune its per-room state.
     * ``settings`` — per-room control-state selects (off / live) and the
       advanced :class:`ControllerConfig` knobs (the original options form).
+    * ``heat_pump`` — the optional heat-pump link (B2).
+    * ``manifolds`` — a sub-menu (add / edit / remove) over the underfloor
+      manifolds drawn by the panel's Manifolds tab (v0.21.0): geometry, the
+      optional main supply / return probes and which room loop (by its valve
+      entity) sits on which circuit. Presentation only, stored in
+      ``entry.data[CONF_MANIFOLDS]``.
 
     Room definitions live in ``entry.data`` (not ``entry.options``); the room
     leaves therefore persist through ``async_update_entry`` with a fresh
@@ -1036,6 +1145,10 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
     _pending_room: dict[str, Any]
     # Index of the room being edited in CONF_ROOMS, or None while adding.
     _pending_index: int | None
+    # Manifold being added / edited (its loops step completes it).
+    _pending_manifold: ManifoldConfig
+    # Index of the manifold being edited in CONF_MANIFOLDS, or None while adding.
+    _pending_manifold_index: int | None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -1049,6 +1162,7 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 "remove_room",
                 "settings",
                 "heat_pump",
+                "manifolds",
             ],
         )
 
@@ -1555,6 +1669,401 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
             ),
             errors=errors,
         )
+
+    # -- Leaf: manifolds (presentation only, v0.21.0) ------------------------
+
+    async def async_step_manifolds(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Sub-menu over the manifold leaves (add / edit / remove)."""
+        return self.async_show_menu(
+            step_id="manifolds",
+            menu_options=["add_manifold", "edit_manifold", "remove_manifold"],
+        )
+
+    async def async_step_add_manifold(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Collect a new manifold's attributes, then advance to its circuits."""
+        entry = self.config_entry
+        existing = self._manifold_dicts(entry)
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            name = str(user_input.get(CONF_MANIFOLD_NAME, "")).strip()
+            manifold_id = room_slug(name)
+            if not name:
+                errors["base"] = "empty_manifold_name"
+            elif any(
+                str(m.get("manifold_id", "")) == manifold_id
+                or str(m.get("name", "")) == name
+                for m in existing
+            ):
+                errors["base"] = "duplicate_manifold_name"
+
+            if not errors:
+                pending = self._parse_manifold_attrs(
+                    user_input,
+                    manifold_id=manifold_id,
+                    name=name,
+                    loops=(),
+                    errors=errors,
+                )
+                if pending is not None:
+                    self._pending_manifold = pending
+                    self._pending_manifold_index = None
+                    return await self.async_step_manifold_loops()
+
+        return self.async_show_form(
+            step_id="add_manifold",
+            data_schema=vol.Schema(_manifold_schema_dict(include_name=True)),
+            errors=errors,
+        )
+
+    async def async_step_edit_manifold(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Pick an existing manifold to edit."""
+        entry = self.config_entry
+        manifolds = self._manifold_dicts(entry)
+        if not manifolds:
+            return self.async_abort(reason="no_manifolds")
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            selected = str(user_input.get(CONF_SELECTED_MANIFOLD, ""))
+            index = next(
+                (
+                    i
+                    for i, m in enumerate(manifolds)
+                    if str(m.get("name", "")) == selected
+                ),
+                None,
+            )
+            if index is None:
+                errors["base"] = "invalid_manifold"
+            else:
+                try:
+                    current = ManifoldConfig.from_dict(manifolds[index])
+                except (KeyError, TypeError, ValueError) as err:
+                    _LOGGER.warning("Invalid persisted manifold: %s", err)
+                    errors["base"] = "invalid_manifold"
+                else:
+                    self._pending_manifold_index = index
+                    self._pending_manifold = current
+                    return await self.async_step_edit_manifold_attrs()
+
+        names = [str(m.get("name", "")) for m in manifolds]
+        return self.async_show_form(
+            step_id="edit_manifold",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_SELECTED_MANIFOLD): SelectSelector(
+                        SelectSelectorConfig(options=names)
+                    )
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_edit_manifold_attrs(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Edit the picked manifold's attributes (its name is immutable)."""
+        current = self._pending_manifold
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            pending = self._parse_manifold_attrs(
+                user_input,
+                manifold_id=current.manifold_id,
+                name=current.name,
+                loops=current.loops,
+                errors=errors,
+            )
+            if pending is not None:
+                self._pending_manifold = pending
+                return await self.async_step_manifold_loops()
+
+        return self.async_show_form(
+            step_id="edit_manifold_attrs",
+            data_schema=vol.Schema(
+                _manifold_schema_dict(include_name=False, defaults=current)
+            ),
+            errors=errors,
+            description_placeholders={"manifold_name": current.name},
+        )
+
+    async def async_step_manifold_loops(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Place room loops on the pending manifold's circuits, then save.
+
+        One loop (valve) picker + one optional label per circuit position,
+        keyed ``position_{n}`` / ``label_{n}`` (``n`` = 1..circuits). Every
+        picker is optional: an empty circuit stays free. Validation: one loop
+        may sit on one circuit only (``loop_assigned_twice``) and on one
+        manifold only (``loop_assigned_elsewhere``); positions are generated
+        from the circuit count, so they are always in range.
+        """
+        entry = self.config_entry
+        pending = self._pending_manifold
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            loops: list[ManifoldLoopConfig] = []
+            for position in range(1, pending.circuits + 1):
+                valve = str(user_input.get(_position_key(position), "") or "").strip()
+                label = str(user_input.get(_label_key(position), "") or "").strip()
+                if valve:
+                    loops.append(
+                        ManifoldLoopConfig(
+                            position=position, entity_valve=valve, label=label
+                        )
+                    )
+            try:
+                manifold = replace(pending, loops=tuple(loops))
+            except ValueError as err:
+                _LOGGER.warning("Invalid manifold loop assignment: %s", err)
+                errors["base"] = "loop_assigned_twice"
+            else:
+                others = self._other_manifolds(entry, self._pending_manifold_index)
+                try:
+                    validate_manifolds([*others, manifold])
+                except ValueError as err:
+                    _LOGGER.warning("Invalid manifold loop assignment: %s", err)
+                    errors["base"] = "loop_assigned_elsewhere"
+                else:
+                    manifolds = self._manifold_dicts(entry)
+                    if self._pending_manifold_index is None:
+                        manifolds.append(manifold.to_dict())
+                    else:
+                        manifolds[self._pending_manifold_index] = manifold.to_dict()
+                    return self._save_manifolds(manifolds)
+
+        choices = self._loop_choices(entry, pending)
+        schema_dict: dict[Any, Any] = {}
+        for position in range(1, pending.circuits + 1):
+            loop = pending.loop_at(position)
+            valve_marker = (
+                vol.Optional(
+                    _position_key(position),
+                    description={"suggested_value": loop.entity_valve},
+                )
+                if loop is not None
+                else vol.Optional(_position_key(position))
+            )
+            schema_dict[valve_marker] = SelectSelector(
+                SelectSelectorConfig(options=choices, mode=SelectSelectorMode.DROPDOWN)
+            )
+            label_marker = (
+                vol.Optional(
+                    _label_key(position), description={"suggested_value": loop.label}
+                )
+                if loop is not None and loop.label
+                else vol.Optional(_label_key(position))
+            )
+            schema_dict[label_marker] = TextSelector()
+
+        return self.async_show_form(
+            step_id="manifold_loops",
+            data_schema=vol.Schema(schema_dict),
+            errors=errors,
+            description_placeholders={
+                "manifold_name": pending.name,
+                "circuits": str(pending.circuits),
+            },
+        )
+
+    async def async_step_remove_manifold(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Pick a manifold to remove (rooms and their loops are untouched)."""
+        entry = self.config_entry
+        manifolds = self._manifold_dicts(entry)
+        if not manifolds:
+            return self.async_abort(reason="no_manifolds")
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            selected = str(user_input.get(CONF_SELECTED_MANIFOLD, ""))
+            index = next(
+                (
+                    i
+                    for i, m in enumerate(manifolds)
+                    if str(m.get("name", "")) == selected
+                ),
+                None,
+            )
+            if index is None:
+                errors["base"] = "invalid_manifold"
+            else:
+                remaining = [m for i, m in enumerate(manifolds) if i != index]
+                return self._save_manifolds(remaining)
+
+        names = [str(m.get("name", "")) for m in manifolds]
+        return self.async_show_form(
+            step_id="remove_manifold",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_SELECTED_MANIFOLD): SelectSelector(
+                        SelectSelectorConfig(options=names)
+                    )
+                }
+            ),
+            errors=errors,
+        )
+
+    def _parse_manifold_attrs(
+        self,
+        user_input: dict[str, Any],
+        *,
+        manifold_id: str,
+        name: str,
+        loops: tuple[ManifoldLoopConfig, ...],
+        errors: dict[str, str],
+    ) -> ManifoldConfig | None:
+        """Build a validated manifold from the attributes form.
+
+        The optional main probes are unit-validated like every other
+        temperature picker (°C only); assignments beyond a reduced circuit
+        count are dropped silently (the loops step shows what is left).
+
+        Args:
+            user_input: The submitted add / edit-manifold form values.
+            manifold_id: The (immutable) manifold id.
+            name: The (immutable) manifold name.
+            loops: The assignments carried over from the edited manifold.
+            errors: The step's error map; the first blocking key is set here.
+
+        Returns:
+            The :class:`ManifoldConfig`, or ``None`` when ``errors`` was set.
+        """
+        validator = EntityValidator(self.hass)
+        probes: dict[str, str | None] = {}
+        for key in (CONF_ENTITY_SUPPLY_MAIN, CONF_ENTITY_RETURN_MAIN):
+            value = str(user_input.get(key, "") or "").strip()
+            probes[key] = value or None
+            if value:
+                error = _validate_entities(
+                    validator,
+                    [value],
+                    valid_units=VALID_TEMP_UNITS,
+                    device_class="temperature",
+                )
+                if error is not None:
+                    errors["base"] = error
+                    return None
+        circuits = int(float(user_input.get(CONF_MANIFOLD_CIRCUITS, 0) or 0))
+        try:
+            return ManifoldConfig(
+                manifold_id=manifold_id,
+                name=name,
+                circuits=circuits,
+                side=str(user_input.get(CONF_MANIFOLD_SIDE, MANIFOLD_SIDE_LEFT)),
+                entity_supply_main=probes[CONF_ENTITY_SUPPLY_MAIN],
+                entity_return_main=probes[CONF_ENTITY_RETURN_MAIN],
+                loops=tuple(loop for loop in loops if loop.position <= circuits),
+            )
+        except ValueError as err:
+            _LOGGER.warning("Invalid manifold definition: %s", err)
+            errors["base"] = "invalid_manifold"
+            return None
+
+    @staticmethod
+    def _manifold_dicts(entry: ConfigEntry) -> list[dict[str, Any]]:
+        """Return a mutable copy of the persisted manifold list (may be empty).
+
+        Args:
+            entry: The config entry.
+
+        Returns:
+            The ``CONF_MANIFOLDS`` dicts, copied.
+        """
+        raw: Any = entry.data.get(CONF_MANIFOLDS, [])
+        return [dict(item) for item in raw] if raw else []
+
+    @classmethod
+    def _other_manifolds(
+        cls, entry: ConfigEntry, skip_index: int | None
+    ) -> list[ManifoldConfig]:
+        """Return every OTHER persisted manifold (corrupted ones skipped).
+
+        Args:
+            entry: The config entry.
+            skip_index: Index of the manifold being edited, or ``None``.
+
+        Returns:
+            The parsed :class:`ManifoldConfig` list.
+        """
+        others: list[ManifoldConfig] = []
+        for index, raw in enumerate(cls._manifold_dicts(entry)):
+            if index == skip_index:
+                continue
+            try:
+                others.append(ManifoldConfig.from_dict(raw))
+            except (KeyError, TypeError, ValueError) as err:
+                _LOGGER.warning("Skipping invalid persisted manifold: %s", err)
+        return others
+
+    @staticmethod
+    def _loop_choices(
+        entry: ConfigEntry, pending: ManifoldConfig
+    ) -> list[dict[str, str]]:
+        """Every configured room loop as a picker option (value = valve id).
+
+        A loop is labelled by its room (numbered inside a multi-loop room)
+        plus the valve entity id. A valve the pending manifold still stores
+        but no room wires any more stays selectable (flagged ``?``) so the
+        form round-trips instead of failing validation on an unchanged pick.
+
+        Args:
+            entry: The config entry holding the rooms.
+            pending: The manifold whose circuits are being assigned.
+
+        Returns:
+            ``[{"value": entity_id, "label": text}, ...]`` in room order.
+        """
+        choices: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for room_cfg in entry.data.get(CONF_ROOMS, []):
+            room_name = str(room_cfg.get(CONF_ROOM_NAME, ""))
+            valves = [str(v) for v in room_cfg.get(CONF_ENTITY_VALVES) or [] if v]
+            for index, valve in enumerate(valves):
+                if valve in seen:
+                    continue
+                seen.add(valve)
+                loop_name = (
+                    room_name if len(valves) == 1 else f"{room_name} {index + 1}"
+                )
+                choices.append({"value": valve, "label": f"{loop_name} — {valve}"})
+        for loop in pending.loops:
+            if loop.entity_valve not in seen:
+                seen.add(loop.entity_valve)
+                choices.append(
+                    {"value": loop.entity_valve, "label": f"? — {loop.entity_valve}"}
+                )
+        return choices
+
+    def _save_manifolds(self, manifolds: list[dict[str, Any]]) -> FlowResult:
+        """Persist a replacement manifold list and finish the flow.
+
+        Only ``entry.data[CONF_MANIFOLDS]`` changes; the options are
+        re-affirmed unchanged. Manifolds are presentation only — the
+        websocket reads the list afresh on every ``get_live`` — so nothing
+        here needs the coordinator rebuilt.
+
+        Args:
+            manifolds: The full replacement list of manifold storage dicts.
+
+        Returns:
+            The terminal ``CREATE_ENTRY`` flow result.
+        """
+        entry = self.config_entry
+        self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_MANIFOLDS: manifolds}
+        )
+        return self.async_create_entry(title="", data=dict(entry.options))
 
     # -- Internal: persistence + cleanup helpers ----------------------------
 

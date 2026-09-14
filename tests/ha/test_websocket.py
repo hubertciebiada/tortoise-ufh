@@ -573,3 +573,131 @@ async def test_set_hp_dhw_toggles_the_flag(
     assert msg["success"] is False
     assert msg["error"]["code"] == "hp_dhw_unavailable"
     assert len(select_calls) == 1
+
+
+# -- Manifolds (2026-09-14, v0.21.0): get_live carries the resolved views -----
+
+
+async def test_get_live_manifolds_empty_without_configuration(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """An entry without CONF_MANIFOLDS (every pre-0.21.0 entry) reports []."""
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/get_live"})
+
+    assert msg["success"] is True
+    assert msg["result"]["manifolds"] == []
+
+
+async def test_get_live_resolves_manifold_circuits(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """Each circuit resolves its room loop, probes, feedback-first opening and ΔT.
+
+    The manifold is read from entry.data at request time (no reload needed),
+    the readings come straight from the state machine (Salon supply 30 /
+    return 26 -> ΔT 4 K; the number valve reads 0 %), a free circuit is all
+    nulls and a corrupted sibling manifold is skipped, not fatal.
+    """
+    from custom_components.tortoise_ufh.const import CONF_MANIFOLDS
+
+    entry = setup_integration
+    manifolds = [
+        {"name": "Broken", "circuits": 2},  # no manifold_id -> skipped
+        {
+            "manifold_id": "east",
+            "name": "East",
+            "circuits": 3,
+            "side": "right",
+            "entity_supply_main": "sensor.salon_supply",
+            "entity_return_main": "",
+            "loops": [
+                {
+                    "position": 1,
+                    "entity_valve": "number.salon_valve",
+                    "label": "Living",
+                },
+                {"position": 3, "entity_valve": "number.lazienka_valve"},
+            ],
+        },
+    ]
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_MANIFOLDS: manifolds}
+    )
+    await hass.async_block_till_done()
+
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/get_live"})
+
+    assert msg["success"] is True
+    (east,) = msg["result"]["manifolds"]
+    assert east["id"] == "east"
+    assert east["name"] == "East"
+    assert east["circuits"] == 3
+    assert east["side"] == "right"
+    assert east["main"]["supply"] == {"value": 30.0, "entity_id": "sensor.salon_supply"}
+    assert east["main"]["return"] == {"value": None, "entity_id": None}
+
+    salon, free, lazienka = east["positions"]
+    assert salon["position"] == 1
+    assert salon["room_name"] == "Salon"
+    assert salon["loop_index"] == 0
+    assert salon["loop_label"] == "Living"
+    assert salon["valve"] == {
+        "pct": 0.0,
+        "command_pct": 0.0,
+        "entity_id": "number.salon_valve",
+    }
+    assert salon["supply"] == {"value": 30.0, "entity_id": "sensor.salon_supply"}
+    assert salon["return"] == {"value": 26.0, "entity_id": "sensor.salon_return"}
+    assert salon["delta_k"] == pytest.approx(4.0)
+    assert salon["flags"] == []
+
+    assert free["position"] == 2
+    assert free["room_name"] is None
+    assert free["valve"] == {"pct": None, "command_pct": None, "entity_id": None}
+
+    assert lazienka["position"] == 3
+    assert lazienka["room_name"] == "Lazienka"
+    # No explicit label -> the room name (a single-loop room).
+    assert lazienka["loop_label"] == "Lazienka"
+
+
+async def test_get_live_manifold_prefers_valve_feedback(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """The reported actuator position wins over the room's (idle, off) command."""
+    from custom_components.tortoise_ufh.const import CONF_MANIFOLDS
+
+    entry = setup_integration
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            CONF_MANIFOLDS: [
+                {
+                    "manifold_id": "east",
+                    "name": "East",
+                    "circuits": 1,
+                    "loops": [{"position": 1, "entity_valve": "number.salon_valve"}],
+                }
+            ],
+        },
+    )
+    await hass.async_block_till_done()
+    # Someone opened the Salon valve by hand; the room is off (command 0).
+    hass.states.async_set("number.salon_valve", "57", {"unit_of_measurement": "%"})
+
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/get_live"})
+
+    (east,) = msg["result"]["manifolds"]
+    (salon,) = east["positions"]
+    assert salon["valve"]["pct"] == 57.0
+    assert salon["valve"]["command_pct"] == 0.0

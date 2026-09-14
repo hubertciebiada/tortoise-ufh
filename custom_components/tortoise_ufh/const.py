@@ -230,6 +230,32 @@ every per-loop probe pair sits post-valve. Unset = the gate relies on the
 per-loop delta-T witnesses only."""
 
 # ---------------------------------------------------------------------------
+# Configuration keys — manifolds (options flow; presentation only, v0.21.0)
+# ---------------------------------------------------------------------------
+
+CONF_MANIFOLDS: str = "manifolds"
+"""List-of-dicts of underfloor manifold (distributor) definitions stored under
+``entry.data`` (additive 2026-09-14; optional — an entry without the key simply
+has no manifolds, no migration). Each dict is the storage form of the core
+:class:`~core.manifold.ManifoldConfig` (``to_dict`` / ``from_dict``): keys
+``manifold_id``, ``name``, ``circuits``, ``side``, ``entity_supply_main``,
+``entity_return_main`` and ``loops`` (``position`` / ``entity_valve`` /
+``label``). Presentation only — drawn on the panel's Manifolds tab; nothing in
+the control path reads it, so a change never needs a coordinator rebuild."""
+
+CONF_MANIFOLD_NAME: str = "name"
+CONF_MANIFOLD_CIRCUITS: str = "circuits"
+CONF_MANIFOLD_SIDE: str = "side"
+CONF_ENTITY_SUPPLY_MAIN: str = "entity_supply_main"
+CONF_ENTITY_RETURN_MAIN: str = "entity_return_main"
+"""Manifold options-flow form keys — identical to the ``ManifoldConfig`` field
+names so the form round-trips through ``to_dict`` / ``from_dict``. The two
+probes are the OPTIONAL main supply (Z0) / return (P0) temperature sensors."""
+
+DEFAULT_MANIFOLD_CIRCUITS: int = 6
+"""Pre-filled circuit count of a new manifold (a common catalogue size)."""
+
+# ---------------------------------------------------------------------------
 # Closed option sets (mirror core enum ``.value`` strings verbatim)
 # ---------------------------------------------------------------------------
 

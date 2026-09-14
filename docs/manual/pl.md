@@ -122,7 +122,14 @@ różnych od siebie — §10).
 
 Po utworzeniu wpisu wszystko zmienisz w **opcjach integracji** (Ustawienia →
 Urządzenia i usługi → Tortoise-UFH → Konfiguruj): dodawanie/edycja/usuwanie pokoi,
-ustawienia sterowania i strojenia oraz opcjonalna sekcja **Pompa ciepła** (§11).
+ustawienia sterowania i strojenia, opcjonalna sekcja **Pompa ciepła** (§11) oraz
+**Rozdzielacze** (od v0.21.0) — opis rozdzielaczy podłogówki (nazwa, liczba obwodów
+1–20, strona przyłącza głównego, opcjonalne sondy temperatury głównego zasilania Z0
+i powrotu P0), a w drugim kroku pętla pokoju na każdym obwodzie (wybór encji zaworu,
+opcjonalna etykieta; pusty obwód = wolna pozycja). Jedna pętla może siedzieć tylko na
+jednym obwodzie jednego rozdzielacza. To wyłącznie prezentacja dla zakładki
+Rozdzielacze panelu (§5) — nic tu nie zmienia sterowania i zapis nie przeładowuje
+regulatora.
 
 ## 5. Panel boczny
 
@@ -179,6 +186,18 @@ Zakładki:
   tryb pompy (zgodny/rozjazd), przełącznik flagi CWU, nastawy wody ze składnikami
   i sygnał „pompa dostępna dla podłogówki". Bez konfiguracji pokazuje instrukcję,
   gdzie ją włączyć.
+- **Rozdzielacze** (od v0.21.0) — jedna karta na rozdzielacz: nagłówek (nazwa,
+  „KAN-therm InoxFlow UFST · n obwodów", temperatura głównego zasilania i powrotu
+  z sond Z0/P0, ΔT, licznik otwartych obwodów, flagi), **aksonometryczny rysunek**
+  rozdzielacza z żywymi wartościami przy obwodach (otwarcie siłownika koloruje jego
+  korpus i unosi pływak rotametru; nad każdą pętlą jej etykieta, przy siłowniku
+  otwarcie, pod króćcami zasilanie i powrót) oraz **tabela pętli** (Pętla · Otwarcie
+  z paskiem · Zasilanie · Powrót · ΔT · Stan z flagami dotyczącymi pętli: brak
+  przepływu S6, rozjazd zaworu, nieudany test aktuacji, S1/S2). Każda wartość, za
+  którą stoi encja, to ukryty odnośnik (tylko kursor) do natywnego okna encji
+  z historią. Otwarcie to pozycja zgłaszana przez siłownik, a gdy jej brak — komenda
+  regulatora; obwód bez pętli jest rysowany bez etykiet. Bez rozdzielaczy zakładka
+  podpowiada, gdzie je skonfigurować (§4).
 
 Wykres **historii** w szczegółach pokoju (od v0.16.0) wygładza serie temperatury
 i zadanej średnimi kubełkowymi — ok. 2-minutowymi w oknie 6 h i 8-minutowymi
