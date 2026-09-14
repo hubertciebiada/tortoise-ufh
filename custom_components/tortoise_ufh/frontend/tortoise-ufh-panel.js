@@ -3029,7 +3029,14 @@ function mfBuildModel(view) {
   const main = view.main || {};
   for (const [yBar, zBar, kind] of bars) {
     const sup = kind === "supply";
-    mfCyl(L, "steel", "x", [X(Lbar / 2), yBar, zBar], rb, Lbar);
+    // Cut the bar midway between neighbouring circuits: every fitting then sits
+    // in the middle of its own segment, so no neighbouring segment (nearer by
+    // its centre) is painted over a flowmeter or a eurocone nut.
+    const cuts = [];
+    for (let cx = xFirst + D.pitch / 2; cx < xLast; cx += D.pitch) {
+      cuts.push(X(cx) - (X(Lbar / 2) - Lbar / 2));
+    }
+    mfCyl(L, "steel", "x", [X(Lbar / 2), yBar, zBar], rb, Lbar, { cuts });
     mfCyl(L, "brass", "x", [X(-D.stubLen / 2), yBar, zBar], D.stubR, D.stubLen);
     const mainReading = sup ? main.supply : main.return;
     if (mainReading && mainReading.entity_id) {
@@ -3403,16 +3410,22 @@ function mfRenderSvg(model, view, widthPx, caps, ariaLabel) {
       mfDrawTube(prim, out);
       continue;
     }
-    const k = prim.axis === "z" ? 1 : Math.max(1, Math.ceil(prim.len / 50));
-    if (k === 1 || prim.r2 != null) {
+    let bounds;
+    if (Array.isArray(prim.cuts) && prim.cuts.length) {
+      bounds = [0, ...prim.cuts.filter((v) => v > 0 && v < prim.len).sort((p, q) => p - q), prim.len];
+    } else {
+      const k = prim.axis === "z" ? 1 : Math.max(1, Math.ceil(prim.len / 50));
+      bounds = Array.from({ length: k + 1 }, (_, i) => (prim.len * i) / k);
+    }
+    if (bounds.length <= 2 || prim.r2 != null) {
       mfDrawCyl(prim, out);
       continue;
     }
     const a = MF_AXES[prim.axis];
-    const seg = prim.len / k;
-    for (let i = 0; i < k; i++) {
-      const c = mfAdd(prim.c, mfMul(a, -prim.len / 2 + seg * (i + 0.5)));
-      mfDrawCyl(Object.assign({}, prim, { c, len: seg }), out, i === 0 ? "first" : i === k - 1 ? "last" : "mid");
+    for (let i = 0; i + 1 < bounds.length; i++) {
+      const len = bounds[i + 1] - bounds[i];
+      const c = mfAdd(prim.c, mfMul(a, -prim.len / 2 + bounds[i] + len / 2));
+      mfDrawCyl(Object.assign({}, prim, { c, len }), out, i === 0 ? "first" : i + 2 === bounds.length ? "last" : "mid");
     }
   }
   out.sort((a, b) => b.w - a.w);
