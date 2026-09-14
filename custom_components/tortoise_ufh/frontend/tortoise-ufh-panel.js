@@ -3082,7 +3082,8 @@ function mfBuildModel(view) {
     y += D.fmBaseH;
     mfCyl(L, "brass", "y", [x, y + D.fmRingH / 2, D.zS], D.fmRingR, D.fmRingH);
     y += D.fmRingH;
-    mfCyl(L, "float", "y", [x, y + 4 + ((D.fmTubeH - 8) * pct) / 100, D.zS], D.floatR, D.floatH);
+    // The flow pushes the indicator down the scale: 0 stands at the top, full flow at the bottom.
+    mfCyl(L, "float", "y", [x, y + 4 + ((D.fmTubeH - 8) * (100 - pct)) / 100, D.zS], D.floatR, D.floatH);
     mfCyl(L, "glass", "y", [x, y + D.fmTubeH / 2, D.zS], D.fmTubeR, D.fmTubeH);
     y += D.fmTubeH;
     mfCyl(L, "dark", "y", [x, y + D.fmCapH / 2, D.zS], D.fmCapR, D.fmCapH, { r2: D.fmCapR - 1.5 });

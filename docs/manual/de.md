@@ -204,7 +204,7 @@ Reiter:
   InoxFlow UFST · n Heizkreise“, Temperatur von Hauptvorlauf und -rücklauf aus den
   Sonden Z0/P0, ΔT, Zähler der offenen Heizkreise, Meldungen), eine **axonometrische
   Zeichnung** des Verteilers mit Live-Werten an den Heizkreisen (die Ventilöffnung
-  färbt den Stellantrieb und hebt den Schwimmer des Durchflussmessers; über jedem
+  färbt den Stellantrieb und senkt den Schwimmer des Durchflussmessers (0 oben auf der Skala, wie am echten Gerät); über jedem
   Kreis seine Beschriftung, am Antrieb die Öffnung, unter den Anschlüssen Vorlauf und
   Rücklauf) sowie eine **Tabelle der Heizkreise** (Heizkreis · Öffnung mit Balken ·
   Vorlauf · Rücklauf · ΔT · Zustand mit den kreisbezogenen Meldungen: kein Durchfluss

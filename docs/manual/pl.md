@@ -187,7 +187,7 @@ Zakładki:
   „KAN-therm InoxFlow UFST · n obwodów", temperatura głównego zasilania i powrotu
   z sond Z0/P0, ΔT, licznik otwartych obwodów, flagi), **aksonometryczny rysunek**
   rozdzielacza z żywymi wartościami przy obwodach (otwarcie siłownika koloruje jego
-  korpus i unosi pływak rotametru; nad każdą pętlą jej etykieta, przy siłowniku
+  korpus i opuszcza wskaźnik rotametru (0 u góry skali, jak w prawdziwym przepływomierzu); nad każdą pętlą jej etykieta, przy siłowniku
   otwarcie, pod króćcami zasilanie i powrót) oraz **tabela pętli** (Pętla · Otwarcie
   z paskiem · Zasilanie · Powrót · ΔT · Stan z flagami dotyczącymi pętli: brak
   przepływu S6, rozjazd zaworu, nieudany test aktuacji, S1/S2). Każda wartość, za
