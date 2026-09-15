@@ -196,7 +196,7 @@
       function sampleConfig(scenario) {
         const mode = scenario === "cooling" ? "cooling" : "heating";
         return {
-          home_setpoint_c: 21.0,
+          home_setpoint_c: state.homeSetpoint,
           mode,
           global_safe_dew_point_entity_id: "sensor.tortoise_global_safe_dew_point",
           // B2 (v0.8.0): the configured heat-pump-link entity ids (null when
@@ -449,6 +449,9 @@
           watchdog_state: stale ? "stale" : "ok",
           last_update_timestamp: new Date(nowMs).toISOString(),
           mode: cooling ? "cooling" : "heating",
+          // v0.21.12: the current home setpoint, so the header follows an
+          // external change (set `state.homeSetpoint` from the console).
+          home_setpoint_c: state.homeSetpoint,
           // Building-level staleness counter (safety-F13): Kuchnia is lost.
           sensor_lost_rooms: 1,
           // B2 (v0.8.0): the heat-pump link view (HeatPumpRuntime.to_dict).
@@ -634,6 +637,9 @@
         scenario: "heating",
         ageSeconds: 45,
         roomStates: { Salon: "live", Kuchnia: "off", "Łazienka": "live" },
+        // Global home setpoint (read by get_config + get_live, written by
+        // set_home_temperature).
+        homeSetpoint: 21.0,
         // Sparse per-room controller overrides (mirrors CONF_ROOM_TUNING).
         tuningRooms: { Salon: { kt: 8.0 } },
         // B2 (v0.8.0): the pump's +DHW flag (toggled by set_hp_dhw).
@@ -713,6 +719,7 @@
             // Writes: echo a tiny result and mutate local mock state so the
             // optimistic UI reconciles on the panel's follow-up poll.
             if (msg.type === "tortoise_ufh/set_home_temperature") {
+              state.homeSetpoint = msg.temperature;
               return Promise.resolve({ home_setpoint_c: msg.temperature });
             }
             if (msg.type === "tortoise_ufh/set_room_offset") {

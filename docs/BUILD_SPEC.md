@@ -926,7 +926,10 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   (returns `BuildingOutputs.to_dict()` + setpoints + per-room `control_state` + statuses, and —
   since v0.21.0 — `manifolds`: one `core/manifold.py::ManifoldView.to_dict()` per configured
   manifold, resolved at request time from `entry.data[CONF_MANIFOLDS]`, the rooms' loop wiring,
-  the latest room outputs/report and a plain snapshot of the referenced entity states),
+  the latest room outputs/report and a plain snapshot of the referenced entity states, and —
+  since v0.21.12 — `home_setpoint_c`, the coordinator's current home temperature read at request
+  time, which the panel's poll uses to follow an external change without refetching
+  `get_config`),
   `tortoise_ufh/set_home_temperature`, `tortoise_ufh/set_room_offset`,
   `tortoise_ufh/set_room_state` (`{room, state ∈ ROOM_STATES}`), `tortoise_ufh/set_mode`,
   `tortoise_ufh/get_tuning` (knob descriptors with ranges/units from

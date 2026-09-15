@@ -175,6 +175,38 @@ async def test_get_live_returns_outputs_and_dew_point(
     assert rooms["Lazienka"]["setpoint_c"] == 22.0
 
 
+async def test_get_live_follows_external_home_temperature_change(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """get_live carries the CURRENT home setpoint (v0.21.12).
+
+    The panel polls only get_live, so an external write (an automation driving
+    the number entity) must show up there; the value is read from the
+    coordinator at request time.
+    """
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/get_live"})
+    assert msg["success"] is True
+    assert msg["result"]["home_setpoint_c"] == 21.0
+
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "number", DOMAIN, f"{setup_integration.entry_id}_home_temperature"
+    )
+    assert entity_id is not None
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": entity_id, "value": 22.5},
+        blocking=True,
+    )
+
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/get_live"})
+    assert msg["success"] is True
+    assert msg["result"]["home_setpoint_c"] == 22.5
+
+
 async def test_set_home_temperature_mutates_coordinator(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,

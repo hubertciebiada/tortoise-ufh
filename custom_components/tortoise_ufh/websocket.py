@@ -343,6 +343,12 @@ class LiveResult:
         last_update_timestamp: ISO-8601 UTC timestamp of the last cycle, or
             ``None`` if no cycle has completed.
         mode: Active global :class:`~tortoise_ufh.models.Mode` value string.
+        home_setpoint_c: The coordinator's CURRENT global home target
+            temperature in degrees Celsius, read at request time rather than
+            from the last cycle (additive 2026-09-15, v0.21.12): the panel
+            fetches ``get_config`` only on open and after its own edits, so
+            this polled copy is how its header follows an external change
+            (an automation, the ``number`` entity, a service call).
         sensor_lost_rooms: Number of rooms currently degraded with the
             ``sensor_lost`` flag (building-level staleness counter,
             safety-F13 2026-07-09).
@@ -355,8 +361,9 @@ class LiveResult:
             Manifolds tab). Empty when no manifold is configured.
 
     Raises:
-        ValueError: If ``mode`` is not a recognised mode string or
-            ``global_safe_dew_point_c`` is not finite when present.
+        ValueError: If ``mode`` is not a recognised mode string,
+            ``home_setpoint_c`` is not finite, or ``global_safe_dew_point_c``
+            is not finite when present.
     """
 
     rooms: tuple[LiveRoomView, ...]
@@ -365,6 +372,7 @@ class LiveResult:
     watchdog_state: str
     last_update_timestamp: str | None
     mode: str
+    home_setpoint_c: float
     sensor_lost_rooms: int = 0
     heat_pump: dict[str, Any] | None = None
     manifolds: tuple[dict[str, Any], ...] = ()
@@ -373,6 +381,9 @@ class LiveResult:
         """Validate the global fields of the live reply."""
         if self.mode not in MODE_OPTIONS:
             msg = f"mode must be one of {MODE_OPTIONS}, got {self.mode!r}"
+            raise ValueError(msg)
+        if not math.isfinite(self.home_setpoint_c):
+            msg = f"home_setpoint_c must be finite, got {self.home_setpoint_c}"
             raise ValueError(msg)
         if self.global_safe_dew_point_c is not None and not math.isfinite(
             self.global_safe_dew_point_c
@@ -392,6 +403,7 @@ class LiveResult:
             "watchdog_state": self.watchdog_state,
             "last_update_timestamp": self.last_update_timestamp,
             "mode": self.mode,
+            "home_setpoint_c": self.home_setpoint_c,
             "sensor_lost_rooms": self.sensor_lost_rooms,
             "heat_pump": dict(self.heat_pump) if self.heat_pump is not None else None,
             "manifolds": [dict(manifold) for manifold in self.manifolds],
@@ -831,7 +843,8 @@ def ws_get_live(
     """Return the per-room live outputs, setpoints, statuses and dew point.
 
     Since v0.21.0 the reply also carries ``manifolds`` — the resolved manifold
-    views the panel's Manifolds tab draws (see :func:`_manifold_views`).
+    views the panel's Manifolds tab draws (see :func:`_manifold_views`) — and
+    since v0.21.12 ``home_setpoint_c``, the current home target temperature.
 
     Args:
         hass: The running Home Assistant instance.
@@ -868,6 +881,7 @@ def ws_get_live(
         watchdog_state=data.watchdog_state,
         last_update_timestamp=data.last_update_timestamp,
         mode=data.mode,
+        home_setpoint_c=coordinator.get_home_temperature(),
         sensor_lost_rooms=data.sensor_lost_rooms,
         heat_pump=data.heat_pump.to_dict() if data.heat_pump is not None else None,
         manifolds=tuple(_manifold_views(hass, coordinator, data)),
