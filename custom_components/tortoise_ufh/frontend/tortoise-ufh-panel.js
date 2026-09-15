@@ -3485,6 +3485,12 @@ class TortoiseUfhPanel extends HTMLElement {
     this._hass = null;
     this._config = null; // last get_config payload
     this._live = null; // last get_live payload
+    // Local home-setpoint edits (+/-): a generation bumped when an edit starts
+    // and when it ends, plus a count of set_home_temperature calls still in
+    // flight, so the poll never overwrites the optimistic value with a reply
+    // that may predate the write.
+    this._homeEditGen = 0;
+    this._homeEditsInFlight = 0;
     this._selectedRoom = null;
     this._error = "";
     this._lang = "en";
@@ -4043,6 +4049,7 @@ class TortoiseUfhPanel extends HTMLElement {
   }
 
   async _poll() {
+    const homeGen = this._homeEditGen;
     const live = await this._callWS({ type: WS.getLive });
     if (live) {
       this._live = live;
@@ -4050,6 +4057,21 @@ class TortoiseUfhPanel extends HTMLElement {
         ? Date.parse(live.last_update_timestamp)
         : NaN;
       this._lastUpdateMs = Number.isFinite(ts) ? ts : null;
+      // get_config is fetched only on open and after the panel's own edits, so
+      // follow an external home-setpoint change (an automation, the number
+      // entity) from the polled copy — unless a local edit started or ended
+      // while this request was out, or is still in flight (the reply may
+      // predate the write; the edit's own follow-up poll reconciles).
+      const home = num(live.home_setpoint_c);
+      if (
+        home !== null &&
+        this._config &&
+        this._homeEditsInFlight === 0 &&
+        homeGen === this._homeEditGen &&
+        num(this._config.home_setpoint_c) !== home
+      ) {
+        this._config = { ...this._config, home_setpoint_c: home };
+      }
       this._render();
     }
   }
@@ -4178,10 +4200,17 @@ class TortoiseUfhPanel extends HTMLElement {
     if (next === cur) {
       return;
     }
+    this._homeEditGen += 1;
+    this._homeEditsInFlight += 1;
     this._patchConfig((c) => {
       c.home_setpoint_c = next;
     });
-    await this._callWS({ type: WS.setHome, temperature: next });
+    try {
+      await this._callWS({ type: WS.setHome, temperature: next });
+    } finally {
+      this._homeEditsInFlight -= 1;
+      this._homeEditGen += 1;
+    }
     this._loadConfig();
     this._poll();
   }
