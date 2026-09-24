@@ -167,9 +167,9 @@ python scripts/mutation.py --fail-under 96   # mutmut over the control path (POS
 
 Core tests must run with only numpy/scipy/pytest installed (the Hypothesis invariants in
 `tests/unit/test_invariants.py` skip themselves without it). Every test under `tests/unit`
-carries the `unit` marker — CI runs `-m unit`, an unmarked test silently never runs there. HA-layer tests (marker `ha`; run
-in Docker) are optional and skipped when `pytest_homeassistant_custom_component` is
-unavailable.
+carries the `unit` marker — CI runs `-m unit`, an unmarked test silently never runs there.
+HA-layer tests (marker `ha`; run in Docker) are optional and skipped when
+`pytest_homeassistant_custom_component` is unavailable.
 
 ---
 

@@ -32,12 +32,14 @@ services:
       - -q
 
   # Mutation testing of the pure core (mutmut needs fork, so on Windows it runs
-  # only in a container). Results land in the git-ignored mutants/ directory.
+  # only in a container). mutmut's working copy lives on the named volume
+  # `mutants` (a Windows bind mount runs it ~4x slower); survivor diffs land in
+  # the git-ignored mutation-survivors/ directory of the repo.
   #
   #   docker compose -f docker/docker-compose.test.yml build mutation
   #   docker compose -f docker/docker-compose.test.yml run --rm mutation
   #   docker compose -f docker/docker-compose.test.yml run --rm mutation \
-  #     python scripts/mutation.py --survivors-dir mutants/survivors
+  #     python scripts/mutation.py --survivors-dir mutation-survivors
   mutation:
     build:
       context: ..
@@ -45,7 +47,11 @@ services:
     image: tortoise-ufh-mutation
     volumes:
       - ..:/workspace:rw
+      - mutants:/workspace/mutants
     working_dir: /workspace
     environment:
       PYTHONPATH: /workspace
     command: ["python", "scripts/mutation.py"]
+
+volumes:
+  mutants:
