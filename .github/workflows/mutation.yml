@@ -1,0 +1,37 @@
+name: Mutation
+
+# mutmut over the core's control path ([tool.mutmut] in pyproject.toml). Slower
+# than the unit tier (every mutant re-runs the tests that reach it), so it runs
+# on core/test changes to master, weekly, and on demand — not on every PR.
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "custom_components/tortoise_ufh/core/**"
+      - "tests/unit/**"
+      - "scripts/mutation.py"
+      - "pyproject.toml"
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  mutmut:
+    name: Mutation testing (core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev,mutation]"
+      - run: python scripts/mutation.py --fail-under 96 --survivors-dir mutation-survivors
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: |
+            mutants/mutmut-cicd-stats.json
+            mutation-survivors/
+          if-no-files-found: ignore
