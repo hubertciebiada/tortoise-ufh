@@ -380,7 +380,9 @@ pip install -e ".[dev]"
 
 The suite uses three pytest markers: `unit` (fast, isolated), `simulation` (scenario-based,
 end-to-end through the digital twin), and `slow`. Core tests need only
-`numpy`, `scipy` and `pytest` — no Home Assistant install.
+`numpy`, `scipy` and `pytest` — no Home Assistant install. The property-based invariants
+(`tests/unit/test_invariants.py`, Hypothesis) are skipped when Hypothesis is missing;
+`pip install -e ".[dev]"` brings it in.
 
 ```bash
 # Fast unit tests
@@ -392,6 +394,23 @@ python -m pytest -m simulation
 # Everything
 python -m pytest
 ```
+
+### Mutation testing
+
+`mutmut` mutates the core's control path (the modules listed in `[tool.mutmut]` in
+`pyproject.toml`) and re-runs the unit tier against every mutant; CI fails below a 96 %
+mutation score. mutmut needs `fork`, so on Windows it runs in Docker:
+
+```bash
+# Linux / WSL
+pip install -e ".[dev,mutation]"
+python scripts/mutation.py --fail-under 96 --survivors-dir mutation-survivors
+
+# Windows (Docker)
+docker compose -f docker/docker-compose.test.yml run --rm mutation python scripts/mutation.py --survivors-dir mutation-survivors
+```
+
+`mutation-survivors/<module>.md` lists the diff of every mutant no test caught.
 
 ### Code quality
 

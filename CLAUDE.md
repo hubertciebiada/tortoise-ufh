@@ -162,9 +162,12 @@ python -m pytest -m unit          # fast unit suite (seed 42; numpy/scipy/pytest
 python -m pytest -m simulation    # scenario/digital-twin suite (seed 12345; hard merge gate)
 python -m mypy custom_components/tortoise_ufh/core   # strict typecheck of the core only
 ruff check                        # lint (E,F,I,UP,B,SIM); add `ruff format --check` for style
+python scripts/mutation.py --fail-under 96   # mutmut over the control path (POSIX/Docker only)
 ```
 
-Core tests must run with only numpy/scipy/pytest installed. HA-layer tests (marker `ha`; run
+Core tests must run with only numpy/scipy/pytest installed (the Hypothesis invariants in
+`tests/unit/test_invariants.py` skip themselves without it). Every test under `tests/unit`
+carries the `unit` marker — CI runs `-m unit`, an unmarked test silently never runs there. HA-layer tests (marker `ha`; run
 in Docker) are optional and skipped when `pytest_homeassistant_custom_component` is
 unavailable.
 

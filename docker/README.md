@@ -22,7 +22,21 @@ The repo is bind-mounted, so after editing `custom_components/` or `tests/ha/` j
 > machine with numpy/scipy: `python -m pytest tests/unit tests/simulation`. The `tests/ha`
 > tier is auto-skipped there (Home Assistant isn't installed) and only runs in this container.
 
-## 2. Interactive Home Assistant (click around the panel)
+## 2. Mutation testing (mutmut)
+
+mutmut forks one worker per mutant, so on Windows it runs only in a container. Its working
+copy lives on the `mutants` named volume (a Windows bind mount runs it ~4x slower), so
+re-runs are incremental:
+
+```bash
+docker compose -f docker/docker-compose.test.yml build mutation      # once
+docker compose -f docker/docker-compose.test.yml run --rm mutation python scripts/mutation.py --survivors-dir mutation-survivors
+```
+
+`mutation-survivors/<module>.md` (git-ignored) holds the diff of every mutant no test caught.
+`docker volume rm docker_mutants` forces a from-scratch run.
+
+## 3. Interactive Home Assistant (click around the panel)
 
 Boots a throwaway HA at <http://localhost:8123> with the integration mounted in, so you can
 add it through the UI, open the **Tortoise-UFH** sidebar panel, and watch the debug logs.

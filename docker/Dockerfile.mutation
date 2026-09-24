@@ -1,0 +1,28 @@
+# Mutation-testing image for the Tortoise-UFH pure core (mutmut).
+#
+# mutmut forks one worker per mutant, so it needs a POSIX host: on Windows it runs
+# only here (or in WSL). The repo is bind-mounted at /workspace by
+# docker-compose.test.yml; mutmut writes its working copy and results to the
+# git-ignored `mutants/` directory there, so re-runs are incremental.
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# The core's runtime deps + the unit-tier test deps + mutmut and the type checker
+# it uses to discard mutants that cannot pass `mypy --strict`.
+RUN pip install \
+    "numpy>=1.26" \
+    "scipy>=1.12" \
+    "scipy-stubs" \
+    "pytest>=8.0" \
+    "hypothesis>=6.100" \
+    "mypy>=1.9" \
+    "mutmut>=3.8"
+
+WORKDIR /workspace
+ENV PYTHONPATH=/workspace
+
+CMD ["python", "scripts/mutation.py"]

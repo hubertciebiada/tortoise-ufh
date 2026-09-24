@@ -12,7 +12,11 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
 htmlcov/
+# mutmut working copy + results, survivor diffs (scripts/mutation.py)
+mutants/
+mutation-survivors/
 
 # Local scratch / working notes (never shipped)
 scratchpad/

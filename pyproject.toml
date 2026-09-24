@@ -28,7 +28,13 @@ dev = [
     "ruff>=0.3",
     "mypy>=1.9",
     "pre-commit>=4.0",
+    "hypothesis>=6.100",
     "tortoise-ufh[viz]",
+]
+# mutmut forks one worker per mutant: POSIX only (Linux CI, WSL or
+# docker/Dockerfile.mutation on Windows). See scripts/mutation.py.
+mutation = [
+    "mutmut>=3.8",
 ]
 ha-test = [
     "pytest-homeassistant-custom-component>=0.13",
@@ -60,6 +66,39 @@ markers = [
 addopts = "-ra -q --strict-markers --tb=short"
 filterwarnings = [
     "error",
+]
+
+[tool.mutmut]
+# Mutation testing covers the control path only: the modules whose output
+# reaches the house (valves, split commands, safe dew point, heat-pump link) and
+# the config/models they are built from. The simulator, scenarios, metrics and
+# building profiles are test infrastructure; manifold is presentation.
+source_paths = [
+    "custom_components/tortoise_ufh/core/config.py",
+    "custom_components/tortoise_ufh/core/controller.py",
+    "custom_components/tortoise_ufh/core/dew_point.py",
+    "custom_components/tortoise_ufh/core/fast_source.py",
+    "custom_components/tortoise_ufh/core/flow_watchdog.py",
+    "custom_components/tortoise_ufh/core/hp_link.py",
+    "custom_components/tortoise_ufh/core/models.py",
+    "custom_components/tortoise_ufh/core/pid.py",
+    "custom_components/tortoise_ufh/core/safety.py",
+    "custom_components/tortoise_ufh/core/trend.py",
+    "custom_components/tortoise_ufh/core/ufh_loop.py",
+    "custom_components/tortoise_ufh/core/weather_comp.py",
+]
+also_copy = ["custom_components/", "tests/"]
+pytest_add_cli_args_test_selection = ["tests/unit/", "-m", "unit"]
+pytest_add_cli_args = ["-p", "no:cacheprovider"]
+# A mutant `mypy --strict` rejects can never reach master (mypy is a CI gate).
+# mutmut's generated trampolines carry their own `type: ignore`s, which strict
+# mode would report as unused.
+type_check_command = [
+    "mypy",
+    "custom_components/tortoise_ufh/core",
+    "--no-warn-unused-ignores",
+    "--output",
+    "json",
 ]
 
 [tool.ruff]

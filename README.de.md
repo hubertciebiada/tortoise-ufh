@@ -381,7 +381,9 @@ pip install -e ".[dev]"
 
 Die Suite verwendet drei pytest-Marker: `unit` (schnell, isoliert), `simulation` (szenariobasiert,
 End-to-End durch den digitalen Zwilling) und `slow`. Kerntests benötigen nur `numpy`, `scipy` und
-`pytest` — keine Home-Assistant-Installation.
+`pytest` — keine Home-Assistant-Installation. Die eigenschaftsbasierten Invarianten
+(`tests/unit/test_invariants.py`, Hypothesis) werden ohne Hypothesis übersprungen;
+`pip install -e ".[dev]"` installiert es mit.
 
 ```bash
 # Schnelle Unit-Tests
@@ -393,6 +395,23 @@ python -m pytest -m simulation
 # Alles
 python -m pytest
 ```
+
+### Mutationstests
+
+`mutmut` mutiert den Regelpfad des Kerns (die Module in `[tool.mutmut]` in `pyproject.toml`) und
+lässt die Unit-Stufe gegen jede Mutante laufen; die CI schlägt unter 96 % Mutation-Score fehl.
+mutmut braucht `fork`, unter Windows läuft es daher in Docker:
+
+```bash
+# Linux / WSL
+pip install -e ".[dev,mutation]"
+python scripts/mutation.py --fail-under 96 --survivors-dir mutation-survivors
+
+# Windows (Docker)
+docker compose -f docker/docker-compose.test.yml run --rm mutation python scripts/mutation.py --survivors-dir mutation-survivors
+```
+
+`mutation-survivors/<modul>.md` listet den Diff jeder Mutante, die kein Test erkannt hat.
 
 ### Codequalität
 
