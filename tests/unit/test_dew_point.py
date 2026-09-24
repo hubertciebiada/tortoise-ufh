@@ -176,6 +176,16 @@ class TestCoolingThrottleFactor:
         assert cooling_throttle_factor(16.9, 15.0) < 1.0
         assert cooling_throttle_factor(17.0, 15.0) == 1.0
 
+    def test_default_ramp_is_two_kelvin_at_any_margin(self) -> None:
+        """The documented default ramp (2 K) fixes the ramp floor for any margin.
+
+        With ``margin=4`` and the default ``ramp=2`` the ramp floor is
+        ``lo = margin - ramp = 2``, so ``gap = 2.5`` maps to
+        ``(2.5 - 2) / (4 - 2) = 0.25``. A default ramp of 3 K would instead
+        give ``lo = 1`` and a factor of 0.5 here.
+        """
+        assert cooling_throttle_factor(17.5, 15.0, margin=4.0) == pytest.approx(0.25)
+
     def test_ramp_wider_than_margin_is_clipped(self) -> None:
         """A ramp wider than the margin cannot extend below gap = 0."""
         # lo = max(0, 1 - 4) = 0; gap = 0.5, margin 1.0 -> 0.5/1.0.

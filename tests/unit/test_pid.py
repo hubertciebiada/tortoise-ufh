@@ -340,6 +340,69 @@ class TestShiftResidual:
         assert pid.shift_residual == pytest.approx(0.0)
         assert pid.integral == pytest.approx(0.0)
 
+    def test_same_sign_shift_moves_integral_and_banks_only_the_clamp_cut(self) -> None:
+        """A same-sign shift applies to the accumulator, not to the debt.
+
+        The residual nets only AGAINST opposite-sign shifts (K6): a same-sign
+        shift must move the integral like before K6, with only the part the
+        output-range clamp cuts off added to the outstanding debt.
+        """
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        pid.shift_integral(+150.0)  # clamps at 100, banks a +50 residual
+        # Pull the accumulator off the rail via plain integration (no clamp).
+        pid.compute(-1.0, dt_seconds=300.0)
+        assert pid.integral == pytest.approx(100.0 - 0.45)
+        assert pid.shift_residual == pytest.approx(50.0)
+        # Same-sign +10: the integral must take it (clamped at 100) and only
+        # the cut part (9.55) is banked on top of the existing +50.
+        pid.shift_integral(+10.0)
+        assert pid.integral == pytest.approx(100.0)
+        assert pid.shift_residual == pytest.approx(59.55)
+
+    def test_tiny_same_sign_shift_leaves_residual_untouched(self) -> None:
+        """A same-sign shift that does not clamp adds nothing to the debt."""
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        pid.shift_integral(+150.0)  # clamps at 100, banks a +50 residual
+        pid.compute(-1.0, dt_seconds=300.0)  # integral off the rail: 99.55
+        pid.shift_integral(+0.01)  # tiny same-sign nudge, no clamp cut
+        assert pid.integral == pytest.approx(99.56)
+        assert pid.shift_residual == pytest.approx(50.0)
+
+    def test_unit_residual_is_netted_by_counter_shift(self) -> None:
+        """The netting gate keys on ``residual != 0``, also for a tiny debt."""
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        pid.shift_integral(+101.0)  # clamps at 100, banks exactly +1
+        assert pid.shift_residual == pytest.approx(1.0)
+        # A -5 counter-shift consumes the +1 debt first; only -4 lands.
+        pid.shift_integral(-5.0)
+        assert pid.integral == pytest.approx(96.0)
+        assert pid.shift_residual == pytest.approx(0.0)
+
+    def test_partial_counter_shift_reduces_residual_additively(self) -> None:
+        """A counter-shift smaller than the debt shrinks it by exactly delta."""
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        pid.shift_integral(+150.0)  # clamps at 100, banks a +50 residual
+        pid.shift_integral(-30.0)  # nets: 50 - 30, accumulator untouched
+        assert pid.integral == pytest.approx(100.0)
+        assert pid.shift_residual == pytest.approx(20.0)
+
+    def test_zero_shift_reclamps_out_of_range_accumulator(self) -> None:
+        """A zero shift skips the netting branch and re-clamps the accumulator.
+
+        Anti-windup back-calculation can park the accumulator outside the
+        output range while a residual is outstanding; a zero-delta shift is
+        not an opposite-sign shift (``0 * residual`` is not negative), so it
+        must take the normal path: clamp the accumulator back into range and
+        bank the cut on top of the residual.
+        """
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        pid.shift_integral(+150.0)  # clamps at 100, banks a +50 residual
+        pid.compute(-10.0, dt_seconds=300.0)  # low clamp, correction +44.5
+        assert pid.integral == pytest.approx(140.0)
+        pid.shift_integral(0.0)
+        assert pid.integral == pytest.approx(100.0)
+        assert pid.shift_residual == pytest.approx(90.0)
+
     def test_opposite_residual_still_allows_true_antiwindup(self) -> None:
         """A high-side clamp with a NEGATIVE debt still back-calculates.
 
@@ -357,6 +420,68 @@ class TestShiftResidual:
         # (same sign as any remaining debt would be) -> applied normally.
         pid.compute(+10.0, dt_seconds=300.0)
         assert pid.integral <= 100.0
+
+
+@pytest.mark.unit
+class TestBackCalcSuppressionGating:
+    """K6 (2026-07-12): suppression keys on an OPPOSITE-sign correction only.
+
+    While a shift residual is outstanding the anti-windup correction is
+    suppressed only when ``correction * residual < 0`` — the very pump that
+    made setpoint wiggles non-idempotent. Same-sign and zero corrections must
+    be applied exactly like classic back-calculation.
+    """
+
+    def test_same_sign_correction_is_applied_normally(self) -> None:
+        """A low-rail correction with the debt's sign is NOT suppressed."""
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        pid.shift_integral(+150.0)  # clamps at 100, banks a +50 residual
+        # Saturate low: correction = +44.5, same sign as the +50 debt.
+        pid.compute(-10.0, dt_seconds=300.0)
+        # Classic back-calculation applies: I = 95.5 + 44.5 = 140 (= -P).
+        assert pid.integral == pytest.approx(140.0)
+
+    def test_zero_correction_is_not_a_suppression_trigger(self) -> None:
+        """An exactly zero correction leaves an out-of-range accumulator be.
+
+        Gains chosen so every intermediate is exact in binary floating point:
+        after pumping the accumulator to 200 via anti-windup, the next call's
+        raw output lands strictly inside the range, so the correction is
+        exactly 0.0 — not an opposite-sign correction — and the accumulator
+        must keep its (out-of-range) value rather than being re-clamped.
+        """
+        pid = PIDController(kp=10.0, ki=0.01, kd=0.0, dt=100.0)
+        pid.shift_integral(+150.0)  # clamps at 100, banks a +50 residual
+        pid.compute(-20.0, dt_seconds=100.0)  # low clamp: I = 80 + 120 = 200
+        assert pid.integral == pytest.approx(200.0)
+        # delta = -14 -> I = 186; u_raw = -140 + 186 = 46 in range -> corr 0.
+        pid.compute(-14.0, dt_seconds=100.0)
+        assert pid.integral == pytest.approx(186.0)
+
+    def test_residual_of_one_still_suppresses_opposing_correction(self) -> None:
+        """The suppression gate keys on ``residual != 0``, even for debt of 1."""
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        pid.shift_integral(+101.0)  # clamps at 100, banks exactly +1
+        # Saturate high: correction is negative, opposite to the +1 debt.
+        pid.compute(+10.0, dt_seconds=300.0)
+        # Suppressed: the accumulator is only re-clamped into the range.
+        assert pid.integral == pytest.approx(100.0)
+        assert pid.shift_residual == pytest.approx(1.0)
+
+    def test_sub_unit_same_sign_product_is_applied_normally(self) -> None:
+        """A correction whose product with the debt is in [0, 1) is applied.
+
+        The suppression test is a strict sign test (``< 0``), not a magnitude
+        test: a small POSITIVE product (same-sign correction) must not be
+        treated as opposition.
+        """
+        pid = PIDController(kp=14.0, ki=0.0015, kd=0.0, dt=300.0)
+        pid.shift_integral(+100.5)  # clamps at 100, banks a +0.5 residual
+        # u_raw = -1 exactly below the rail: correction +1, product +0.5.
+        error = -101.0 / 14.45
+        pid.compute(error, dt_seconds=300.0)
+        expected = 100.0 + 0.0015 * error * 300.0 + 1.0
+        assert pid.integral == pytest.approx(expected)
 
 
 @pytest.mark.unit

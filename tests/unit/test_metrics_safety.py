@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
@@ -46,8 +47,13 @@ from custom_components.tortoise_ufh.core.models import (
 )
 from custom_components.tortoise_ufh.core.safety import (
     S1_FLOOR_OVERHEAT,
+    S1_SUPPLY_OFF_C,
+    S1_SUPPLY_ON_C,
+    S3_ROOM_OFF_C,
+    S3_ROOM_ON_C,
     SafetyAction,
     SafetyEvaluator,
+    SafetyRule,
     SensorSnapshot,
 )
 from custom_components.tortoise_ufh.core.simulation_log import SimulationLog
@@ -515,3 +521,236 @@ class TestS2HardThresholdsK6:
         assert "s2_condensation" in evaluator.active_flags(self._snapshot(+0.5))
         # Above the +1 K clear threshold: releases.
         assert "s2_condensation" not in evaluator.active_flags(self._snapshot(+1.3))
+
+
+# ---------------------------------------------------------------------------
+# SensorSnapshot / SafetyRule validation and evaluator boundary behaviour
+# ---------------------------------------------------------------------------
+
+
+def _safety_snapshot(
+    *,
+    supply: float | None = 25.0,
+    room: float | None = 22.0,
+    humidity: float | None = 50.0,
+    age_minutes: float = 1.0,
+) -> SensorSnapshot:
+    """Build a :class:`SensorSnapshot` with safe, neutral defaults.
+
+    Args:
+        supply: Supply-water temperature [degC], or ``None``.
+        room: Room air temperature [degC], or ``None``.
+        humidity: Relative humidity [%], or ``None``.
+        age_minutes: Minutes since the last successful update.
+
+    Returns:
+        A validated :class:`SensorSnapshot`.
+    """
+    return SensorSnapshot(
+        supply_temperature_c=supply,
+        room_temperature_c=room,
+        humidity_pct=humidity,
+        last_update_age_minutes=age_minutes,
+    )
+
+
+def _room_condition(snapshot: SensorSnapshot) -> float | None:
+    """Condition callable extracting the room temperature (test rules).
+
+    Args:
+        snapshot: The snapshot to read.
+
+    Returns:
+        The room air temperature [degC], or ``None``.
+    """
+    return snapshot.room_temperature_c
+
+
+def _rule_kwargs(**overrides: Any) -> dict[str, Any]:
+    """Return valid :class:`SafetyRule` kwargs with *overrides* applied.
+
+    Args:
+        overrides: Constructor fields to replace.
+
+    Returns:
+        A kwargs dict that constructs a valid ``trigger_above`` rule.
+    """
+    kwargs: dict[str, Any] = {
+        "name": "test_rule",
+        "description": "rule under test",
+        "priority": 1,
+        "threshold_on": 10.0,
+        "threshold_off": 8.0,
+        "action": SafetyAction.CLOSE_VALVE,
+        "condition": _room_condition,
+        "trigger_above": True,
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+class TestSensorSnapshotValidation:
+    """``SensorSnapshot`` validates humidity range and watchdog age."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("humidity", [0.0, 0.5, 100.0])
+    def test_humidity_boundary_values_accepted(self, humidity: float) -> None:
+        """Humidity is valid across the whole CLOSED interval [0, 100] %."""
+        snapshot = _safety_snapshot(humidity=humidity)
+        assert snapshot.humidity_pct == humidity
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("humidity", [-0.1, 100.5])
+    def test_humidity_out_of_range_rejected(self, humidity: float) -> None:
+        """Humidity outside [0, 100] % raises with the documented message."""
+        with pytest.raises(ValueError, match=r"humidity_pct must be in \[0, 100\]"):
+            _safety_snapshot(humidity=humidity)
+
+    @pytest.mark.unit
+    def test_negative_update_age_rejected(self) -> None:
+        """A negative watchdog age raises with the documented message."""
+        with pytest.raises(
+            ValueError, match=r"^last_update_age_minutes must be >= 0, got "
+        ):
+            _safety_snapshot(age_minutes=-0.1)
+
+    @pytest.mark.unit
+    def test_zero_update_age_accepted(self) -> None:
+        """A zero watchdog age (a just-received update) is valid."""
+        assert _safety_snapshot(age_minutes=0.0).last_update_age_minutes == 0.0
+
+
+class TestSafetyRuleValidation:
+    """``SafetyRule.__post_init__`` enforces identity, priority and band order."""
+
+    @pytest.mark.unit
+    def test_valid_trigger_above_rule_constructs(self) -> None:
+        """A trigger_above rule with ``threshold_off < threshold_on`` is valid."""
+        rule = SafetyRule(**_rule_kwargs())
+        assert rule.name == "test_rule"
+        assert rule.trigger_above is True
+
+    @pytest.mark.unit
+    def test_valid_trigger_below_rule_constructs(self) -> None:
+        """A trigger_below rule with ``threshold_off > threshold_on`` is valid."""
+        rule = SafetyRule(
+            **_rule_kwargs(trigger_above=False, threshold_on=8.0, threshold_off=10.0)
+        )
+        assert rule.trigger_above is False
+
+    @pytest.mark.unit
+    def test_equal_thresholds_allowed_for_both_directions(self) -> None:
+        """A degenerate zero-width band (off == on) is valid both ways."""
+        above = SafetyRule(**_rule_kwargs(threshold_on=9.0, threshold_off=9.0))
+        below = SafetyRule(
+            **_rule_kwargs(trigger_above=False, threshold_on=9.0, threshold_off=9.0)
+        )
+        assert above.threshold_off == above.threshold_on
+        assert below.threshold_off == below.threshold_on
+
+    @pytest.mark.unit
+    def test_empty_name_rejected_with_exact_message(self) -> None:
+        """An empty rule name raises with the documented message, verbatim."""
+        with pytest.raises(ValueError, match=r"^SafetyRule name must be non-empty$"):
+            SafetyRule(**_rule_kwargs(name=""))
+
+    @pytest.mark.unit
+    def test_priority_one_accepted(self) -> None:
+        """Priority 1 (the highest priority) is the smallest valid value."""
+        assert SafetyRule(**_rule_kwargs(priority=1)).priority == 1
+
+    @pytest.mark.unit
+    def test_priority_zero_rejected(self) -> None:
+        """Priority < 1 raises with the documented message."""
+        with pytest.raises(ValueError, match=r"priority must be >= 1"):
+            SafetyRule(**_rule_kwargs(priority=0))
+
+    @pytest.mark.unit
+    def test_trigger_above_off_above_on_rejected(self) -> None:
+        """A trigger_above band with off > on (inverted hysteresis) raises."""
+        with pytest.raises(ValueError, match=r"must be <= threshold_on"):
+            SafetyRule(**_rule_kwargs(threshold_on=8.0, threshold_off=10.0))
+
+    @pytest.mark.unit
+    def test_trigger_below_off_below_on_rejected(self) -> None:
+        """A trigger_below band with off < on (inverted hysteresis) raises."""
+        with pytest.raises(ValueError, match=r"must be >= threshold_on"):
+            SafetyRule(
+                **_rule_kwargs(
+                    trigger_above=False, threshold_on=10.0, threshold_off=8.0
+                )
+            )
+
+
+class TestEvaluatorThresholdBoundaries:
+    """Hysteresis comparisons are strict: equality never flips the state.
+
+    A rule trips only strictly ABOVE/BELOW ``threshold_on`` and clears only
+    strictly past ``threshold_off``, so a measurement sitting exactly on a
+    threshold leaves the prior state untouched.
+    """
+
+    @pytest.mark.unit
+    def test_s1_does_not_trip_exactly_at_threshold_on(self) -> None:
+        """Supply exactly at 40 degC does NOT trip S1 (strict ``>``)."""
+        evaluator = SafetyEvaluator()
+        flags = evaluator.active_flags(_safety_snapshot(supply=S1_SUPPLY_ON_C))
+        assert "s1_floor_overheat" not in flags
+
+    @pytest.mark.unit
+    def test_s1_stays_active_exactly_at_threshold_off(self) -> None:
+        """A tripped S1 holds at exactly 38 degC (clears only strictly below)."""
+        evaluator = SafetyEvaluator()
+        evaluator.evaluate(_safety_snapshot(supply=S1_SUPPLY_ON_C + 1.0))
+        flags = evaluator.active_flags(_safety_snapshot(supply=S1_SUPPLY_OFF_C))
+        assert "s1_floor_overheat" in flags
+
+    @pytest.mark.unit
+    def test_s3_does_not_trip_exactly_at_threshold_on(self) -> None:
+        """Room exactly at 5 degC does NOT trip S3 (strict ``<``)."""
+        evaluator = SafetyEvaluator()
+        flags = evaluator.active_flags(_safety_snapshot(room=S3_ROOM_ON_C))
+        assert "s3_emergency_heat" not in flags
+
+    @pytest.mark.unit
+    def test_s3_stays_active_exactly_at_threshold_off(self) -> None:
+        """A tripped S3 holds at exactly 6 degC (clears only strictly above)."""
+        evaluator = SafetyEvaluator()
+        evaluator.evaluate(_safety_snapshot(room=S3_ROOM_ON_C - 1.0))
+        flags = evaluator.active_flags(_safety_snapshot(room=S3_ROOM_OFF_C))
+        assert "s3_emergency_heat" in flags
+
+    @pytest.mark.unit
+    def test_reset_clears_all_tripped_rules(self) -> None:
+        """``reset()`` returns every rule to INACTIVE, not to tripped."""
+        evaluator = SafetyEvaluator()
+        evaluator.evaluate(_safety_snapshot(supply=S1_SUPPLY_ON_C + 1.0))
+        assert evaluator.active_rule_names != ()
+        evaluator.reset()
+        assert evaluator.active_rule_names == ()
+        assert evaluator.active_flags(_safety_snapshot()) == ()
+
+
+class TestCondensationMarginHumidityEdge:
+    """S2 treats a non-positive humidity as "no usable sensor", 1 % as valid."""
+
+    @pytest.mark.unit
+    def test_zero_humidity_yields_no_measurement(self) -> None:
+        """0 % RH is not a usable reading: S2 reports ``None``, no exception."""
+        evaluator = SafetyEvaluator()
+        snapshot = _safety_snapshot(supply=17.0, room=24.0, humidity=0.0)
+        by_name = {r.rule.name: r for r in evaluator.evaluate(snapshot)}
+        assert by_name["s2_condensation"].measured_value is None
+        assert by_name["s2_condensation"].triggered is False
+
+    @pytest.mark.unit
+    def test_one_percent_humidity_yields_a_measurement(self) -> None:
+        """1 % RH is a valid (if dry) reading: S2 measures ``supply - dew``."""
+        evaluator = SafetyEvaluator()
+        snapshot = _safety_snapshot(supply=20.0, room=24.0, humidity=1.0)
+        by_name = {r.rule.name: r for r in evaluator.evaluate(snapshot)}
+        assert by_name["s2_condensation"].measured_value == pytest.approx(
+            20.0 - dew_point(24.0, 1.0)
+        )
+        # Far above the dew point: no condensation alarm on dry air.
+        assert by_name["s2_condensation"].triggered is False
