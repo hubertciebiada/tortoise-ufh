@@ -2,8 +2,7 @@
 
 Pure, HA-free core helpers used by the room controller's cooling path (S2) and
 by the building-level safe dew-point sensor. Provides the Magnus dew-point
-formula, a simplified linear approximation, a graduated cooling-valve throttle
-factor, and a condensation safety margin.
+formula and a graduated cooling-valve throttle factor.
 
 The Magnus formula uses the coefficients ``a = 17.625`` and ``b = 243.04``
 (Alduchov & Eskridge, 1996), giving < 0.1 degC error against psychrometric
@@ -61,26 +60,6 @@ def dew_point(t_air: float, rh: float) -> float:
     _validate_rh(rh)
     gamma = (MAGNUS_A * t_air) / (MAGNUS_B + t_air) + math.log(rh / 100.0)
     return (MAGNUS_B * gamma) / (MAGNUS_A - gamma)
-
-
-def dew_point_simplified(t_air: float, rh: float) -> float:
-    """Compute dew-point temperature using the simplified linear formula.
-
-    Legacy approximation ``t_dew = t_air - (100 - rh) / 5``, accurate to a few
-    degrees near typical indoor humidities. Prefer :func:`dew_point`.
-
-    Args:
-        t_air: Air temperature [degC].
-        rh: Relative humidity [%] in (0, 100].
-
-    Returns:
-        Estimated dew-point temperature [degC].
-
-    Raises:
-        ValueError: If *rh* is not in (0, 100].
-    """
-    _validate_rh(rh)
-    return t_air - (100.0 - rh) / 5.0
 
 
 def cooling_throttle_factor(
@@ -147,35 +126,3 @@ def cooling_throttle_factor(
     if gap >= margin:
         return 1.0
     return (gap - lo) / (margin - lo)
-
-
-def condensation_margin(
-    t_surface: float,
-    t_air: float,
-    rh: float,
-    safety_margin: float = 2.0,
-) -> float:
-    """Compute the condensation safety margin above the dew point.
-
-    Returns ``t_surface - (t_dew + safety_margin)`` using the Magnus dew point.
-    Positive values indicate safe conditions; negative values indicate
-    condensation risk.
-
-    Args:
-        t_surface: Cooled surface temperature (coldest loop supply or slab)
-            [degC].
-        t_air: Air temperature [degC].
-        rh: Relative humidity [%] in (0, 100].
-        safety_margin: Required gap above dew point [degC]. Must be >= 0.
-
-    Returns:
-        Condensation margin [degC]. Positive = safe, negative = risk.
-
-    Raises:
-        ValueError: If *rh* is not in (0, 100] or *safety_margin* < 0.
-    """
-    if safety_margin < 0.0:
-        msg = f"safety_margin must be >= 0, got {safety_margin}"
-        raise ValueError(msg)
-    t_dew = dew_point(t_air, rh)
-    return t_surface - (t_dew + safety_margin)

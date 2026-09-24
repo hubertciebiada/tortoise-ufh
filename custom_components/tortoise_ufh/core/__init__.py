@@ -50,10 +50,8 @@ from .const import (
 )
 from .controller import BuildingController, RoomController
 from .dew_point import (
-    condensation_margin,
     cooling_throttle_factor,
     dew_point,
-    dew_point_simplified,
 )
 from .fast_source import FastSourceMachine, window_allows
 from .hp_link import (
@@ -233,12 +231,10 @@ __all__ = [
     "assert_no_prolonged_cold",
     "build_manifold_views",
     "cold_snap",
-    "condensation_margin",
     "cooling_demand",
     "cooling_setpoint_c",
     "cooling_throttle_factor",
     "dew_point",
-    "dew_point_simplified",
     "dhw_option",
     "direction_option",
     "heating_curve",

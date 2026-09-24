@@ -21,7 +21,6 @@ import pytest
 from custom_components.tortoise_ufh.core.dew_point import (
     cooling_throttle_factor,
     dew_point,
-    dew_point_simplified,
 )
 
 pytestmark = pytest.mark.unit
@@ -95,7 +94,7 @@ class TestDewPointReference:
 
 
 class TestDewPointValidation:
-    """Humidity outside (0, 100] is rejected by both dew-point functions."""
+    """Humidity outside (0, 100] is rejected by the dew-point function."""
 
     @pytest.mark.parametrize("rh", [0.0, -5.0, 100.1, 150.0])
     def test_dew_point_rejects_invalid_humidity(self, rh: float) -> None:
@@ -103,11 +102,9 @@ class TestDewPointValidation:
         with pytest.raises(ValueError, match="rh must be in"):
             dew_point(20.0, rh)
 
-    @pytest.mark.parametrize("rh", [0.0, -1.0, 101.0])
-    def test_simplified_rejects_invalid_humidity(self, rh: float) -> None:
-        """The simplified approximation also validates humidity."""
-        with pytest.raises(ValueError, match="rh must be in"):
-            dew_point_simplified(20.0, rh)
+    def test_dew_point_accepts_humidity_just_above_zero(self) -> None:
+        """The open lower bound admits any positive humidity, even below 1 %."""
+        assert dew_point(20.0, 0.5) < -30.0
 
 
 class TestCoolingThrottleFactor:
@@ -156,6 +153,29 @@ class TestCoolingThrottleFactor:
         result = cooling_throttle_factor(t_dew + gap, t_dew, margin=2.0, ramp=2.0)
         assert result == pytest.approx(expected)
 
+    @pytest.mark.parametrize(
+        ("gap", "expected"),
+        [(2.0, 0.0), (2.25, 0.25), (2.5, 0.5), (2.75, 0.75), (3.0, 1.0)],
+    )
+    def test_ramp_narrower_than_margin_starts_above_dew(
+        self, gap: float, expected: float
+    ) -> None:
+        """With ramp < margin the ramp spans (margin - ramp, margin), not (0, margin).
+
+        margin 3, ramp 1 -> lo = 2: the valve is fully throttled 2 K above the
+        dew point and opens linearly to full at 3 K.
+        """
+        t_dew = 15.0
+        result = cooling_throttle_factor(t_dew + gap, t_dew, margin=3.0, ramp=1.0)
+        assert result == pytest.approx(expected)
+
+    def test_defaults_are_two_kelvin_margin_and_ramp(self) -> None:
+        """The defaults are margin = ramp = 2 K (lo = 0, full open at 2 K)."""
+        assert cooling_throttle_factor(15.0, 15.0) == 0.0
+        assert cooling_throttle_factor(16.0, 15.0) == pytest.approx(0.5)
+        assert cooling_throttle_factor(16.9, 15.0) < 1.0
+        assert cooling_throttle_factor(17.0, 15.0) == 1.0
+
     def test_ramp_wider_than_margin_is_clipped(self) -> None:
         """A ramp wider than the margin cannot extend below gap = 0."""
         # lo = max(0, 1 - 4) = 0; gap = 0.5, margin 1.0 -> 0.5/1.0.
@@ -200,6 +220,12 @@ class TestCoolingThrottleValidation:
         """A zero or negative ramp raises ValueError."""
         with pytest.raises(ValueError, match="ramp must be > 0"):
             cooling_throttle_factor(18.0, 15.0, margin=2.0, ramp=ramp)
+
+    def test_accepts_sub_kelvin_ramp(self) -> None:
+        """Any positive ramp is valid, including one narrower than 1 K."""
+        # lo = 1.5, margin 2.0: gap 1.75 sits halfway up a 0.5 K ramp.
+        result = cooling_throttle_factor(16.75, 15.0, margin=2.0, ramp=0.5)
+        assert result == pytest.approx(0.5)
 
 
 class TestDewPointCaseValidation:
