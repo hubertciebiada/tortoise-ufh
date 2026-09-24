@@ -226,6 +226,7 @@ class TestPerCallDt:
             pid.compute(1.0, dt_seconds=bad_dt)
 
 
+@pytest.mark.unit
 class TestShiftIntegral:
     """K1 (2026-07-12): the external bumpless-transfer re-seed hook."""
 
@@ -253,6 +254,7 @@ class TestShiftIntegral:
         assert pid.integral == pytest.approx(0.0)
 
 
+@pytest.mark.unit
 class TestUnwindFactor:
     """K1 (2026-07-12): asymmetric unwinding of a sign-opposed integral."""
 
@@ -280,6 +282,7 @@ class TestUnwindFactor:
             PIDController(kp=1.0, ki=0.001, kd=0.0, dt=300.0, unwind_factor=0.5)
 
 
+@pytest.mark.unit
 class TestShiftResidual:
     """K6 (2026-07-12): clamp-cut shift debt netting + back-calc suppression."""
 
