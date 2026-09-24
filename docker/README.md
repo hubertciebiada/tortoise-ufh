@@ -25,8 +25,9 @@ The repo is bind-mounted, so after editing `custom_components/` or `tests/ha/` j
 ## 2. Mutation testing (mutmut)
 
 mutmut forks one worker per mutant, so on Windows it runs only in a container. Its working
-copy lives on the `mutants` named volume (a Windows bind mount slows it down), so
-re-runs are incremental:
+copy lives on the `mutants` named volume (a Windows bind mount slows it down). Each run
+starts from scratch; `--incremental` reuses the previous results, which is valid only while
+the tests are unchanged (mutmut re-tests a mutant only when its source changed):
 
 ```bash
 docker compose -f docker/docker-compose.test.yml build mutation      # once
@@ -34,7 +35,6 @@ docker compose -f docker/docker-compose.test.yml run --rm mutation python script
 ```
 
 `mutation-survivors/<module>.md` (git-ignored) holds the diff of every mutant no test caught.
-`docker volume rm docker_mutants` forces a from-scratch run.
 
 ## 3. Interactive Home Assistant (click around the panel)
 

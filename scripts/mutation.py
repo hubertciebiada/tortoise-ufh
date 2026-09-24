@@ -3,8 +3,12 @@
 mutmut forks one worker per mutant, so this runs on POSIX only: Linux CI, WSL, or
 the ``mutation`` service of ``docker/docker-compose.test.yml`` on Windows. The
 mutated modules and the test selection live in ``[tool.mutmut]`` in
-``pyproject.toml``; results persist in the git-ignored ``mutants/`` directory, so
-a re-run only re-tests what changed.
+``pyproject.toml``; mutmut works in the git-ignored ``mutants/`` directory.
+
+Every run starts from scratch: mutmut's cache re-tests a mutant only when its
+SOURCE function changed, so after a test-only change it would keep reporting
+survivors the new tests already kill. ``--incremental`` reuses the cache (fast,
+valid only while the tests are unchanged).
 
 Score = (killed + caught by the type checker + timeout) / all mutants. A mutant
 ``mypy --strict`` rejects cannot reach master (mypy is a CI gate), and a mutant
@@ -19,6 +23,7 @@ Usage::
 
     python scripts/mutation.py [--fail-under 96] [--max-children N]
                                [--survivors-dir mutation-survivors]
+                               [--incremental]
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections import Counter, defaultdict
@@ -123,8 +129,17 @@ def main() -> int:
     parser.add_argument("--fail-under", type=float, default=0.0)
     parser.add_argument("--max-children", type=int, default=os.cpu_count() or 2)
     parser.add_argument("--survivors-dir", type=Path)
+    parser.add_argument("--incremental", action="store_true")
     args = parser.parse_args()
 
+    if not args.incremental:
+        # Empty mutants/ but keep the directory: under docker compose it is
+        # the mount point of a named volume.
+        for entry in Path("mutants").glob("*"):
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
     os.environ.setdefault("TORTOISE_HYPOTHESIS_EXAMPLES", "10")
     run = subprocess.run(["mutmut", "run", "--max-children", str(args.max_children)])
     if run.returncode != 0:
