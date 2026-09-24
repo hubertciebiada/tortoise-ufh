@@ -229,6 +229,24 @@ class TestBuildingStep:
         assert room.valve_position_pct == 0.0
         assert room.fast_source.on is False
         assert room.report.room_temperature_c == pytest.approx(25.0)
+        assert room.report.explanation == (
+            "Blad regulatora pokoju 'salon': boom. "
+            "Zawor 0% (tryb bez grzania), split OFF."
+        )
+
+    def test_controller_error_in_heating_holds_and_says_so(self) -> None:
+        """HEATING degrade holds the last valve and names it in the text."""
+        building = BuildingController({"salon": ControllerConfig()})
+        building._controllers["salon"] = _RaisingController("salon")  # type: ignore[assignment]
+        out = building.step(
+            {"salon": make_inputs(mode=Mode.HEATING, room_temperature_c=20.0)},
+            dt_seconds=300.0,
+        )
+        room = out.rooms["salon"]
+        assert room.valve_position_pct == pytest.approx(42.0)
+        assert room.report.explanation == (
+            "Blad regulatora pokoju 'salon': boom. Zawor trzyma 42%, split OFF."
+        )
 
 
 class TestCirculationGate:

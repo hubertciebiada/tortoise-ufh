@@ -447,6 +447,8 @@ class TestActiveExplanation:
         )
         assert "Split" not in out.report.explanation
         assert "None" not in out.report.explanation
+        valve_pct = out.valve_position_pct
+        assert out.report.explanation.endswith(f"Zawor {valve_pct:.0f}%.")
 
     def test_manual_hold_on_explanation(self) -> None:
         """A held-ON unit is named: "reczne sterowanie ... , ON."."""
@@ -522,6 +524,34 @@ class TestTransitionalResult:
             fast_source_kind=kind,
             fast_source_allowed=allowed,
         )
+
+    @pytest.mark.parametrize(
+        ("engage_room_c", "edge_room_c"),
+        [(19.0, 21.25), (23.0, 20.75)],
+        ids=["heating", "cooling"],
+    )
+    def test_running_split_releases_exactly_at_the_far_band_edge(
+        self, engage_room_c: float, edge_room_c: float
+    ) -> None:
+        """An engaged split releases when the room reaches the FAR band edge.
+
+        Setpoint 21, deadband 0.25 (exact in binary): a heater engaged at
+        19 degC is released at 21.25 (heating demand == -deadband), a cooler
+        engaged at 23 degC at 20.75. The release is strict (``demand >
+        -deadband`` keeps it), so the edge itself already turns it OFF once
+        min-ON has elapsed.
+        """
+        cfg = ControllerConfig(
+            deadband_c=0.25,
+            boost_offset_c=1.0,
+            fast_min_on_minutes=5.0,
+            fast_min_off_minutes=5.0,
+        )
+        controller = RoomController(cfg, name="salon")
+        engaged = controller.step(self._inputs(engage_room_c), dt_seconds=_DT)
+        assert engaged.fast_source.on is True
+        released = controller.step(self._inputs(edge_room_c), dt_seconds=_DT)
+        assert released.fast_source.on is False
 
     def test_no_fast_source_parks_and_reports_brak(self) -> None:
         """Without a fast source: valve 0, split OFF, direction "brak"."""
