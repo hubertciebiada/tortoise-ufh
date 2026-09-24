@@ -357,3 +357,98 @@ class TestShiftResidual:
         # (same sign as any remaining debt would be) -> applied normally.
         pid.compute(+10.0, dt_seconds=300.0)
         assert pid.integral <= 100.0
+
+
+@pytest.mark.unit
+class TestUnwindZeroCrossing:
+    """K1 review (2026-07-12): the accelerated unwind stops AT zero."""
+
+    def test_step_crossing_zero_finishes_the_interval_at_plain_ki(self) -> None:
+        """The part of the step left after reaching zero accumulates at 1x.
+
+        I = +1, error -1 K, ki 0.001, dt 300 s: the plain step is -0.3 and the
+        8x step (-2.4) reaches zero after 1/2.4 of the interval; the remaining
+        (1 - 1/2.4) of the interval accumulates at 1x -> -0.3 * (1 - 1/2.4).
+        A symmetric output range keeps back-calculation out of the picture.
+        """
+        pid = PIDController(
+            kp=0.0,
+            ki=0.001,
+            dt=300.0,
+            output_min=-100.0,
+            output_max=100.0,
+            unwind_factor=8.0,
+        )
+        pid.shift_integral(+1.0)
+        pid.compute(-1.0, dt_seconds=300.0)
+        assert pid.integral == pytest.approx(-0.3 * (1.0 - 1.0 / 2.4))
+
+    def test_step_short_of_zero_stays_on_the_accelerated_rate(self) -> None:
+        """A step that does not reach zero discharges at the full 8x rate."""
+        pid = PIDController(
+            kp=0.0,
+            ki=0.001,
+            dt=300.0,
+            output_min=-100.0,
+            output_max=100.0,
+            unwind_factor=8.0,
+        )
+        pid.shift_integral(+10.0)
+        pid.compute(-1.0, dt_seconds=300.0)
+        assert pid.integral == pytest.approx(10.0 - 2.4)
+
+    def test_default_unwind_factor_is_plain_rate(self) -> None:
+        """Without ``unwind_factor`` a sign-opposed integral discharges at 1x."""
+        pid = PIDController(kp=0.0, ki=0.001, output_min=-100.0, output_max=100.0)
+        pid.shift_integral(+10.0)
+        pid.compute(-1.0, dt_seconds=300.0)
+        assert pid.integral == pytest.approx(10.0 - 0.3)
+
+
+@pytest.mark.unit
+class TestPlainGainsEdges:
+    """Edge values of the constructor and per-call arguments."""
+
+    def test_sub_second_dt_is_accepted(self) -> None:
+        """Any positive per-call dt is valid, also below one second."""
+        pid = PIDController(kp=0.0, ki=0.01, output_min=-100.0, output_max=100.0)
+        pid.compute(1.0, dt_seconds=0.5)
+        assert pid.integral == pytest.approx(0.005)
+
+    def test_sub_second_configured_dt_is_accepted(self) -> None:
+        """A configured dt below one second is valid and used by default."""
+        pid = PIDController(
+            kp=0.0, ki=0.01, dt=0.5, output_min=-100.0, output_max=100.0
+        )
+        pid.compute(1.0)
+        assert pid.integral == pytest.approx(0.005)
+
+    def test_default_dt_is_five_minutes(self) -> None:
+        """Without ``dt`` a call without ``dt_seconds`` integrates 300 s."""
+        pid = PIDController(kp=0.0, ki=0.001, output_min=-100.0, output_max=100.0)
+        pid.compute(1.0)
+        assert pid.integral == pytest.approx(0.3)
+
+    def test_default_kd_is_zero(self) -> None:
+        """Without ``kd`` an error step adds no derivative kick."""
+        pid = PIDController(kp=1.0, ki=0.0, output_min=-100.0, output_max=100.0)
+        pid.compute(0.0)
+        assert pid.compute(5.0) == pytest.approx(5.0)
+
+    def test_pure_p_controller_never_touches_the_integral(self) -> None:
+        """With ki = 0 a saturated output leaves the accumulator at zero."""
+        pid = PIDController(kp=200.0, ki=0.0)
+        assert pid.compute(1.0) == pytest.approx(100.0)
+        assert pid.integral == 0.0
+
+    def test_reset_clears_every_piece_of_state(self) -> None:
+        """reset() zeroes the integral, residual, previous error and output."""
+        pid = PIDController(kp=10.0, ki=0.001, kd=100.0)
+        pid.shift_integral(+150.0)  # clamps at 100, banks a +50 residual
+        pid.compute(2.0)
+        pid.reset()
+        assert pid.integral == 0.0
+        assert pid.shift_residual == 0.0
+        assert pid.last_output == 0.0
+        # No previous error: the first call after reset has no D kick.
+        assert pid.compute(1.0) == pytest.approx(10.0 + 0.3)

@@ -22,6 +22,7 @@ Units:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import pytest
@@ -43,7 +44,12 @@ from custom_components.tortoise_ufh.core.models import (
     RoomOutputs,
     RoomReport,
 )
-from custom_components.tortoise_ufh.core.safety import SafetyEvaluator, SensorSnapshot
+from custom_components.tortoise_ufh.core.safety import (
+    S1_FLOOR_OVERHEAT,
+    SafetyAction,
+    SafetyEvaluator,
+    SensorSnapshot,
+)
 from custom_components.tortoise_ufh.core.simulation_log import SimulationLog
 from custom_components.tortoise_ufh.core.weather import WeatherPoint
 
@@ -404,6 +410,66 @@ class TestSafetyEvaluator:
             last_update_age_minutes=1.0,
         )
         assert "s2_condensation" not in evaluator.active_flags(snapshot)
+
+    @pytest.mark.unit
+    def test_results_carry_measurement_and_action_per_rule(self) -> None:
+        """Every rule reports what it measured; only an active rule an action."""
+        evaluator = SafetyEvaluator()
+        snapshot = SensorSnapshot(
+            supply_temperature_c=42.0,
+            room_temperature_c=22.0,
+            humidity_pct=None,
+            last_update_age_minutes=3.0,
+        )
+        by_name = {r.rule.name: r for r in evaluator.evaluate(snapshot)}
+        s1 = by_name["s1_floor_overheat"]
+        assert s1.triggered is True
+        assert s1.measured_value == pytest.approx(42.0)
+        assert s1.action is SafetyAction.CLOSE_VALVE
+        s5 = by_name["s5_watchdog"]
+        assert s5.triggered is False
+        assert s5.measured_value == pytest.approx(3.0)
+        assert s5.action is None
+        assert by_name["s2_condensation"].measured_value is None
+        assert by_name["s3_emergency_heat"].measured_value == pytest.approx(22.0)
+
+    @pytest.mark.unit
+    def test_result_to_dict_is_plain_json(self) -> None:
+        """``to_dict`` flattens the rule and the enum action for the panel."""
+        evaluator = SafetyEvaluator()
+        snapshot = SensorSnapshot(
+            supply_temperature_c=42.0,
+            room_temperature_c=22.0,
+            humidity_pct=50.0,
+            last_update_age_minutes=1.0,
+        )
+        dicts = [r.to_dict() for r in evaluator.evaluate(snapshot)]
+        s1 = next(d for d in dicts if d["name"] == "s1_floor_overheat")
+        assert s1 == {
+            "name": "s1_floor_overheat",
+            "priority": 1,
+            "triggered": True,
+            "measured_value": 42.0,
+            "action": "close_valve",
+        }
+        s5 = next(d for d in dicts if d["name"] == "s5_watchdog")
+        assert s5["triggered"] is False
+        assert s5["action"] is None
+        assert json.loads(json.dumps(dicts)) == dicts
+
+    @pytest.mark.unit
+    def test_rule_names_must_be_unique(self) -> None:
+        """Two rules sharing a name are rejected at construction."""
+        with pytest.raises(ValueError, match="safety rule names must be unique"):
+            SafetyEvaluator(rules=(S1_FLOOR_OVERHEAT, S1_FLOOR_OVERHEAT))
+
+    @pytest.mark.unit
+    def test_rules_are_evaluated_in_priority_order(self) -> None:
+        """Results come back sorted by ascending priority."""
+        evaluator = SafetyEvaluator()
+        priorities = [rule.priority for rule in evaluator.rules]
+        assert priorities == sorted(priorities)
+        assert evaluator.active_rule_names == ()
 
 
 class TestS2HardThresholdsK6:

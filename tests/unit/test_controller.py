@@ -165,6 +165,30 @@ class TestCoolingDewThrottle:
         assert "s2_throttle" not in out.report.flags
 
     @pytest.mark.unit
+    def test_throttle_follows_the_margin_and_ramp_knobs(self) -> None:
+        """``dew_margin_k`` / ``dew_ramp_k`` reach the throttle unchanged.
+
+        margin 4 / ramp 1 puts the ramp at (3 K, 4 K) above the dew point, so
+        a 3.5 K gap is mid-ramp (0.5); the 2 K defaults would read it as 1.0,
+        and margin 4 with the default 2 K ramp as 0.75.
+        """
+        cfg = ControllerConfig(dew_margin_k=4.0, dew_ramp_k=1.0)
+        controller = RoomController(cfg, name="salon")
+        t_dew = dew_point(26.0, 70.0)
+        loops = (LoopInput(None, t_dew + 3.5, None),)
+        out = controller.step(
+            make_inputs(
+                mode=Mode.COOLING,
+                setpoint_c=23.0,
+                room_temperature_c=26.0,
+                humidity_pct=70.0,
+                loops=loops,
+            ),
+            dt_seconds=300.0,
+        )
+        assert out.report.dew_throttle_factor == pytest.approx(0.5)
+
+    @pytest.mark.unit
     def test_throttle_open_when_supply_far_above_dew(self) -> None:
         """Supply well above the dew point leaves the valve un-throttled."""
         cfg = ControllerConfig()
