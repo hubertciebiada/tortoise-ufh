@@ -234,6 +234,109 @@ class TestLoopFlowMonitorNoFlow:
         assert _update(monitor) == "no_flow"
 
 
+class TestFlowEvidenceBoundaries:
+    """A witness exactly AT its threshold counts as flow (>= is inclusive),
+    and EITHER probe's displacement alone is enough (OR, not AND)."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("mode", "supply_c", "return_c", "epsilon_k"),
+        [
+            # |supply - return| == epsilon (exactly representable 0.25 K).
+            (Mode.HEATING, 25.25, 25.0, 0.25),
+            (Mode.HEATING, 25.3, 25.5, 0.3),  # return +0.5 K == displacement
+            (Mode.HEATING, 25.5, 25.3, 0.3),  # supply +0.5 K == displacement
+            (Mode.HEATING, 25.4, 25.6, 0.3),  # only the return moved (OR)
+            (Mode.COOLING, 24.7, 24.5, 0.3),  # return -0.5 K == displacement
+            (Mode.COOLING, 24.5, 24.7, 0.3),  # supply -0.5 K == displacement
+            (Mode.COOLING, 24.4, 24.6, 0.3),  # only the supply moved (OR)
+        ],
+    )
+    def test_threshold_witness_resets_the_window(
+        self, mode: Mode, supply_c: float, return_c: float, epsilon_k: float
+    ) -> None:
+        """One boundary witness sample after 8 dead cycles is evidence: the
+        window resets instead of latching no_flow on this cycle."""
+        monitor = LoopFlowMonitor()
+        for _ in range(_STEPS_PER_WINDOW - 1):
+            assert _update(monitor, mode=mode, epsilon_k=epsilon_k) == "ok"
+        assert (
+            _update(
+                monitor,
+                mode=mode,
+                supply_c=supply_c,
+                return_c=return_c,
+                epsilon_k=epsilon_k,
+            )
+            == "ok"
+        )
+        assert monitor.no_flow_active is False
+        # The window really restarted: a full new window is needed to latch.
+        for _ in range(_STEPS_PER_WINDOW - 1):
+            assert _update(monitor, mode=mode, epsilon_k=epsilon_k) == "ok"
+        assert _update(monitor, mode=mode, epsilon_k=epsilon_k) == "no_flow"
+
+
+class TestNoFlowWindowPrecision:
+    """The elapsed window counts from exactly 0.0 after every reset path,
+    and the displacement references track the evidence sample."""
+
+    @pytest.mark.unit
+    def test_restart_restarts_the_window_from_zero(self) -> None:
+        """After ``restart()`` the full window must elapse again — from 0 s."""
+        monitor = LoopFlowMonitor()
+        window_s = 8 * _DT_S + 1.0  # 9 cycles from a true zero, 8 from 1 s
+        for _ in range(5):
+            _update(monitor, window_s=window_s)
+        monitor.restart()
+        for _ in range(8):
+            assert _update(monitor, window_s=window_s) == "ok"
+        assert _update(monitor, window_s=window_s) == "no_flow"
+
+    @pytest.mark.unit
+    def test_close_command_restarts_the_window_from_zero(self) -> None:
+        """A closing command resets the window to 0 s, not a stale second."""
+        monitor = LoopFlowMonitor()
+        window_s = 8 * _DT_S + 1.0
+        for _ in range(5):
+            _update(monitor, window_s=window_s)
+        assert _update(monitor, commanded_pct=0.0, window_s=window_s) == "ok"
+        for _ in range(8):
+            assert _update(monitor, window_s=window_s) == "ok"
+        assert _update(monitor, window_s=window_s) == "no_flow"
+
+    @pytest.mark.unit
+    def test_evidence_restarts_the_window_from_zero(self) -> None:
+        """An evidence sample resets the window to 0 s, not a stale second."""
+        monitor = LoopFlowMonitor()
+        window_s = 8 * _DT_S + 1.0
+        for _ in range(5):
+            _update(monitor, window_s=window_s)
+        # delta-T evidence: the window restarts from here.
+        assert _update(monitor, supply_c=26.0, window_s=window_s) == "ok"
+        for _ in range(8):
+            assert _update(monitor, window_s=window_s) == "ok"
+        assert _update(monitor, window_s=window_s) == "no_flow"
+
+    @pytest.mark.unit
+    def test_references_follow_the_evidence_sample(self) -> None:
+        """After an evidence reset, displacement is measured from the
+        EVIDENCE cycle's temperatures, not re-captured a cycle later."""
+        monitor = LoopFlowMonitor()
+        window_s = 3 * _DT_S  # 900 s: three dead cycles latch
+        assert _update(monitor, window_s=window_s) == "ok"  # refs 25.0 / 25.0
+        # +0.6 K on both probes: displacement evidence, refs move to 25.6.
+        assert _update(monitor, supply_c=25.6, return_c=25.6, window_s=window_s) == "ok"
+        # +0.3 K: not yet evidence, the window accumulates from zero.
+        assert _update(monitor, supply_c=25.9, return_c=25.9, window_s=window_s) == "ok"
+        # +0.2 K: exactly 0.5 K from the EVIDENCE references -> evidence again.
+        assert _update(monitor, supply_c=26.1, return_c=26.1, window_s=window_s) == "ok"
+        # +0.2 K: only 300 s accumulated — no latch (refs re-captured one
+        # cycle late would read 0.4 K here and latch at 900 s instead).
+        assert _update(monitor, supply_c=26.3, return_c=26.3, window_s=window_s) == "ok"
+        assert monitor.no_flow_active is False
+
+
 # ---------------------------------------------------------------------------
 # FlowWatchdog — per-room aggregation
 # ---------------------------------------------------------------------------
@@ -427,6 +530,92 @@ class TestActuationSelfTest:
         test.reset()
         assert test.report_status is None
         assert test.failed is False
+
+    @pytest.mark.unit
+    def test_advance_without_a_running_test_is_not_a_completion(self) -> None:
+        """advance() on an idle self-test returns False (nothing completed)."""
+        test = ActuationSelfTest()
+        assert test.advance(_DT_S, (_dead_loop(),), epsilon_k=0.3) is False
+        assert test.report_status is None
+
+    @pytest.mark.unit
+    def test_fractional_duration_is_accepted(self) -> None:
+        """Any duration > 0 starts a test — only <= 0 is rejected."""
+        test = ActuationSelfTest()
+        assert (
+            test.begin(duration_s=0.5, loops=(_dead_loop(),), mode=Mode.HEATING) is None
+        )
+        assert test.running is True
+
+    @pytest.mark.unit
+    def test_missing_loops_at_the_verdict_grade_untested(self) -> None:
+        """A loop that vanished since ``begin`` grades untested (no crash)."""
+        test = ActuationSelfTest()
+        test.begin(
+            duration_s=_DT_S,
+            loops=(_dead_loop(), _dead_loop()),
+            mode=Mode.HEATING,
+        )
+        assert test.advance(_DT_S, (_dead_loop(),), epsilon_k=0.3) is True
+        assert test.loop_results == ("failed", "untested")
+        assert test.report_status == "failed"
+
+    @pytest.mark.unit
+    def test_an_untested_loop_does_not_skip_the_rest(self) -> None:
+        """An untested first loop does not stop the remaining verdicts."""
+        bare = LoopInput(
+            valve_position_pct=None,
+            supply_temperature_c=None,
+            return_temperature_c=None,
+        )
+        loops = (bare, _dead_loop(), _flowing_loop())
+        test = ActuationSelfTest()
+        test.begin(duration_s=_DT_S, loops=loops, mode=Mode.HEATING)
+        test.advance(_DT_S, loops, epsilon_k=0.3)
+        assert test.loop_results == ("untested", "failed", "passed")
+        assert test.report_status == "failed"
+
+    @pytest.mark.unit
+    def test_all_untested_loops_fail_the_test(self) -> None:
+        """A verdict with zero MEASURED loops is failed, never passed."""
+        test = ActuationSelfTest()
+        test.begin(duration_s=_DT_S, loops=(_dead_loop(),), mode=Mode.HEATING)
+        # The probes vanish before the verdict: the only loop is untested.
+        bare = LoopInput(
+            valve_position_pct=None,
+            supply_temperature_c=None,
+            return_temperature_c=None,
+        )
+        test.advance(_DT_S, (bare,), epsilon_k=0.3)
+        assert test.loop_results == ("untested",)
+        assert test.report_status == "failed"
+
+    @pytest.mark.unit
+    def test_supply_reference_is_not_the_return_probe(self) -> None:
+        """The verdict compares the supply probe against the SUPPLY
+        reference captured at begin — a swap flips this verdict."""
+        test = ActuationSelfTest()
+        begin_loops = (
+            LoopInput(
+                valve_position_pct=None,
+                supply_temperature_c=25.0,
+                return_temperature_c=25.9,
+            ),
+        )
+        test.begin(duration_s=_DT_S, loops=begin_loops, mode=Mode.HEATING)
+        # |dT| = 0.15 < epsilon; return -0.05 K; supply +1.0 K == self-test
+        # threshold against the correct (25.0) reference -> passed. Against
+        # the swapped return reference (25.9) the move is only 0.1 K.
+        verdict_loops = (
+            LoopInput(
+                valve_position_pct=None,
+                supply_temperature_c=26.0,
+                return_temperature_c=25.85,
+            ),
+        )
+        test.advance(_DT_S, verdict_loops, epsilon_k=0.3)
+        assert test.report_status == "passed"
+        assert test.loop_results == ("passed",)
 
 
 # ---------------------------------------------------------------------------

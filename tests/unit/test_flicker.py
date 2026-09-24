@@ -248,6 +248,13 @@ class TestCoolingDemand:
         assert gate.demand is True
         assert gate.open_pct == 100.0
 
+    @pytest.mark.unit
+    def test_no_caller_means_no_demand_even_at_a_zero_threshold(self) -> None:
+        """Demand needs at least one CALLING room; a zero gate fakes none."""
+        gate = cooling_demand([_output(error_c=0.5)], min_open_pct=0.0)
+        assert gate.open_pct == 0.0
+        assert gate.demand is False
+
 
 # ---------------------------------------------------------------------------
 # SetpointFlicker
@@ -521,3 +528,306 @@ class TestSetpointFlickerInterruptedAndRestart:
         assert decision.pulse_target_c is None
         assert decision.restore_pending is False
         assert decision.flags == ()
+
+
+# ---------------------------------------------------------------------------
+# FlickerDecision validation + machine diagnostics (boundaries and fields)
+# ---------------------------------------------------------------------------
+
+
+def _drive_to_pulse(
+    machine: SetpointFlicker, inputs: dict[str, object]
+) -> FlickerDecision:
+    """Run armed cycles from a fresh/idle machine until the pulse fires."""
+    _run_to_idle(machine, **inputs)  # type: ignore[arg-type]
+    for _ in range(10):
+        machine.tick(_DT)
+        decision = machine.step(**inputs)  # type: ignore[arg-type]
+        if decision.pulse_target_c is not None:
+            return decision
+    msg = "the machine never pulsed"
+    raise AssertionError(msg)
+
+
+class TestFlickerDecisionValidation:
+    """The FlickerDecision vocabulary validation messages."""
+
+    @pytest.mark.unit
+    def test_unknown_state_raises_naming_the_vocabulary(self) -> None:
+        """An out-of-vocabulary state raises with the allowed set."""
+        with pytest.raises(ValueError, match="^state must be one of"):
+            FlickerDecision(pulse_target_c=None, restore_pending=False, state="warp")
+
+    @pytest.mark.unit
+    def test_unknown_flag_raises_naming_the_vocabulary(self) -> None:
+        """An out-of-vocabulary flag raises with the allowed set."""
+        with pytest.raises(ValueError, match="^flags entries must be one of"):
+            FlickerDecision(
+                pulse_target_c=None,
+                restore_pending=False,
+                state="idle",
+                flags=("bogus",),
+            )
+
+
+class TestPulseFloorGrid:
+    """_pulse_floor_c: no grid returns the raw dew point; else ceil on grid."""
+
+    @pytest.mark.unit
+    def test_zero_step_returns_the_raw_dew_point(self) -> None:
+        """``step_c = 0`` means no grid: the pulse floor is the raw dew point."""
+        pulse = _drive_to_pulse(SetpointFlicker(_FAST_CFG), {**_ARMED, "step_c": 0.0})
+        assert pulse.pulse_target_c == pytest.approx(
+            _ARMED["safe_dew_c"] - FLICKER_DEW_RESERVE_K  # type: ignore[operator]
+        )
+
+    @pytest.mark.unit
+    def test_sub_degree_step_ceils_onto_the_grid(self) -> None:
+        """A 0.5 K grid ceils 14.3 to 14.5 — never below the raw dew point."""
+        inputs = {**_ARMED, "safe_dew_c": 16.3, "step_c": 0.5}
+        pulse = _drive_to_pulse(SetpointFlicker(_FAST_CFG), inputs)
+        assert pulse.pulse_target_c == pytest.approx(14.5)
+
+
+class TestRestoreAndPulseDecisionFields:
+    """The pulse and restore decisions carry the full diagnostics payload."""
+
+    @pytest.mark.unit
+    def test_pulse_decision_reports_history_without_a_restore(self) -> None:
+        """The pulse decision: no restore pending, one start, floor recorded."""
+        pulse = _drive_to_pulse(SetpointFlicker(_FAST_CFG), _ARMED)
+        assert pulse.restore_pending is False
+        assert pulse.pulses_last_hour == 1
+        assert pulse.last_pulse_target_c == pytest.approx(14.0)
+
+    @pytest.mark.unit
+    def test_restore_reports_full_cooldown_and_history(self) -> None:
+        """The restore decision carries the FULL min-off and the pulse history."""
+        machine = SetpointFlicker(_FAST_CFG)
+        _drive_to_pulse(machine, _ARMED)
+        machine.tick(_DT)
+        restore = machine.step(**_ARMED)  # type: ignore[arg-type]
+        assert restore.restore_pending is True
+        assert restore.cooldown_remaining_s == pytest.approx(
+            _FAST_CFG.hp_flicker_min_off_minutes * 60.0
+        )
+        assert restore.pulses_last_hour == 1
+        assert restore.last_pulse_target_c == pytest.approx(14.0)
+
+
+class TestCooldownDiagnostics:
+    """cooldown_remaining_s tracks the real gap and the boundary flips to idle."""
+
+    @pytest.mark.unit
+    def test_cooldown_remaining_tracks_the_gap_to_the_second(self) -> None:
+        """600 s cooldown: 300 left, then 0.5 left, then idle at exactly 600."""
+        cfg = ControllerConfig(hp_flicker_min_off_minutes=10.0)
+        machine = SetpointFlicker(cfg)  # fresh: cooldown, 0 s elapsed
+        machine.tick(300.0)
+        decision = machine.step(**_ARMED)  # type: ignore[arg-type]
+        assert decision.state == "cooldown"
+        assert decision.cooldown_remaining_s == pytest.approx(300.0)
+        machine.tick(299.5)
+        decision = machine.step(**_ARMED)  # type: ignore[arg-type]
+        assert decision.state == "cooldown"
+        assert decision.cooldown_remaining_s == pytest.approx(0.5)
+        machine.tick(0.5)  # exactly 600 s: the cooldown is over
+        decision = machine.step(**_ARMED)  # type: ignore[arg-type]
+        assert decision.state == "idle"
+        assert decision.cooldown_remaining_s is None
+
+    @pytest.mark.unit
+    def test_post_pulse_cooldown_counts_from_zero(self) -> None:
+        """The restore re-arms the cooldown at 0 s, not a stale remainder."""
+        machine = SetpointFlicker(_FAST_CFG)  # min-off 300 s
+        _drive_to_pulse(machine, _ARMED)
+        machine.tick(_DT)
+        machine.step(**_ARMED)  # type: ignore[arg-type]  # restore: cooldown = 0
+        machine.tick(150.0)
+        decision = machine.step(**_ARMED)  # type: ignore[arg-type]
+        assert decision.state == "cooldown"
+        assert decision.cooldown_remaining_s == pytest.approx(150.0)
+
+
+class TestStuckAccounting:
+    """The stuck timer: threshold boundary, the rate cap, exact resets."""
+
+    @pytest.mark.unit
+    def test_pulse_fires_exactly_at_the_stuck_threshold(self) -> None:
+        """300 s of 'stuck & armed' with a 300 s threshold fires the pulse."""
+        machine = SetpointFlicker(_FAST_CFG)  # stuck threshold 300 s
+        _run_to_idle(machine, **_ARMED)  # type: ignore[arg-type]
+        machine.tick(_DT)  # stuck exactly 300 s
+        decision = machine.step(**_ARMED)  # type: ignore[arg-type]
+        assert decision.pulse_target_c == pytest.approx(14.0)
+
+    @pytest.mark.unit
+    def test_capped_machine_reports_zero_stuck_remaining(self) -> None:
+        """Armed past the threshold but rate-capped: 0 s remaining, not 1."""
+        machine = SetpointFlicker(_FAST_CFG)  # cap 2 starts/hour
+        pulse_count = 0
+        capped: FlickerDecision | None = None
+        # c1 idle, c2 pulse, c3 restore, c4 idle, c5 pulse, c6 restore,
+        # c7 idle, c8: armed with a full cap -> stuck sits at the threshold.
+        for _ in range(8):
+            machine.tick(_DT)
+            decision = machine.step(**_ARMED)  # type: ignore[arg-type]
+            if decision.pulse_target_c is not None:
+                pulse_count += 1
+            elif pulse_count >= 2:
+                capped = decision
+        assert pulse_count == 2
+        assert capped is not None
+        assert capped.stuck_remaining_s == pytest.approx(0.0)
+
+    @pytest.mark.unit
+    def test_feature_idle_zeroes_the_stuck_accumulation(self) -> None:
+        """A feature-idle cycle resets the stuck timer to exactly 0 s."""
+        cfg = ControllerConfig(
+            hp_flicker_stuck_minutes=10.0, hp_flicker_min_off_minutes=5.0
+        )
+        machine = SetpointFlicker(cfg)
+        _run_to_idle(machine, **_ARMED)  # type: ignore[arg-type]
+        machine.tick(_DT)
+        machine.step(**_ARMED)  # type: ignore[arg-type]  # 300 s accumulated
+        machine.tick(_DT)
+        idle = {**_ARMED, "cooling_active": False}
+        machine.step(**idle)  # type: ignore[arg-type]  # feature idle: reset
+        machine.tick(_DT)
+        decision = machine.step(**_ARMED)  # type: ignore[arg-type]
+        assert decision.stuck_remaining_s == pytest.approx(600.0 - 300.0)
+
+
+class TestArmingBoundaries:
+    """The arming conditions at their exact boundaries."""
+
+    @pytest.mark.unit
+    def test_trigger_is_the_dew_floored_start_band(self) -> None:
+        """trigger = max(w + band, p + 3 K); the dew side wins when higher."""
+        # safe_dew 20 -> raw 18 -> p 18; max(18+1.5, 18+3) = 21.
+        inputs = {**_ARMED, "safe_dew_c": 20.0, "hp_return_c": 25.0}
+        machine = SetpointFlicker(_FAST_CFG)
+        machine.tick(_DT)
+        decision = machine.step(**inputs)  # type: ignore[arg-type]
+        assert decision.trigger_c == pytest.approx(21.0)
+
+    @pytest.mark.unit
+    def test_return_exactly_at_the_trigger_arms(self) -> None:
+        """``hp_return == trigger`` is armed (the >= is inclusive)."""
+        inputs = {**_ARMED, "hp_return_c": 19.5}  # trigger is 19.5 for _ARMED
+        pulse = _drive_to_pulse(SetpointFlicker(_FAST_CFG), inputs)
+        assert pulse.pulse_target_c == pytest.approx(14.0)
+
+    @pytest.mark.unit
+    def test_missing_compressor_reading_flags_no_sensor(self) -> None:
+        """A live return but a missing compressor reading is sensor-lost."""
+        inputs = {**_ARMED, "compressor_freq_hz": None}
+        machine = SetpointFlicker(_FAST_CFG)
+        machine.tick(_DT)
+        decision = machine.step(**inputs)  # type: ignore[arg-type]
+        assert "flicker_no_sensor" in decision.flags
+
+    @pytest.mark.unit
+    def test_dew_blocked_flag_needs_an_armed_machine(self) -> None:
+        """No demand + no headroom: dew_blocked is NOT flagged (needs both)."""
+        # safe_dew 18 -> raw 16 -> p 18 on a 3 K grid > w - step = 15: blocked.
+        inputs = {**_ARMED, "demand": False, "safe_dew_c": 18.0, "step_c": 3.0}
+        machine = SetpointFlicker(_FAST_CFG)
+        machine.tick(_DT)
+        decision = machine.step(**inputs)  # type: ignore[arg-type]
+        assert "flicker_dew_blocked" not in decision.flags
+
+    @pytest.mark.unit
+    def test_dew_boundary_at_exactly_one_step_still_pulses(self) -> None:
+        """``p == w - step`` leaves exactly one step of room: NOT blocked."""
+        # safe_dew 19 -> raw 17 -> p 17 on a 1 K grid; w - step = 17.
+        inputs = {**_ARMED, "safe_dew_c": 19.0, "hp_return_c": 25.0}
+        pulse = _drive_to_pulse(SetpointFlicker(_FAST_CFG), inputs)
+        assert pulse.pulse_target_c == pytest.approx(17.0)
+
+
+class TestHistoryReporting:
+    """Every decision variant keeps the pulse history (JSON contract)."""
+
+    @pytest.mark.unit
+    def test_feature_idle_keeps_the_pulse_history(self) -> None:
+        """A feature-idle decision still reports the last pulse + count."""
+        machine = SetpointFlicker(_FAST_CFG)
+        _drive_to_pulse(machine, _ARMED)
+        machine.tick(_DT)
+        machine.step(**_ARMED)  # type: ignore[arg-type]  # restore -> cooldown
+        idle = {**_ARMED, "safe_dew_c": None}
+        machine.tick(_DT)
+        decision = machine.step(**idle)  # type: ignore[arg-type]
+        assert decision.pulse_target_c is None
+        assert decision.restore_pending is False
+        assert decision.last_pulse_target_c == pytest.approx(14.0)
+        assert decision.pulses_last_hour == 1
+
+    @pytest.mark.unit
+    def test_armed_idle_decision_carries_trigger_and_history(self) -> None:
+        """The plain (non-pulse) cooling decision: trigger, history, no restore."""
+        machine = SetpointFlicker(_FAST_CFG)
+        _drive_to_pulse(machine, _ARMED)
+        machine.tick(_DT)
+        machine.step(**_ARMED)  # type: ignore[arg-type]  # restore
+        _run_to_idle(machine, **_ARMED)  # type: ignore[arg-type]
+        no_demand = {**_ARMED, "demand": False}
+        machine.tick(_DT)
+        decision = machine.step(**no_demand)  # type: ignore[arg-type]
+        assert decision.state == "idle"
+        assert decision.trigger_c == pytest.approx(19.5)
+        assert decision.last_pulse_target_c == pytest.approx(14.0)
+        assert decision.pulses_last_hour == 1
+        assert decision.restore_pending is False
+        assert decision.cooldown_remaining_s is None
+        assert decision.stuck_remaining_s is None
+
+
+class TestTickAccumulation:
+    """tick(): every timer accumulates; the rolling window prunes at one hour."""
+
+    @pytest.mark.unit
+    def test_elapsed_accumulates_so_old_pulses_expire(self) -> None:
+        """Past one hour a pulse leaves the window and the cap frees up."""
+        machine = SetpointFlicker(_FAST_CFG)  # cap 2 starts/hour
+        pulses = 0
+        for _ in range(16):  # 80 min of armed cycles
+            machine.tick(_DT)
+            decision = machine.step(**_ARMED)  # type: ignore[arg-type]
+            if decision.pulse_target_c is not None:
+                pulses += 1
+        assert pulses >= 3
+
+    @pytest.mark.unit
+    def test_state_timers_accumulate_across_cycles(self) -> None:
+        """Cooldown and stuck timers sum the ticks: 2 x 300 s reaches 600 s."""
+        cfg = ControllerConfig(
+            hp_flicker_stuck_minutes=10.0, hp_flicker_min_off_minutes=10.0
+        )
+        machine = SetpointFlicker(cfg)
+        pulsed = False
+        for _ in range(6):
+            machine.tick(_DT)
+            decision = machine.step(**_ARMED)  # type: ignore[arg-type]
+            if decision.pulse_target_c is not None:
+                pulsed = True
+                break
+        assert pulsed
+
+    @pytest.mark.unit
+    def test_a_pulse_expires_exactly_one_hour_later(self) -> None:
+        """At elapsed == pulse + 3600 s the pulse is OUT of the window."""
+        cfg = ControllerConfig(
+            hp_flicker_stuck_minutes=5.0,
+            hp_flicker_min_off_minutes=5.0,
+            hp_flicker_max_starts_per_h=1.0,
+        )
+        machine = SetpointFlicker(cfg)
+        pulses = 0
+        for _ in range(14):  # 70 min: the second start fits after the expiry
+            machine.tick(_DT)
+            decision = machine.step(**_ARMED)  # type: ignore[arg-type]
+            if decision.pulse_target_c is not None:
+                pulses += 1
+        assert pulses == 2

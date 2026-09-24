@@ -688,6 +688,19 @@ class TestWindowAllows:
         with pytest.raises(ValueError, match="end_minute"):
             window_allows(0, 0, 2000)
 
+    @pytest.mark.unit
+    def test_validation_message_names_label_range_and_value(self) -> None:
+        """The full message pins the label, the [0, 1439] range and the value."""
+        with pytest.raises(ValueError) as err_minute:
+            window_allows(1440, 0, 60)
+        assert str(err_minute.value) == ("minute_of_day must be in [0, 1439], got 1440")
+        with pytest.raises(ValueError) as err_start:
+            window_allows(0, -1, 60)
+        assert str(err_start.value) == "start_minute must be in [0, 1439], got -1"
+        with pytest.raises(ValueError) as err_end:
+            window_allows(0, 0, 2000)
+        assert str(err_end.value) == "end_minute must be in [0, 1439], got 2000"
+
 
 class TestQuietHours:
     """B1 (2026-07-12): fast_source_allowed=False suppresses the fast source."""
