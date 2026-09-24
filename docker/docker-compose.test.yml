@@ -33,7 +33,7 @@ services:
 
   # Mutation testing of the pure core (mutmut needs fork, so on Windows it runs
   # only in a container). mutmut's working copy lives on the named volume
-  # `mutants` (a Windows bind mount runs it ~4x slower); survivor diffs land in
+  # `mutants` (a Windows bind mount slows it down); survivor diffs land in
   # the git-ignored mutation-survivors/ directory of the repo.
   #
   #   docker compose -f docker/docker-compose.test.yml build mutation

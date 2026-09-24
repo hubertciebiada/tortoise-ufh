@@ -25,7 +25,7 @@ The repo is bind-mounted, so after editing `custom_components/` or `tests/ha/` j
 ## 2. Mutation testing (mutmut)
 
 mutmut forks one worker per mutant, so on Windows it runs only in a container. Its working
-copy lives on the `mutants` named volume (a Windows bind mount runs it ~4x slower), so
+copy lives on the `mutants` named volume (a Windows bind mount slows it down), so
 re-runs are incremental:
 
 ```bash
