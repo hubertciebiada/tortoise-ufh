@@ -199,3 +199,109 @@ class TestCoolingCompCurve:
         }
         with pytest.raises(ValueError):
             CoolingCompCurve(**{**base, **kwargs})
+
+
+# ---------------------------------------------------------------------------
+# Validation boundary values (documented ranges) — both curve classes
+# ---------------------------------------------------------------------------
+
+
+class TestWeatherCompValidationBoundaries:
+    """Boundary values of the documented parameter ranges.
+
+    Pins the strictness of every ``__post_init__`` comparison: the permitted
+    range for ``slope`` is ``>= 0``, ``t_supply_min`` is ``> 0``,
+    ``t_supply_max`` is strictly ``> t_supply_min`` and ``t_supply_base`` must
+    lie in the *closed* interval ``[t_supply_min, t_supply_max]``.
+    """
+
+    _HEATING_BASE: dict[str, float] = {
+        "t_supply_base": 30.0,
+        "slope": 1.5,
+        "t_neutral": 15.0,
+        "t_supply_max": 45.0,
+        "t_supply_min": 20.0,
+    }
+    _COOLING_BASE: dict[str, float] = {
+        "t_supply_base": 18.0,
+        "slope": 0.5,
+        "t_neutral": 26.0,
+        "t_supply_max": 22.0,
+        "t_supply_min": 16.0,
+    }
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"slope": 0.0},  # flat curve allowed (slope >= 0)
+            {"t_supply_min": 0.5},  # any strictly positive floor allowed
+            {"t_supply_base": 20.0},  # base == t_supply_min allowed
+            {"t_supply_base": 45.0},  # base == t_supply_max allowed
+        ],
+    )
+    def test_heating_boundary_values_valid(self, kwargs: dict[str, float]) -> None:
+        """Heating-curve boundary values inside the documented ranges pass."""
+        curve = WeatherCompCurve(**{**self._HEATING_BASE, **kwargs})
+        assert curve.t_supply_min <= curve.t_supply_base <= curve.t_supply_max
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"slope": 0.0},  # flat curve allowed (slope >= 0)
+            {"t_supply_min": 0.5},  # any strictly positive floor allowed
+            {"t_supply_base": 16.0},  # base == t_supply_min allowed
+            {"t_supply_base": 22.0},  # base == t_supply_max allowed
+        ],
+    )
+    def test_cooling_boundary_values_valid(self, kwargs: dict[str, float]) -> None:
+        """Cooling-curve boundary values inside the documented ranges pass."""
+        curve = CoolingCompCurve(**{**self._COOLING_BASE, **kwargs})
+        assert curve.t_supply_min <= curve.t_supply_base <= curve.t_supply_max
+
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"slope": -0.1}, r"slope must be >= 0"),
+            ({"t_supply_min": 0.0}, r"t_supply_min must be > 0"),
+            (
+                {
+                    "t_supply_min": 20.0,
+                    "t_supply_max": 20.0,
+                    "t_supply_base": 20.0,
+                },
+                r"t_supply_max .* must be > t_supply_min",
+            ),
+            ({"t_supply_base": 10.0}, r"t_supply_base .* must be >= t_supply_min"),
+            ({"t_supply_base": 50.0}, r"t_supply_base .* must be <= t_supply_max"),
+        ],
+    )
+    def test_heating_invalid_params_message(
+        self, kwargs: dict[str, float], match: str
+    ) -> None:
+        """Heating-curve violations raise ValueError with the field's message."""
+        with pytest.raises(ValueError, match=match):
+            WeatherCompCurve(**{**self._HEATING_BASE, **kwargs})
+
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            ({"slope": -0.1}, r"slope must be >= 0"),
+            ({"t_supply_min": 0.0}, r"t_supply_min must be > 0"),
+            (
+                {
+                    "t_supply_min": 16.0,
+                    "t_supply_max": 16.0,
+                    "t_supply_base": 16.0,
+                },
+                r"t_supply_max .* must be > t_supply_min",
+            ),
+            ({"t_supply_base": 10.0}, r"t_supply_base .* must be >= t_supply_min"),
+            ({"t_supply_base": 30.0}, r"t_supply_base .* must be <= t_supply_max"),
+        ],
+    )
+    def test_cooling_invalid_params_message(
+        self, kwargs: dict[str, float], match: str
+    ) -> None:
+        """Cooling-curve violations raise ValueError with the field's message."""
+        with pytest.raises(ValueError, match=match):
+            CoolingCompCurve(**{**self._COOLING_BASE, **kwargs})
