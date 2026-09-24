@@ -274,6 +274,25 @@ class TestDegradedRoomOutputModeAware:
         assert out.fast_source.on is False
         assert "controller_error" in out.report.flags
 
+    def test_degraded_report_is_pi_inert_and_echoes_temperature(self) -> None:
+        """The degrade report echoes the room temperature, zeroes the PI
+        commons and does not claim saturation."""
+        controller = RoomController(ControllerConfig(), name="salon")
+        controller.step(make_inputs(room_temperature_c=19.0), dt_seconds=300.0)
+        out = BuildingController._degraded_room_output(
+            controller, ValueError("boom"), Mode.HEATING, 19.5
+        )
+        report = out.report
+        assert report.room_temperature_c == pytest.approx(19.5)
+        assert report.i_term == 0.0
+        assert report.p_term == 0.0
+        assert report.trend_term == 0.0
+        assert report.feedforward_term == 0.0
+        assert report.saturated is False
+        assert report.valve_floor_applied is False
+        assert report.integrator_frozen is True
+        assert report.dew_throttle_factor == 1.0
+
 
 class TestTrendInvalidationHook:
     """R2-F6: the adapter's dt-clamp hook restarts the trend from zero."""

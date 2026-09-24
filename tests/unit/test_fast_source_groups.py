@@ -31,18 +31,76 @@ from custom_components.tortoise_ufh.core.config import ControllerConfig
 from custom_components.tortoise_ufh.core.controller import (
     BuildingController,
     RoomController,
+    _passive_report,
 )
 from custom_components.tortoise_ufh.core.models import (
+    FastSourceCommand,
     FastSourceKind,
     FastSourceMode,
     Mode,
     RoomInputs,
+    RoomOutputs,
 )
 from tests.unit.conftest import make_inputs
 
 pytestmark = pytest.mark.unit
 
 _GROUP = "outdoor_unit_a"
+
+
+def _on_outputs(mode: FastSourceMode, *, flags: tuple[str, ...] = ()) -> RoomOutputs:
+    """Build minimal outputs with an ON fast-source command in ``mode``.
+
+    Args:
+        mode: The commanded direction.
+        flags: Report flags to carry.
+
+    Returns:
+        A closed-valve :class:`RoomOutputs` with the given ON command.
+    """
+    report = _passive_report(
+        error_c=None,
+        trend=None,
+        room_dew=None,
+        i_term=0.0,
+        raw_valve_pct=0.0,
+        saturated=False,
+        flags=flags,
+        explanation="test",
+        room_temperature_c=None,
+    )
+    return RoomOutputs(
+        valve_position_pct=0.0,
+        fast_source=FastSourceCommand(on=True, mode=mode),
+        report=report,
+    )
+
+
+class _EntryDirectionStub:
+    """Controller stand-in reporting a fixed step-entry direction."""
+
+    def __init__(self, entry_direction: FastSourceMode) -> None:
+        """Store the direction.
+
+        Args:
+            entry_direction: The direction the machine was running in at step
+                entry (``FastSourceMode.OFF`` when idle).
+        """
+        self._entry_direction = entry_direction
+
+    @property
+    def fast_source_entry_direction(self) -> FastSourceMode:
+        """Return the fixed entry direction."""
+        return self._entry_direction
+
+
+class _LockedOnStub:
+    """Controller stand-in pinned ON inside its min-ON dwell."""
+
+    @property
+    def fast_source_locked_on(self) -> bool:
+        """Always locked ON."""
+        return True
 
 
 def _transitional(
@@ -192,6 +250,26 @@ class TestGroupArbiter:
         for room in out.rooms.values():
             assert room.fast_source.mode is FastSourceMode.COOLING
             assert "fast_source_group_conflict" not in room.report.flags
+
+    def test_unconflicted_group_does_not_stop_arbitration(self) -> None:
+        """A clean group must not skip arbitration of a LATER conflicted one."""
+        cfg = ControllerConfig(fast_min_on_minutes=0.0, fast_min_off_minutes=0.0)
+        building = BuildingController({n: cfg for n in ("a", "b", "c", "d")})
+        out = building.step(
+            {
+                # unit_1: one room heats, the other is in band — no conflict.
+                "a": _transitional(room_temperature_c=19.5, group="unit_1"),
+                "b": _transitional(room_temperature_c=21.0, group="unit_1"),
+                # unit_2: a real conflict; cooling has the larger excess.
+                "c": _transitional(room_temperature_c=19.5, group="unit_2"),
+                "d": _transitional(room_temperature_c=24.0, group="unit_2"),
+            },
+            dt_seconds=300.0,
+        )
+        assert out.rooms["a"].fast_source.mode is FastSourceMode.HEATING
+        assert out.rooms["d"].fast_source.mode is FastSourceMode.COOLING
+        assert out.rooms["c"].fast_source.on is False
+        assert "fast_source_group_conflict" in out.rooms["c"].report.flags
 
 
 class TestManualHoldPin:
@@ -437,6 +515,30 @@ class TestIncumbentHysteresis:
         assert modes["south"] is FastSourceMode.COOLING
         assert modes["north"] is None
 
+    def test_single_running_direction_claims_the_incumbency(self) -> None:
+        """A NON-conflicted running direction stores the group's last winner.
+
+        K2: the incumbency claim happens on any cycle with a single ON
+        direction, so a later challenger re-engaging from OFF faces the
+        +0.5 K hysteresis against the stored winner.
+        """
+        cfg = ControllerConfig(fast_min_on_minutes=0.0, fast_min_off_minutes=0.0)
+        building = BuildingController({"north": cfg, "south": cfg})
+        # Cycle 1: only the north room runs (HEATING) — no conflict, but the
+        # direction claims the group incumbency.
+        modes = self._step_conflict(building, t_heat_room=19.5, t_cool_room=21.0)
+        assert modes["north"] is FastSourceMode.HEATING
+        assert modes["south"] is None
+        # Cycle 2: the north room warms past the band — both units go OFF.
+        modes = self._step_conflict(building, t_heat_room=22.0, t_cool_room=21.0)
+        assert modes == {"north": None, "south": None}
+        # Cycle 3: both re-engage from OFF; the cooling challenger (1.6 K
+        # excess) beats the bare heating excess (1.2 K) but not incumbent +
+        # hysteresis (1.7 K) — the stored HEATING winner defends its seat.
+        modes = self._step_conflict(building, t_heat_room=19.5, t_cool_room=22.9)
+        assert modes["north"] is FastSourceMode.HEATING
+        assert modes["south"] is None
+
 
 def _dry_grouped(**overrides: object) -> RoomInputs:
     """COOLING split room in the shared group, at setpoint, muggy air."""
@@ -497,3 +599,150 @@ class TestDryGroupArbiter:
         assert out.rooms["south"].fast_source.mode is FastSourceMode.HEATING
         assert out.rooms["north"].fast_source.on is False
         assert "fast_source_group_conflict" in out.rooms["north"].report.flags
+
+
+class TestArbitrateByExcess:
+    """K2 white-box: the incumbent rules inside ``_arbitrate_by_excess``.
+
+    Zero deadband keeps the band excess exactly ``|setpoint - t_room|`` so
+    the hysteresis boundary is binary-exact.
+    """
+
+    @staticmethod
+    def _building() -> BuildingController:
+        """Return a two-room building with a zero comfort deadband.
+
+        Returns:
+            A :class:`BuildingController` over rooms ``a``/``b`` with
+            ``deadband_c = 0``.
+        """
+        cfg = ControllerConfig(deadband_c=0.0)
+        return BuildingController({"a": cfg, "b": cfg})
+
+    def test_entry_direction_beats_the_stored_winner(self) -> None:
+        """A unit still running its entry direction is the incumbent.
+
+        The stored last winner only inherits the incumbency when NO unit was
+        already running — here room ``a`` runs HEATING since step entry, so
+        the stored COOLING winner must not take the seat.
+        """
+        building = self._building()
+        building._controllers["a"] = _EntryDirectionStub(FastSourceMode.HEATING)  # type: ignore[assignment]
+        building._controllers["b"] = _EntryDirectionStub(FastSourceMode.OFF)  # type: ignore[assignment]
+        building._group_last_winner["g"] = FastSourceMode.COOLING
+        inputs = {
+            "a": _transitional(room_temperature_c=19.0),  # heat excess 2.0 K
+            "b": _transitional(room_temperature_c=22.9),  # cool excess 1.9 K
+        }
+        rooms = {
+            "a": _on_outputs(FastSourceMode.HEATING),
+            "b": _on_outputs(FastSourceMode.COOLING),
+        }
+        winner = building._arbitrate_by_excess("g", inputs, rooms, ["a", "b"])
+        # 1.9 K does not beat 2.0 K + 0.5 K hysteresis: the incumbent holds.
+        assert winner is FastSourceMode.HEATING
+
+    def test_stored_winner_inherits_incumbency_when_all_reengage(self) -> None:
+        """Every unit re-engaging from OFF: the stored last winner defends."""
+        building = self._building()
+        building._controllers["a"] = _EntryDirectionStub(FastSourceMode.OFF)  # type: ignore[assignment]
+        building._controllers["b"] = _EntryDirectionStub(FastSourceMode.OFF)  # type: ignore[assignment]
+        building._group_last_winner["g"] = FastSourceMode.HEATING
+        inputs = {
+            "a": _transitional(room_temperature_c=19.0),  # heat excess 2.0 K
+            "b": _transitional(room_temperature_c=23.4),  # cool excess 2.4 K
+        }
+        rooms = {
+            "a": _on_outputs(FastSourceMode.HEATING),
+            "b": _on_outputs(FastSourceMode.COOLING),
+        }
+        winner = building._arbitrate_by_excess("g", inputs, rooms, ["a", "b"])
+        # 2.4 K beats the bare 2.0 K but not 2.0 K + 0.5 K: incumbent holds.
+        assert winner is FastSourceMode.HEATING
+
+    def test_challenger_must_exceed_incumbent_by_more_than_hysteresis(self) -> None:
+        """Exactly ``incumbent + 0.5 K`` is NOT enough (strict inequality)."""
+        building = self._building()
+        building._controllers["a"] = _EntryDirectionStub(FastSourceMode.OFF)  # type: ignore[assignment]
+        building._controllers["b"] = _EntryDirectionStub(FastSourceMode.OFF)  # type: ignore[assignment]
+        building._group_last_winner["g"] = FastSourceMode.HEATING
+        inputs = {
+            "a": _transitional(room_temperature_c=19.0),  # heat excess 2.0 K
+            "b": _transitional(room_temperature_c=23.5),  # cool excess 2.5 K
+        }
+        rooms = {
+            "a": _on_outputs(FastSourceMode.HEATING),
+            "b": _on_outputs(FastSourceMode.COOLING),
+        }
+        winner = building._arbitrate_by_excess("g", inputs, rooms, ["a", "b"])
+        # 2.5 K == 2.0 K + 0.5 K exactly: the challenger does NOT take over.
+        assert winner is FastSourceMode.HEATING
+
+
+class TestDoublePin:
+    """K4 point 5: a double-pin flags everyone, overrides nobody."""
+
+    def test_double_pin_flags_without_override_and_later_groups_continue(
+        self,
+    ) -> None:
+        """Two min-ON-locked rooms in opposite directions: both flagged, both
+        left ON — and the NEXT conflicted group is still arbitrated."""
+        building = BuildingController(
+            {
+                "a": ControllerConfig(),
+                "b": ControllerConfig(),
+                "c": ControllerConfig(),
+                "d": ControllerConfig(),
+            }
+        )
+        building._controllers["a"] = _LockedOnStub()  # type: ignore[assignment]
+        building._controllers["b"] = _LockedOnStub()  # type: ignore[assignment]
+        inputs = {
+            "a": _transitional(room_temperature_c=19.0),
+            "b": _transitional(room_temperature_c=24.0),
+            "c": _transitional(room_temperature_c=19.5, group="unit_2"),
+            "d": _transitional(room_temperature_c=24.0, group="unit_2"),
+        }
+        rooms = {
+            "a": _on_outputs(FastSourceMode.HEATING),
+            "b": _on_outputs(FastSourceMode.COOLING),
+            "c": _on_outputs(FastSourceMode.HEATING),
+            "d": _on_outputs(FastSourceMode.COOLING),
+        }
+        building._arbitrate_fast_groups(inputs, rooms)
+        # The double-pinned group: flagged, nobody forced OFF.
+        for name in ("a", "b"):
+            assert rooms[name].fast_source.on is True
+            assert "fast_source_group_conflict" in rooms[name].report.flags
+        # The later group is still arbitrated: the larger cooling excess wins.
+        assert rooms["d"].fast_source.on is True
+        assert rooms["c"].fast_source.on is False
+        assert "fast_source_group_conflict" in rooms["c"].report.flags
+
+
+class TestSafetyForcedPin:
+    """The arbiter's emergency pin recognises both S3 and S4 force-on flags."""
+
+    def test_either_emergency_flag_counts(self) -> None:
+        """``s3_emergency_heat`` OR ``s4_emergency_cool`` pins the room."""
+        heat = _on_outputs(FastSourceMode.HEATING, flags=("s3_emergency_heat",))
+        cool = _on_outputs(FastSourceMode.COOLING, flags=("s4_emergency_cool",))
+        plain = _on_outputs(FastSourceMode.HEATING, flags=("sensor_lost",))
+        assert BuildingController._is_safety_forced(heat) is True
+        assert BuildingController._is_safety_forced(cool) is True
+        assert BuildingController._is_safety_forced(plain) is False
+
+
+class TestFlagGroupConflict:
+    """The double-pin flag merge appends once and preserves the rest."""
+
+    def test_flag_merged_once_and_fields_preserved(self) -> None:
+        """``fast_source_group_conflict`` is appended after existing flags,
+        de-duplicated on a second merge, and the outputs pass through."""
+        out = _on_outputs(FastSourceMode.HEATING, flags=("sensor_lost",))
+        merged = BuildingController._flag_group_conflict(out)
+        assert merged.report.flags == ("sensor_lost", "fast_source_group_conflict")
+        assert merged.valve_position_pct == out.valve_position_pct
+        assert merged.fast_source == out.fast_source
+        again = BuildingController._flag_group_conflict(merged)
+        assert again.report.flags == ("sensor_lost", "fast_source_group_conflict")
