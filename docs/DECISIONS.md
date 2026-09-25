@@ -1799,7 +1799,7 @@ table, so the tab bar reads Pokoje · Flagi · Strojenie · Rozdzielacze · Wspo
 Pompa ciepła. Loop names and loop temperatures on the drawing read along their pipe
 (a quarter turn counter-clockwise, no capitals) instead of alternating rows.
 
-## 30. S3 frost protection never opens a chilled floor (2026-09-25)
+## 30. S3 frost protection never opens a chilled floor (2026-09-25, v0.21.13)
 
 **Problem (found by mutation testing + property tests):** `_apply_safety` answered S3
 (`EMERGENCY_HEAT`, room < 5 °C) with the floor valve at 100 % in every mode unless a
