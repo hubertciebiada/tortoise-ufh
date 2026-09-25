@@ -1798,3 +1798,23 @@ per-loop picture (actuator feedback, loop probes, loop flags) on the drawing and
 table, so the tab bar reads Pokoje · Flagi · Strojenie · Rozdzielacze · Wspomaganie ·
 Pompa ciepła. Loop names and loop temperatures on the drawing read along their pipe
 (a quarter turn counter-clockwise, no capitals) instead of alternating rows.
+
+## 30. S3 frost protection never opens a chilled floor (2026-09-25)
+
+**Problem (found by mutation testing + property tests):** `_apply_safety` answered S3
+(`EMERGENCY_HEAT`, room < 5 °C) with the floor valve at 100 % in every mode unless a
+`CLOSE_VALVE` rule also held. In COOLING the loops carry chilled water: a freezing room (the
+house left in COOLING into the autumn, or a room opted out of cooling) was chilled further by
+its own floor, and S2 could close the valve only when the room had a humidity reading.
+
+**Decision (owner, 2026-09-25):** in COOLING, S3 is air-side only — valve 0, the fast source
+forced to HEATING (a floor-only room gets no action beyond the closed valve) — the same rule S4
+already follows ("never open the floor without S2 cover"). HEATING, TRANSITIONAL and OFF keep
+the 100 % frost opening. The Hypothesis condensation invariant now covers the whole S3/S4
+range: in COOLING no safety action opens the chilled floor.
+
+**Also (no behaviour change):** the `dew_factor >= 1.0` disjunct of `saturated` was dead (a
+pre-throttle zero stays <= 0 after the throttle; `saturated = valve >= 100 or
+low_before_throttle`), and the TRANSITIONAL engaged branches no longer set a direction text the
+emitted command always overwrites. The duplicated no-probes check of `begin_actuation_test`
+stays: it decides which refusal reason wins (`no_probes` before `dew_unsafe`).

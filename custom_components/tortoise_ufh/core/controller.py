@@ -980,13 +980,13 @@ class RoomController:
                 # Running heater: release only when the room crosses the FAR
                 # edge of the comfort band (setpoint + deadband) — while ON the
                 # split self-regulates at the setpoint, so there is no bias.
+                # The direction text stays "brak" here: a unit kept ON gets it
+                # from the emitted command below.
                 fs_mode = FastSourceMode.HEATING
                 want_on = heating_demand > -cfg.deadband_c
-                direction = "grzanie" if want_on else "brak"
             elif engaged is FastSourceMode.COOLING:
                 fs_mode = FastSourceMode.COOLING
                 want_on = cooling_demand > -cfg.deadband_c
-                direction = "chlodzenie" if want_on else "brak"
             elif heating_demand > cfg.boost_offset_c:
                 fs_mode = FastSourceMode.HEATING
                 want_on = True
@@ -1246,10 +1246,10 @@ class RoomController:
         # -- Step 13: clamp + saturation ------------------------------------
         # A zero produced by the S2 throttle is NOT saturation of the control
         # law (control-F8, 2026-07-09): saturated stays the "PI hit a bound"
-        # signal, dew_throttle_factor carries the condensation story.
-        saturated = valve >= 100.0 or (
-            valve <= 0.0 and (dew_factor >= 1.0 or low_before_throttle)
-        )
+        # signal, dew_throttle_factor carries the condensation story: only a
+        # zero already there BEFORE the throttle counts (a pre-throttle zero
+        # stays <= 0 after multiplying by a factor in [0, 1]).
+        saturated = valve >= 100.0 or low_before_throttle
         valve = max(0.0, min(100.0, valve))
         self._last_valve_pct = valve
 
@@ -1631,8 +1631,10 @@ class RoomController:
         close_valve = SafetyAction.CLOSE_VALVE in actions
         if SafetyAction.EMERGENCY_HEAT in actions:
             # S3: open the floor fully unless a CLOSE_VALVE rule (S1/S2) also
-            # holds; the air-side heat boost runs regardless of the valve.
-            valve = 0.0 if close_valve else 100.0
+            # holds; the air-side heat boost runs regardless of the valve. In
+            # COOLING the loops carry chilled water, so opening them would chill
+            # the freezing room further: air side only, like S4 (2026-09-25).
+            valve = 0.0 if close_valve or inputs.mode is Mode.COOLING else 100.0
             fast = (
                 self._fast.force_on(FastSourceMode.HEATING, target)
                 if has_split

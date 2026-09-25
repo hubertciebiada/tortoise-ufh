@@ -517,6 +517,8 @@ After step 15 two post-processing passes run on EVERY path (including safe degra
   active rules: any `CLOSE_VALVE` rule (S1/S2) parks the valve at 0, but an active S3
   (`EMERGENCY_HEAT`) / S4 (`EMERGENCY_COOL`) still runs the fast source — S1 closing an
   overheated floor must not silence the only remaining heat source of a freezing room.
+  S3 opens the floor fully only outside COOLING: in COOLING the loops carry chilled water, so
+  S3 is air-side only (valve 0, fast source HEATING), like S4 *(2026-09-25, DECISIONS §30)*.
   Since 2026-07-12 (K3) a CLOSE_VALVE **without** a parallel emergency no longer touches the
   fast source at all: the air-side decision from the normal coordination (step 14 /
   transitional) stands — an S1 keeps a wanted boost running, an S2 in cooling keeps the split

@@ -285,6 +285,38 @@ class TestSafetyValveVsAirSource:
         assert out.valve_position_pct == 100.0
         assert out.fast_source.on is True
 
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "kind", [FastSourceKind.SPLIT, FastSourceKind.NONE], ids=["split", "floor"]
+    )
+    def test_s3_in_cooling_never_opens_the_chilled_floor(
+        self, kind: FastSourceKind
+    ) -> None:
+        """S3 in COOLING heats by air only: chilled loops stay closed (2026-09-25).
+
+        The loops carry chilled water in COOLING, so opening them would chill
+        the freezing room further — the humidity is unknown here, so S2 could
+        not close the valve either. A split still runs HEATING.
+        """
+        controller = RoomController(ControllerConfig(), name="salon")
+        out = controller.step(
+            make_inputs(
+                mode=Mode.COOLING,
+                setpoint_c=24.0,
+                room_temperature_c=4.0,
+                loops=(LoopInput(None, 16.0, None),),
+                fast_source_kind=kind,
+            ),
+            dt_seconds=300.0,
+        )
+        assert "s3_emergency_heat" in out.report.flags
+        assert out.valve_position_pct == 0.0
+        if kind is FastSourceKind.SPLIT:
+            assert out.fast_source.on is True
+            assert out.fast_source.mode is FastSourceMode.HEATING
+        else:
+            assert out.fast_source.on is False
+
 
 class TestWatchdogNeutral:
     """S6 (2026-07-09): S5 fed by the adapter age, action = neutral position."""

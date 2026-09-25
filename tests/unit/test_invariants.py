@@ -270,11 +270,15 @@ def _with(inputs: RoomInputs, **changes: Any) -> RoomInputs:
 
 
 @_SETTINGS
-@given(_sequence(mode=Mode.COOLING))
+@given(_sequence(mode=Mode.COOLING, room_c=st.floats(-5.0, 45.0)))
 def test_cooling_valve_opens_only_with_supply_above_dew(
     sequence: list[tuple[RoomInputs, float]],
 ) -> None:
-    """Valve > 0 in COOLING needs humidity, a supply probe, supply > dew."""
+    """Valve > 0 in COOLING needs humidity, a supply probe, supply > dew.
+
+    Holds across the S3/S4 emergency range too: in COOLING no safety action
+    opens the chilled floor (S3 heats by air only since 2026-09-25).
+    """
 
     def check(inputs: RoomInputs, out: RoomOutputs) -> None:
         if out.valve_position_pct <= 0.0:
