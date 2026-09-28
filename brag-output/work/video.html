@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>tortoise-ufh /brag</title>
+    <!--
+      The /brag launch video for Tortoise-UFH, drawn in the browser. Every frame
+      is a pure function of time: render.mjs calls window.renderFrame(t) and
+      screenshots the 1920x1080 stage. Served from the repo root so it can
+      import the real logo (scripts/brand/logo.mjs) and the real sidebar panel
+      (custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js).
+    -->
+    <style>
+      @font-face {
+        font-family: "Nunito";
+        font-weight: 800;
+        src: url(/scripts/brand/node_modules/@fontsource/nunito/files/nunito-latin-800-normal.woff2)
+          format("woff2");
+      }
+      @font-face {
+        font-family: "Nunito";
+        font-weight: 700;
+        src: url(/scripts/brand/node_modules/@fontsource/nunito/files/nunito-latin-700-normal.woff2)
+          format("woff2");
+      }
+      @font-face {
+        font-family: "Roboto";
+        font-weight: 400;
+        src: url(node_modules/@fontsource/roboto/files/roboto-latin-400-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: "Roboto";
+        font-weight: 500;
+        src: url(node_modules/@fontsource/roboto/files/roboto-latin-500-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: "Roboto";
+        font-weight: 700;
+        src: url(node_modules/@fontsource/roboto/files/roboto-latin-700-normal.woff2) format("woff2");
+      }
+      :root {
+        /* Home Assistant dark theme tokens the panel reads. */
+        --primary-text-color: #e1e1e1;
+        --secondary-text-color: #9b9b9b;
+        --disabled-text-color: #6f6f6f;
+        --primary-background-color: #111111;
+        --card-background-color: #1c1c1c;
+        --divider-color: rgba(225, 225, 225, 0.12);
+        --primary-color: #2196f3;
+        --text-primary-color: #ffffff;
+        --accent-color: #ff9800;
+        --error-color: #ef5350;
+        --warning-color: #ffa600;
+        --success-color: #66bb6a;
+        --info-color: #4fc3f7;
+        --secondary-background-color: #282828;
+        --state-icon-color: #7a9bbd;
+        --ha-card-border-radius: 12px;
+
+        --ink: #f2f7f6;
+        --muted: #93bbb4;
+        --hot: #ff6b3d;
+        --warm: #ffbc4e;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #0a2227;
+      }
+      #stage {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        font-family: "Nunito", sans-serif;
+        color: var(--ink);
+        background: radial-gradient(1400px 900px at 50% 42%, #164349 0%, #0d2d33 55%, #081c20 100%);
+      }
+      .abs {
+        position: absolute;
+        will-change: transform, opacity;
+      }
+      #glow {
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+        pointer-events: none;
+      }
+      #markSvg {
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: visible;
+      }
+      .headline {
+        font-weight: 800;
+        letter-spacing: -0.5px;
+        white-space: nowrap;
+      }
+      #hook {
+        left: 0;
+        width: 1920px;
+        top: 900px;
+        text-align: center;
+        font-size: 84px;
+      }
+      #brand {
+        left: 1010px;
+        top: 360px;
+      }
+      #brand .word {
+        font-weight: 800;
+        font-size: 138px;
+        line-height: 1;
+        letter-spacing: -2px;
+      }
+      .accent {
+        color: var(--hot);
+      }
+      .warmtxt {
+        color: var(--warm);
+      }
+      #brand .sub {
+        margin-top: 34px;
+        font-weight: 700;
+        font-size: 46px;
+        line-height: 1.25;
+        color: #cfe5e0;
+      }
+      .caption {
+        left: 140px;
+        top: 70px;
+        font-size: 64px;
+      }
+      #panelWin {
+        left: 140px;
+        top: 188px;
+        width: 1640px;
+        height: 852px;
+        border-radius: 22px;
+        overflow: hidden;
+        background: #111111;
+        box-shadow:
+          0 40px 90px rgba(0, 0, 0, 0.45),
+          0 0 0 1px rgba(255, 255, 255, 0.06);
+      }
+      #panelWin .bar {
+        height: 40px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 0 18px;
+        background: #1b1b1b;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        font: 500 15px Roboto, sans-serif;
+        color: #9b9b9b;
+      }
+      #panelWin .bar i {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #3a3a3a;
+        display: inline-block;
+      }
+      #panelWin .bar span {
+        margin-left: 14px;
+      }
+      #panelHost {
+        position: relative;
+        height: 812px;
+        overflow: hidden;
+      }
+      tortoise-ufh-panel {
+        display: block;
+        font-family: Roboto, sans-serif;
+      }
+      #cursor {
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+        pointer-events: none;
+        overflow: visible;
+      }
+      #chart {
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+        overflow: visible;
+      }
+      #foot4 {
+        right: 140px;
+        top: 96px;
+        font-weight: 700;
+        font-size: 30px;
+        color: var(--muted);
+        text-align: right;
+      }
+      #fable {
+        left: 0;
+        width: 1920px;
+        top: 350px;
+        text-align: center;
+        font-size: 84px;
+        font-weight: 800;
+        line-height: 1;
+      }
+      #fable .line {
+        display: block;
+        margin-bottom: 118px;
+      }
+      #fable .who {
+        position: relative;
+        display: inline-block;
+      }
+      #fable .tag {
+        position: absolute;
+        left: 50%;
+        top: 100%;
+        transform: translate(-50%, 18px);
+        white-space: nowrap;
+        font-size: 30px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        color: var(--muted);
+      }
+      #end {
+        left: 0;
+        width: 1920px;
+        top: 668px;
+        text-align: center;
+      }
+      #end .word {
+        font-weight: 800;
+        font-size: 124px;
+        line-height: 1;
+        letter-spacing: -2px;
+      }
+      #end .cta {
+        margin-top: 40px;
+        font-weight: 700;
+        font-size: 40px;
+        color: #cfe5e0;
+      }
+      #end .cta b {
+        font-weight: 800;
+        color: var(--warm);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <canvas id="glow" class="abs" width="1920" height="1080"></canvas>
+      <svg id="markSvg" class="abs" viewBox="0 0 1920 1080"><g id="cam"></g></svg>
+      <div id="hook" class="abs headline">Underfloor heating is slow.</div>
+      <div id="brand" class="abs">
+        <div class="word">tortoise-<span class="accent">ufh</span></div>
+        <div class="sub">Per-room underfloor heating control<br />for Home Assistant.</div>
+      </div>
+      <div id="cap3a" class="abs caption headline">One controller per room.</div>
+      <div id="cap3b" class="abs caption headline">Every valve, live.</div>
+      <div id="panelWin" class="abs">
+        <div class="bar"><i></i><i></i><i></i><span>Home Assistant · Tortoise-UFH</span></div>
+        <div id="panelHost"><tortoise-ufh-panel id="panel"></tortoise-ufh-panel></div>
+      </div>
+      <svg id="chart" class="abs" viewBox="0 0 1920 1080"></svg>
+      <div id="cap4" class="abs caption headline">Slow slab. Soft landing.</div>
+      <div id="foot4" class="abs">48 h on the built-in digital twin</div>
+      <div id="fable" class="abs">
+        <span class="line" id="fl1"
+          >The slow <span class="who accent">tortoise<span class="tag">underfloor heating</span></span>
+          carries the load.</span
+        >
+        <span class="line" id="fl2"
+          >The fast <span class="who warmtxt">hare<span class="tag">split / AC</span></span> closes the
+          gap.</span
+        >
+      </div>
+      <div id="end" class="abs">
+        <div class="word">tortoise-<span class="accent">ufh</span></div>
+        <div class="cta"><b>Install via HACS</b> &nbsp;·&nbsp; github.com/hubertciebiada/tortoise-ufh</div>
+      </div>
+      <svg id="cursor" class="abs" viewBox="0 0 1920 1080">
+        <circle id="ripple" r="10" fill="none" stroke="#ff6b3d" stroke-width="4" opacity="0" />
+        <g id="arrow" opacity="0">
+          <path
+            d="M0 0 L0 34 L9 26 L15 40 L21 37 L15 24 L27 24 Z"
+            fill="#ffffff"
+            stroke="#0b1b1e"
+            stroke-width="2.4"
+            stroke-linejoin="round"
+          />
+        </g>
+      </svg>
+    </div>
+
+    <script>
+      // --- Deterministic clock: the panel's "cycle N s ago" follows video time.
+      const CYCLE_AT = Date.UTC(2026, 0, 14, 7, 40, 0);
+      window.__now = CYCLE_AT + 38000;
+      Date.now = () => window.__now;
+
+      // --- <ha-icon> stub (as in dev/panel-preview.html) ---------------------
+      class HaIconStub extends HTMLElement {
+        static get observedAttributes() {
+          return ["icon"];
+        }
+        connectedCallback() {
+          this._render();
+        }
+        attributeChangedCallback() {
+          this._render();
+        }
+        _render() {
+          const map = {
+            "mdi:tortoise": "🐢",
+            "mdi:cog-outline": "⚙",
+            "mdi:close": "✕",
+            "mdi:power": "⏻",
+            "mdi:play": "▶",
+            "mdi:information-outline": "ⓘ",
+          };
+          this.textContent = map[this.getAttribute("icon") || ""] || "•";
+          Object.assign(this.style, {
+            display: "inline-flex",
+            width: "var(--mdc-icon-size, 24px)",
+            height: "var(--mdc-icon-size, 24px)",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: "calc(var(--mdc-icon-size, 24px) * 0.85)",
+          });
+        }
+      }
+      customElements.define("ha-icon", HaIconStub);
+
+      // --- Sample installation shown in the product shots --------------------
+      // Illustrative values (a normal heating morning), same shapes as the real
+      // get_config / get_live payloads (see dev/panel-preview.html).
+      const ROOMS = [
+        { name: "Living room", area: 32.5, offset: 0.5, split: true, valves: 2 },
+        { name: "Kitchen", area: 18.0, offset: 0.0, split: false, valves: 1 },
+        { name: "Bedroom", area: 14.0, offset: -0.5, split: false, valves: 1 },
+        { name: "Office", area: 11.0, offset: 0.0, split: false, valves: 1 },
+        { name: "Bathroom", area: 8.5, offset: 1.5, split: false, valves: 1 },
+      ];
+      const LIVE = {
+        "Living room": { t: 20.3, trend: 0.4, err: 1.2, valve: 78, sup: 34.1, ret: 28.9, split: 22.5 },
+        Kitchen: { t: 21.1, trend: 0.0, err: -0.1, valve: 15, sup: 34.0, ret: 31.2 },
+        Bedroom: { t: 19.6, trend: -0.1, err: 0.9, valve: 0, sup: null, ret: null },
+        Office: { t: 20.8, trend: 0.1, err: 0.2, valve: 41, sup: 34.1, ret: 29.8 },
+        Bathroom: { t: 22.6, trend: 0.2, err: -0.1, valve: 33, sup: 34.2, ret: 30.5 },
+      };
+      const slug = (s) => s.toLowerCase().replace(/[^a-z]+/g, "_");
+      const mock = { bedroomLive: false, bedroomValve: 0 };
+
+      function sampleConfig() {
+        return {
+          home_setpoint_c: 21.0,
+          mode: "heating",
+          global_safe_dew_point_entity_id: "sensor.tortoise_global_safe_dew_point",
+          heat_pump: { entity_hp_mode: null, entity_hp_cooling_setpoint: null },
+          rooms: ROOMS.map((r) => ({
+            name: r.name,
+            area_m2: r.area,
+            offset_c: r.offset,
+            cooling_enabled: true,
+            control_state: r.name === "Bedroom" && !mock.bedroomLive ? "off" : "live",
+            fast_source_kind: r.split ? "split" : "none",
+            fast_source_group: "",
+            fast_source_window_start: null,
+            fast_source_window_end: null,
+            entities: {
+              entity_temp_room: `sensor.${slug(r.name)}_temp`,
+              entity_humidity: `sensor.${slug(r.name)}_rh`,
+              entity_temp_outdoor: "sensor.outdoor_temp",
+              entity_valves: Array.from({ length: r.valves }, (_, i) => `number.${slug(r.name)}_valve_${i + 1}`),
+              entity_supply: [`sensor.${slug(r.name)}_supply`],
+              entity_return: [`sensor.${slug(r.name)}_return`],
+              entity_fast_source: r.split ? `climate.${slug(r.name)}_split` : null,
+            },
+          })),
+        };
+      }
+
+      function sampleLive() {
+        const rooms = {};
+        for (const r of ROOMS) {
+          const v = LIVE[r.name];
+          const live = !(r.name === "Bedroom" && !mock.bedroomLive);
+          const valve = r.name === "Bedroom" ? mock.bedroomValve : v.valve;
+          rooms[r.name] = {
+            control_state: live ? "live" : "off",
+            valve_position_pct: valve,
+            setpoint_c: 21.0 + r.offset,
+            fast_source: v.split
+              ? { on: true, mode: "heating", target_temperature_c: v.split }
+              : { on: false, mode: "off", target_temperature_c: null },
+            report: {
+              error_c: v.err,
+              trend_c_per_h: v.trend,
+              room_dew_point_c: 9.6,
+              room_temperature_c: v.t,
+              p_term: 0,
+              i_term: 0,
+              trend_term: 0,
+              feedforward_term: 0,
+              raw_valve_pct: valve,
+              valve_floor_applied: false,
+              saturated: false,
+              dew_throttle_factor: 1.0,
+              integrator_frozen: false,
+              dew_excluded_reason: "not_cooling_mode",
+              fast_dwell_remaining_s: null,
+              flags: [],
+              explanation: "",
+            },
+          };
+        }
+        return {
+          rooms,
+          global_safe_dew_point_c: null,
+          algorithm_status: "running",
+          watchdog_state: "ok",
+          last_update_timestamp: new Date(CYCLE_AT).toISOString(),
+          mode: "heating",
+          home_setpoint_c: 21.0,
+          sensor_lost_rooms: 0,
+          heat_pump: { configured: false },
+          manifolds: sampleManifolds(),
+        };
+      }
+
+      function sampleManifolds() {
+        const loop = (position, room, index, label, pct, ts, tr) => {
+          const id = `number.${slug(room)}_valve_${index + 1}`;
+          return {
+            position,
+            room_name: room,
+            loop_index: index,
+            loop_label: label,
+            valve: { pct, command_pct: pct, entity_id: id },
+            supply: { value: ts, entity_id: id.replace("number.", "sensor.").replace("valve", "supply") },
+            return: { value: tr, entity_id: id.replace("number.", "sensor.").replace("valve", "return") },
+            delta_k: ts !== null && tr !== null ? ts - tr : null,
+            flags: [],
+          };
+        };
+        const bed = mock.bedroomValve;
+        const free = (position) => ({
+          position,
+          room_name: null,
+          loop_index: null,
+          loop_label: null,
+          valve: { pct: null, command_pct: null, entity_id: null },
+          supply: { value: null, entity_id: null },
+          return: { value: null, entity_id: null },
+          delta_k: null,
+          flags: [],
+        });
+        return [
+          {
+            id: "ground",
+            name: "Ground floor",
+            circuits: 4,
+            side: "left",
+            main: {
+              supply: { value: 34.6, entity_id: "sensor.ground_supply" },
+              return: { value: 29.9, entity_id: "sensor.ground_return" },
+            },
+            positions: [
+              loop(1, "Living room", 0, "Living 1", 78, 34.3, 28.8),
+              loop(2, "Living room", 1, "Living 2", 78, 34.2, 29.0),
+              loop(3, "Kitchen", 0, "Kitchen", 15, 34.0, 31.2),
+              loop(4, "Office", 0, "Office", 41, 34.1, 29.8),
+            ],
+          },
+          {
+            id: "first",
+            name: "First floor",
+            circuits: 3,
+            side: "right",
+            main: {
+              supply: { value: 34.4, entity_id: "sensor.first_supply" },
+              return: { value: bed > 0 ? 30.1 : 30.5, entity_id: "sensor.first_return" },
+            },
+            positions: [
+              loop(1, "Bedroom", 0, "Bedroom", bed, bed > 0 ? 34.1 : 24.1, bed > 0 ? 29.6 : 22.8),
+              loop(2, "Bathroom", 0, "Bathroom", 33, 34.2, 30.5),
+              free(3),
+            ],
+          },
+        ];
+      }
+
+      // Entity states the panel reads next to the payloads (loop supply/return).
+      function buildStates() {
+        const st = {};
+        const put = (id, v, unit) => {
+          st[id] = {
+            state: v === null ? "unavailable" : String(v),
+            attributes: unit ? { unit_of_measurement: unit } : {},
+          };
+        };
+        for (const r of ROOMS) {
+          const v = LIVE[r.name];
+          const s = slug(r.name);
+          const bed = r.name === "Bedroom";
+          const flowing = !bed || mock.bedroomValve > 0;
+          put(`sensor.${s}_temp`, v.t, "°C");
+          put(`sensor.${s}_supply`, bed ? (flowing ? 33.9 : 24.1) : v.sup, "°C");
+          put(`sensor.${s}_return`, bed ? (flowing ? 29.6 : 22.8) : v.ret, "°C");
+          for (let i = 0; i < r.valves; i++) {
+            put(`number.${s}_valve_${i + 1}`, bed ? mock.bedroomValve : v.valve, "%");
+          }
+        }
+        return st;
+      }
+
+      window.makeHass = () => ({
+        language: "en",
+        locale: { language: "en" },
+        get states() {
+          return buildStates();
+        },
+        themes: { darkMode: true },
+        dockedSidebar: "docked",
+        callWS(msg) {
+          if (msg.type === "tortoise_ufh/get_config") return Promise.resolve(sampleConfig());
+          if (msg.type === "tortoise_ufh/get_live") return Promise.resolve(sampleLive());
+          if (msg.type === "tortoise_ufh/set_room_state") return Promise.resolve({ room: msg.room, state: msg.state });
+          return Promise.resolve({});
+        },
+      });
+      window.mock = mock;
+    </script>
+    <script type="module" src="video.mjs"></script>
+  </body>
+</html>

@@ -1,0 +1,1 @@
+Underfloor heating is slow, so I gave it a tortoise. Tortoise-UFH runs a separate controller for every room's floor in Home Assistant: the slab carries the load, your split only closes the gap, and on the built-in digital twin it lands on the setpoint with a +0.18 K peak. Install via HACS: github.com/hubertciebiada/tortoise-ufh

@@ -1,0 +1,10 @@
+{
+  "name": "tortoise-ufh-brag",
+  "private": true,
+  "description": "Sources of the Tortoise-UFH /brag launch video (see README.md).",
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "@fontsource/roboto": "5.3.0"
+  }
+}
