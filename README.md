@@ -20,6 +20,12 @@
 [license-badge]: https://img.shields.io/badge/License-MIT-green.svg
 [license-url]: LICENSE
 
+<p align="center">
+  <a href="brag-output/brag.mp4"><img src="brag-output/teaser.webp" alt="Hot water fills the underfloor-heating loop on the tortoise's shell, then Tortoise-UFH is revealed" width="720"></a>
+  <br>
+  <sub>▶ <a href="brag-output/brag.mp4">Watch the 20-second intro</a> (with sound)</sub>
+</p>
+
 > **Language / Język / Sprache:** **English** (this page) · [Polski](docs/manual/pl.md) · [Deutsch](README.de.md)
 >
 > The full end-user manual (installation, configuration, the sidebar panel, tuning and the flag
