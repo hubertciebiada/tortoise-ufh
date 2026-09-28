@@ -20,11 +20,7 @@
 [license-badge]: https://img.shields.io/badge/License-MIT-green.svg
 [license-url]: LICENSE
 
-<p align="center">
-  <a href="brag-output/brag.mp4"><img src="brag-output/teaser.webp" alt="Heißes Wasser füllt den Fußbodenheizungskreis auf dem Panzer der Schildkröte, dann erscheint Tortoise-UFH" width="720"></a>
-  <br>
-  <sub>▶ <a href="brag-output/brag.mp4">20-Sekunden-Intro ansehen</a> (mit Ton, auf Englisch)</sub>
-</p>
+https://github.com/user-attachments/assets/5cd9430a-78ed-4d2f-bab6-978c8ef548ab
 
 > **Sprache / Language / Język:** **Deutsch** (diese Seite) · [English](README.md) · [Polski](docs/manual/pl.md)
 >

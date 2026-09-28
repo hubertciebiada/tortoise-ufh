@@ -27,12 +27,3 @@ node render.mjs --stills 6.4                            # poster frame -> stills
 
 Then overlay the poster on frame 0 and mux the soundtrack with ffmpeg
 (`overlay=enable='eq(n,0)'`, libx264 CRF 15, AAC 192k).
-
-The README loop (`../teaser.webp`) is the first 7 s rendered with a flat background
-(`video.html?teaser`, so it compresses cleanly):
-
-```bash
-node render.mjs --teaser                                # -> teaser-frames/
-$FFMPEG -framerate 15 -i teaser-frames/f%04d.png -vf scale=960:540:flags=lanczos \
-  -c:v libwebp_anim -q:v 88 -compression_level 6 -preset drawing -loop 0 ../teaser.webp
-```
