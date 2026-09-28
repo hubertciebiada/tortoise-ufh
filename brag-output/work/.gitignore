@@ -1,0 +1,6 @@
+# Intermediates of the /brag render (rebuild with render.mjs / music.py)
+soundtrack.wav
+video-only.mp4
+stills/
+verify/
+ffmpeg-path.txt
