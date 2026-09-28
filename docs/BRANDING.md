@@ -8,7 +8,10 @@ is a bifilar spiral (the *ślimak* layout installers use): supply (hot, orange) 
 middle and winds back out between its own turns, and both ends leave together at one
 corner, the way a real loop reaches its manifold. Hot next to cooler is what keeps a
 slab evenly warm, and the tortoise is the slab: heavy, slow and steady, and it always
-gets there. On the S-bend's spine the supply colour fades into the return colour.
+gets there. On the S-bend's spine the supply colour fades into the return colour. Like a
+real PEX/PERT pipe, the loop is bent, never kinked: no bend is tighter than a minimum
+radius (`minBend` in `logo.mjs`), so the outer turns follow the shell while the small
+inner turns come out round.
 
 Palette (from `scripts/brand/logo.mjs`):
 
