@@ -147,15 +147,17 @@ function roundRect(x, y, w, h, r) {
  *   turns: full turns of each spiral before the S-bend (k).
  *   p: pipe pitch (centre-to-centre distance of neighbouring pipes).
  *   e: half-length of the S-bend's straight spine.
- *   cornerR: bend radius of the outermost turn; inner turns stay concentric.
+ *   cornerR: bend radius of the outermost turn; inner turns stay concentric
+ *     until they would get tighter than minBend.
  *   lead: how far both ends run on past the pattern (they vanish under the rim).
+ *   minBend: smallest bend radius, in pitches (no corner is ever tighter).
  *
  * Returns:
  *   { supply, middle, ret } as segment lists in flow direction: supply from
  *   its inlet to the S-bend's spine, the spine itself (where supply becomes
  *   return), and the return from there to its outlet.
  */
-export function bifilarLoop({ cx, cy, turns, p, e, cornerR, lead }) {
+export function bifilarLoop({ cx, cy, turns, p, e, cornerR, lead, minBend }) {
   const k = turns;
   const x0 = -((4 * k + 2) * p) / 2;
   const x1 = -x0;
@@ -183,14 +185,15 @@ export function bifilarLoop({ cx, cy, turns, p, e, cornerR, lead }) {
   const turned = (q) => pt(-q.x, -q.y);
   const Bgeo = A.map(turned);
   const B = [pt(Bgeo[2].x, y1 + lead), ...Bgeo.slice(3)];
-  // concentric bends: radius shrinks with the distance from the laid edge
+  // concentric bends (radius shrinks with the distance from the laid edge),
+  // but never below the pipe's minimum bend radius
   const bx1 = x1 - p;
   const by1 = y1 - p;
   const radii = (pts) =>
     pts.map((q, i) => {
       if (i === 0 || i === pts.length - 1) return 0;
       const inset = Math.min(q.x - x0, bx1 - q.x, q.y - y0, by1 - q.y);
-      return Math.max(0.55 * p, cornerR - inset);
+      return Math.max(minBend * p, cornerR - inset);
     });
   const rho = -spine / 2;
   // S-bend: over the top (now heading down), the straight spine where supply
@@ -223,6 +226,10 @@ export const SHELL = {
   rim: 15,
   margin: 14,
   pipeRatio: 0.58, // pipe stroke width as a fraction of the pitch
+  // Smallest bend radius of the pipe centre-line, in pitches. A real UFH pipe
+  // is bent, never kinked into a 90-degree elbow, so the small inner turns
+  // come out round while the outer ones follow the shell.
+  minBend: 1.3,
   headHalfW: 44,
   headLen: 80,
 };
@@ -276,6 +283,7 @@ export function markBody({ turns = 2, idPrefix = "tu", palette = {}, shell = {} 
     e: lay.e,
     cornerR: S.radius - S.margin - lay.p / 2,
     lead: S.margin + S.rim + lay.p,
+    minBend: S.minBend,
   });
   const id = (s) => `${idPrefix}-${s}`;
   const rimPath = roundRect(
