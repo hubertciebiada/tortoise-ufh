@@ -6,6 +6,10 @@ import { markBody } from "/scripts/brand/logo.mjs";
 import "/custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js";
 
 const NS = "http://www.w3.org/2000/svg";
+// ?teaser: flat background, no glow and no sway, so the README loop compresses
+// cleanly as an animated WebP.
+const TEASER = new URLSearchParams(location.search).has("teaser");
+if (TEASER) document.getElementById("stage").style.background = "#0f2f35";
 const $ = (id) => document.getElementById(id);
 
 // --- Timing helpers ------------------------------------------------------------
@@ -157,7 +161,7 @@ const pop = (w, s) =>
 const glow = $("glow").getContext("2d");
 function drawGlow(x, y, r, alpha) {
   glow.clearRect(0, 0, 1920, 1080);
-  if (alpha <= 0.001) return;
+  if (alpha <= 0.001 || TEASER) return;
   const g = glow.createRadialGradient(x, y, 0, x, y, r);
   g.addColorStop(0, `rgba(255, 128, 64, ${alpha})`);
   g.addColorStop(0.45, `rgba(255, 128, 64, ${alpha * 0.35})`);
@@ -318,7 +322,7 @@ window.renderFrame = async (t) => {
     const sy = lerp(458, 545, u);
     // two slow steps: a gentle sway of the body while the legs paddle
     const walk = seg(t, 3.9, 6.6);
-    const sway = Math.sin(walk * Math.PI * 2) * 1.2 * Math.sin(walk * Math.PI);
+    const sway = TEASER ? 0 : Math.sin(walk * Math.PI * 2) * 1.2 * Math.sin(walk * Math.PI);
     const out = easeInOut(seg(t, 6.72, 6.98));
     toScreen = setCamera(ax, ay, sx - out * 40, sy, k * (1 - 0.04 * out), `rotate(${sway.toFixed(3)} 256 272)`);
     markOpacity = 1 - out;
