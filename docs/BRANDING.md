@@ -53,30 +53,23 @@ Tracked assets:
 
 | File | Size | Purpose |
 | --- | --- | --- |
-| `custom_components/tortoise_ufh/brand/icon.png` | 256×256 | canonical icon |
+| `custom_components/tortoise_ufh/brand/icon.png` | 256×256 | canonical icon (Home Assistant, HACS) |
 | `custom_components/tortoise_ufh/brand/icon@2x.png` | 512×512 | hi-DPI icon |
 | `custom_components/tortoise_ufh/brand/icon.svg` | vector | the mark (same drawing as the icons) |
-| `custom_components/tortoise_ufh/brand/logo.png` | 800×658 | full lockup (mark + wordmark + tagline), README header (light theme) |
-| `custom_components/tortoise_ufh/brand/logo-dark.png` | 800×658 | dark-theme lockup (light wordmark), README `<picture>` source |
+| `custom_components/tortoise_ufh/brand/logo.png` | 800×658 | full lockup (mark + wordmark + tagline) for light backgrounds: README header, Home Assistant logo |
+| `custom_components/tortoise_ufh/brand/dark_logo.png` | 800×658 | the same lockup with a light wordmark for dark backgrounds: README `<picture>` source, Home Assistant dark theme |
 | `custom_components/tortoise_ufh/frontend/panel-icon.png` | 256×256 | panel header mark (one-turn loop), served at `/tortoise_ufh_panel/panel-icon.png` (`panel.py`); the panel falls back to the 🐢 glyph if it fails to load |
-| `brand-submission/tortoise_ufh/icon.png` + `icon@2x.png` | 256 / 512 | ready-made [home-assistant/brands](https://github.com/home-assistant/brands) submission |
 
-## Submitting to home-assistant/brands
+## In Home Assistant and HACS
 
-Until the brand is merged upstream, HA shows a default puzzle-piece icon for the
-integration. To fix that, the **project owner** opens a PR against
-[home-assistant/brands](https://github.com/home-assistant/brands):
+Since Home Assistant 2026.3 a custom integration ships its own brand images: HA serves
+the files in the installed integration's `brand/` folder instead of asking the brands
+CDN. It reads `icon.png`, `icon@2x.png`, `logo.png` and `dark_logo.png` from there
+(the `dark_` prefix marks a dark-theme variant, hence the name of the dark lockup);
+`icon.svg` is not one of them. So Home Assistant and HACS show the images of the
+*installed* version: a new icon or logo appears once a release that ships it is
+installed and HA restarted (a browser may need a hard refresh).
 
-1. Fork `home-assistant/brands`.
-2. Copy `brand-submission/tortoise_ufh/` into the fork as
-   `custom_integrations/tortoise_ufh/` (the directory name must equal the
-   integration domain).
-3. Open the PR; the repo's CI validates sizes and names.
-
-Brands requirements covered by the prepared directory:
-
-- `icon.png` — exactly 256×256 px, PNG, transparent background, motif trimmed
-  and centred.
-- `icon@2x.png` — exactly 512×512 px, same artwork.
-- `logo.png` / `logo@2x.png` (wide wordmark) are optional; icon-only submissions
-  are accepted, and this icon is square, so none is included.
+Nothing is submitted to [home-assistant/brands](https://github.com/home-assistant/brands)
+any more. Before 2026.3, Home Assistant shows its generic placeholder icon for the
+integration.

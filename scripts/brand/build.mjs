@@ -25,7 +25,6 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..", "..");
 const BRAND = join(ROOT, "custom_components", "tortoise_ufh", "brand");
 const FRONTEND = join(ROOT, "custom_components", "tortoise_ufh", "frontend");
-const SUBMISSION = join(ROOT, "brand-submission", "tortoise_ufh");
 
 const NAME = [
   { text: "tortoise-", role: "name" },
@@ -182,16 +181,14 @@ async function main() {
 
     // Full detail everywhere except the panel header, which shows the mark at
     // 22 px: there the one-turn loop (fewer, bolder pipes) stays legible.
-    for (const dir of [BRAND, FRONTEND, SUBMISSION]) mkdirSync(dir, { recursive: true });
+    for (const dir of [BRAND, FRONTEND]) mkdirSync(dir, { recursive: true });
     writeFileSync(join(BRAND, "icon.svg"), `${icon(2)}\n`);
-    for (const dir of [BRAND, SUBMISSION]) {
-      await png(browser, icon(2, 256), join(dir, "icon.png"), 256, 256);
-      await png(browser, icon(2, 512), join(dir, "icon@2x.png"), 512, 512);
-    }
+    await png(browser, icon(2, 256), join(BRAND, "icon.png"), 256, 256);
+    await png(browser, icon(2, 512), join(BRAND, "icon@2x.png"), 512, 512);
     await png(browser, icon(1, 256), join(FRONTEND, "panel-icon.png"), 256, 256);
     for (const [theme, file] of [
       ["light", "logo.png"],
-      ["dark", "logo-dark.png"],
+      ["dark", "dark_logo.png"],
     ]) {
       const { svg, width, height } = lockups[theme];
       await png(browser, svg, join(BRAND, file), width, height);
