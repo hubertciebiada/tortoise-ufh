@@ -20,6 +20,13 @@
 [license-badge]: https://img.shields.io/badge/License-MIT-green.svg
 [license-url]: LICENSE
 
+<!-- ▼ VIDEO PLACEHOLDER: in the GitHub web editor drag brag-output/brag.mp4 onto the empty
+     line below (or drop it into a PR comment and paste the link there). GitHub uploads it and
+     writes a https://github.com/user-attachments/assets/… link that renders as a video player
+     with sound. Keep the link alone on its line. -->
+
+<!-- ▲ END VIDEO PLACEHOLDER -->
+
 <p align="center">
   <a href="brag-output/brag.mp4"><img src="brag-output/teaser.webp" alt="Hot water fills the underfloor-heating loop on the tortoise's shell, then Tortoise-UFH is revealed" width="720"></a>
   <br>
