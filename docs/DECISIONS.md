@@ -1818,3 +1818,24 @@ pre-throttle zero stays <= 0 after the throttle; `saturated = valve >= 100 or
 low_before_throttle`), and the TRANSITIONAL engaged branches no longer set a direction text the
 emitted command always overwrites. The duplicated no-probes check of `begin_actuation_test`
 stays: it decides which refusal reason wins (`no_probes` before `dew_unsafe`).
+
+## 31. Commands are cached only when they can land; farewell retry; start-up grace (2026-10-05)
+
+**Problem (issues #10, #11, #13):** (1) the valve writer, the cooling farewell park and the
+heat-pump link writers dispatched fire-and-forget calls to missing or `unavailable` entities
+and cached them as delivered, so a closing command missed while an actuator was offline was
+not re-sent until the 45-min re-assert. (2) The farewell (C5) is one-shot and an `off` room is
+never written again, so a split (or, in COOLING, a valve) that was unreachable when its room
+left `live` kept running on the controller's last command indefinitely. (3) After a Home
+Assistant restart a room sensor with no state yet sent the room through the sensor-lost safe
+degrade on the first cycle, force-stopping a running split past its min-ON dwell.
+
+**Decision:** (1) every writer applies the v0.20.1 reachability rule of the fast source: a
+missing or `unavailable` entity is neither written nor cached (`unknown` stays writable). (2)
+`CommandWriter.farewell_room` returns what it could not deliver; the coordinator keeps it per
+room and re-sends exactly those parts at the start of every cycle while the room stays off (a
+delivered split OFF re-synchronises the core like the original farewell, K10). The valve part
+follows the current mode; the marker is dropped when the room returns to `live`. (3) A room
+whose temperature has not reported since the coordinator was built is not stepped or written
+for up to two nominal cycles; after that the normal safe degrade applies. The core is
+unchanged.

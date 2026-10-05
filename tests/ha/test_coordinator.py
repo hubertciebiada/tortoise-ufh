@@ -87,6 +87,15 @@ def _all_actuator_calls(
     return [call for calls in mocks.values() for call in calls]
 
 
+def _register_valve_entity(hass: HomeAssistant) -> None:
+    """Give the ad-hoc ``valve.salon_loop`` actuator a reachable state.
+
+    A missing or ``unavailable`` actuator is never written (issue #11), so a
+    test driving the ``valve`` domain needs the entity to exist.
+    """
+    hass.states.async_set("valve.salon_loop", "open", {"current_position": 0})
+
+
 async def _refresh(hass: HomeAssistant, coordinator: Any) -> None:
     """Force a full update cycle and let entities settle."""
     await coordinator.async_refresh()
@@ -249,6 +258,7 @@ async def test_write_valve_domain_uses_set_valve_position(
     coordinator = _get_coordinator(setup_integration)
     outputs = coordinator.data.rooms["Salon"].outputs
     mocks = _mock_actuator_services(hass)
+    _register_valve_entity(hass)
 
     room_cfg = {CONF_ENTITY_VALVES: ["valve.salon_loop"]}
     await coordinator._write_valves(room_cfg, "Salon", outputs)
@@ -292,6 +302,7 @@ async def test_write_mixed_valve_list_dispatches_by_domain(
     coordinator = _get_coordinator(setup_integration)
     outputs = coordinator.data.rooms["Salon"].outputs
     mocks = _mock_actuator_services(hass)
+    _register_valve_entity(hass)
 
     room_cfg = {CONF_ENTITY_VALVES: ["number.salon_valve", "valve.salon_loop"]}
     await coordinator._write_valves(room_cfg, "Salon", outputs)
@@ -318,6 +329,7 @@ async def test_write_debounce_suppresses_repeat_position(
     coordinator = _get_coordinator(setup_integration)
     outputs = coordinator.data.rooms["Salon"].outputs
     mocks = _mock_actuator_services(hass)
+    _register_valve_entity(hass)
 
     room_cfg = {CONF_ENTITY_VALVES: ["number.salon_valve", "valve.salon_loop"]}
     await coordinator._write_valves(room_cfg, "Salon", outputs)
@@ -1278,8 +1290,9 @@ async def test_restart_during_own_boost_is_not_read_as_manual(
     """The recorder case end-to-end: HA restarts while our boost cools.
 
     The rebuilt coordinator's first cycle sees the climate entity and the
-    room sensor still unavailable (sensor lost -> blind force-OFF, nothing
-    written). The next cycle finds the unit still cooling: it is re-owned
+    room sensor still unavailable: the room is inside its start-up grace
+    (issue #13), so it is neither stepped nor written. The next cycle finds
+    the unit still cooling: it is re-owned
     as the controller's own boost — no manual hold, no mismatch — and the
     setpoint-change recompute right after it does not flip that verdict.
     """
@@ -1295,8 +1308,7 @@ async def test_restart_during_own_boost_is_not_read_as_manual(
     async_mock_service(hass, "number", "set_value")
     entry = await _setup_live_salon(hass, entry_data, hass_storage)
     coordinator = _get_coordinator(entry)
-    lost = coordinator.data.rooms["Salon"]
-    assert "sensor_lost" in lost.report.flags
+    assert "Salon" not in coordinator.data.rooms
     assert hvac_calls == []
 
     hass.states.async_set("climate.salon_split", "cool", {})

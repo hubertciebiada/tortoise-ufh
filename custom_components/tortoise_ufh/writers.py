@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .core.hp_link import round_to_step_c
@@ -34,7 +35,7 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-__all__ = ["CommandWriter"]
+__all__ = ["CommandWriter", "FarewellResult"]
 
 _FAST_REASSERT_SECONDS: float = 45.0 * 60.0
 """Age after which an unchanged fast-source command is re-written anyway [s].
@@ -91,24 +92,54 @@ _HVAC_MODE_BY_FAST_SOURCE: dict[FastSourceMode, str] = {
 
 
 def _unreachable(hass: HomeAssistant, entity_id: str) -> bool:
-    """Whether a climate entity cannot receive a command right now (2026-09-10).
+    """Whether an actuator entity cannot receive a command right now (2026-09-10).
 
     True for an entity that does not exist or reads ``unavailable``: a
-    fire-and-forget service call to it cannot land, so the fast-source writes
-    skip it WITHOUT caching (DECISIONS §28 note). ``unknown`` is deliberately
-    NOT unreachable — the entity is online, only its state is not known, and
-    a device that publishes its state only after a command would otherwise
+    fire-and-forget service call to it cannot land, so every writer skips it
+    WITHOUT caching (DECISIONS §28 note) — the fast source since v0.20.1, the
+    valves, the farewell park and the heat-pump link since issue #11. With no
+    cache entry (or one that still holds the last command that really went
+    out) the first cycle that reaches the entity again writes the current
+    command through the normal triggers. ``unknown`` is deliberately NOT
+    unreachable — the entity is online, only its state is not known, and a
+    device that publishes its state only after a command would otherwise
     never be driven at all.
 
     Args:
         hass: The Home Assistant instance.
-        entity_id: The climate entity id.
+        entity_id: The actuator entity id (any domain).
 
     Returns:
         ``True`` when no command should be sent to the entity.
     """
     state = hass.states.get(entity_id)
     return state is None or state.state.lower() == "unavailable"
+
+
+@dataclass(frozen=True)
+class FarewellResult:
+    """What a farewell (C5) could NOT deliver (issue #10, 2026-10-05).
+
+    A farewell is one-shot and an ``off`` room is never written again, so
+    whatever an unreachable actuator missed has to be retried explicitly by
+    the coordinator. Both fields empty/false means everything landed.
+
+    Attributes:
+        fast_source_pending: ``True`` when a configured split did not receive
+            the farewell OFF (entity missing / ``unavailable`` or the call
+            raised).
+        valves_pending: The valve entities whose COOLING park at 0 % did not
+            land, in configuration order. Always empty outside COOLING (the
+            valve is left holding there).
+    """
+
+    fast_source_pending: bool = False
+    valves_pending: tuple[str, ...] = ()
+
+    @property
+    def complete(self) -> bool:
+        """Whether nothing is left to retry."""
+        return not self.fast_source_pending and not self.valves_pending
 
 
 # Monotonic timestamp of the last farewell OFF written per fast-source entity
@@ -222,6 +253,14 @@ class CommandWriter:
         healed by the re-assert / feedback triggers below, never trusted
         forever).
 
+        Unreachable actuator (issue #11, 2026-10-05): a missing or
+        ``unavailable`` entity (:func:`_unreachable`) is neither written nor
+        cached — the same rule as the fast source. The cache keeps the last
+        command that really went out, so the first cycle that reaches the
+        actuator again re-decides against it (or writes unconditionally when
+        nothing was ever delivered) instead of trusting a command that could
+        not land.
+
         An entity is written when ANY of five triggers fires (issue #4,
         2026-07-13):
 
@@ -259,6 +298,8 @@ class CommandWriter:
         value = outputs.valve_position_pct
         now_monotonic = time.monotonic()
         for i, valve_entity in enumerate(valves):
+            if _unreachable(self._hass, valve_entity):
+                continue
             cached = self._last_written_valve.get(valve_entity)
             if cached is not None:
                 last_value, last_stamp = cached
@@ -405,9 +446,14 @@ class CommandWriter:
                 the entity's OWN option list (a ``select_option`` with an
                 unknown option raises inside HA).
 
+        A missing or ``unavailable`` select (:func:`_unreachable`, issue
+        #11) is neither written nor cached and reports ``False``.
+
         Returns:
             ``True`` when the service call was issued successfully.
         """
+        if _unreachable(self._hass, entity_id):
+            return False
         try:
             await self._hass.services.async_call(
                 "select",
@@ -466,11 +512,18 @@ class CommandWriter:
         floored by the pump to 16, below the safe-dew floor). Round-to-nearest,
         not ceil/floor: the 2 K dew margin already absorbs a half-step of play.
 
+        A missing or ``unavailable`` entity (:func:`_unreachable`, issue #11)
+        is neither written nor cached: the cooling value is the global
+        dew-point floor, so it must not look delivered while the pump is
+        offline — the first cycle that reaches it again writes it.
+
         Args:
             entity_id: The setpoint ``number`` entity id.
             value_c: The setpoint to write [degC].
             threshold_k: Minimum change that triggers a fresh write [K].
         """
+        if _unreachable(self._hass, entity_id):
+            return
         step_c = self.hp_setpoint_step(entity_id)
         value_c = round_to_step_c(value_c, step_c)
         cached = self._last_written_hp_setpoint.get(entity_id)
@@ -504,77 +557,122 @@ class CommandWriter:
         name: str,
         *,
         mode: Mode,
-    ) -> None:
+    ) -> FarewellResult:
         """Park a room's actuators safely when releasing live ownership (C5).
 
-        Emitted exactly once on a live -> off transition and on entry
-        unload. The split is always commanded OFF (nobody regulates it any
-        more). The valve is mode-dependent: in COOLING it is driven to 0 —
-        an orphaned open valve would keep passing chilled water while the room
-        silently drops out of BOTH condensation defences (the global dew
-        maximum and the local S2 throttle). In HEATING the position is left
-        untouched: warm supply water is bounded by the heat pump's own curve,
-        so holding the last position keeps the house warm and is strictly
-        safer than cold-parking it in winter.
+        Emitted once on a live -> off transition and on entry unload, and
+        re-emitted by the coordinator for whatever a previous attempt could not
+        deliver (issue #10). The split is always commanded OFF (nobody
+        regulates it any more). The valve is mode-dependent: in COOLING it is
+        driven to 0 — an orphaned open valve would keep passing chilled water
+        while the room silently drops out of BOTH condensation defences (the
+        global dew maximum and the local S2 throttle). In HEATING the position
+        is left untouched: warm supply water is bounded by the heat pump's own
+        curve, so holding the last position keeps the house warm and is
+        strictly safer than cold-parking it in winter.
 
-        An unreachable split (:func:`_unreachable`, 2026-09-10) gets no
-        farewell OFF, no cache entry and no farewell stamp — like the regular
-        write: a cached OFF that never landed would make a return to live
-        skip the real OFF and read the still-running unit as a manual touch.
+        An unreachable actuator (:func:`_unreachable`, 2026-09-10 / issue #11)
+        gets no command and no cache entry (and a split no farewell stamp):
+        a cached OFF that never landed would make a return to live skip the
+        real OFF and read the still-running unit as a manual touch. What was
+        skipped (or whose call raised) is returned so the coordinator can
+        retry it while the room stays off (issue #10).
 
         Args:
             fast_source_entity: The fast-source climate entity id, if any.
             valves: The room's valve actuator entity ids.
             name: The room name (log context).
             mode: The current global operating mode (drives the valve rule).
+
+        Returns:
+            The :class:`FarewellResult` naming what is still undelivered.
         """
-        if fast_source_entity and not _unreachable(self._hass, fast_source_entity):
-            try:
+        fast_pending = False
+        if fast_source_entity:
+            fast_pending = not await self._farewell_fast_source(
+                fast_source_entity, name
+            )
+        if mode is not Mode.COOLING:
+            return FarewellResult(fast_source_pending=fast_pending)
+        valves_pending = tuple(
+            [
+                valve_entity
+                for valve_entity in valves
+                if not await self._farewell_valve(valve_entity, name)
+            ]
+        )
+        return FarewellResult(
+            fast_source_pending=fast_pending, valves_pending=valves_pending
+        )
+
+    async def _farewell_fast_source(self, entity_id: str, name: str) -> bool:
+        """Send the farewell OFF to one split; ``True`` when dispatched.
+
+        Args:
+            entity_id: The fast-source climate entity id.
+            name: The room name (log context).
+
+        Returns:
+            ``True`` when the OFF was dispatched (and cached + stamped),
+            ``False`` when the entity is unreachable or the call raised.
+        """
+        if _unreachable(self._hass, entity_id):
+            return False
+        try:
+            await self._hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": entity_id, "hvac_mode": "off"},
+                blocking=False,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Farewell: failed to turn off fast source %s for room %s",
+                entity_id,
+                name,
+            )
+            return False
+        now_monotonic = time.monotonic()
+        self._last_written_fast[entity_id] = ("off", None, now_monotonic)
+        # K10/R5: remember the farewell so a stale ON feedback read
+        # within the next cycle (also across a reload) is distrusted.
+        _RECENT_FAREWELL_MONOTONIC[entity_id] = now_monotonic
+        return True
+
+    async def _farewell_valve(self, valve_entity: str, name: str) -> bool:
+        """Park one valve at 0 % (COOLING farewell); ``True`` when dispatched.
+
+        Args:
+            valve_entity: The valve actuator entity id.
+            name: The room name (log context).
+
+        Returns:
+            ``True`` when the park was dispatched (and cached), ``False``
+            when the entity is unreachable or the call raised.
+        """
+        if _unreachable(self._hass, valve_entity):
+            return False
+        try:
+            if is_valve_domain(valve_entity):
                 await self._hass.services.async_call(
-                    "climate",
-                    "set_hvac_mode",
-                    {"entity_id": fast_source_entity, "hvac_mode": "off"},
+                    "valve",
+                    "set_valve_position",
+                    {"entity_id": valve_entity, "position": 0},
                     blocking=False,
                 )
-            except Exception:  # noqa: BLE001
-                _LOGGER.exception(
-                    "Farewell: failed to turn off fast source %s for room %s",
-                    fast_source_entity,
-                    name,
-                )
             else:
-                now_monotonic = time.monotonic()
-                self._last_written_fast[fast_source_entity] = (
-                    "off",
-                    None,
-                    now_monotonic,
+                await self._hass.services.async_call(
+                    "number",
+                    "set_value",
+                    {"entity_id": valve_entity, "value": 0.0},
+                    blocking=False,
                 )
-                # K10/R5: remember the farewell so a stale ON feedback read
-                # within the next cycle (also across a reload) is distrusted.
-                _RECENT_FAREWELL_MONOTONIC[fast_source_entity] = now_monotonic
-        if mode is not Mode.COOLING:
-            return
-        for valve_entity in valves:
-            try:
-                if is_valve_domain(valve_entity):
-                    await self._hass.services.async_call(
-                        "valve",
-                        "set_valve_position",
-                        {"entity_id": valve_entity, "position": 0},
-                        blocking=False,
-                    )
-                else:
-                    await self._hass.services.async_call(
-                        "number",
-                        "set_value",
-                        {"entity_id": valve_entity, "value": 0.0},
-                        blocking=False,
-                    )
-            except Exception:  # noqa: BLE001
-                _LOGGER.exception(
-                    "Farewell: failed to close valve %s for room %s",
-                    valve_entity,
-                    name,
-                )
-            else:
-                self._last_written_valve[valve_entity] = (0.0, time.monotonic())
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception(
+                "Farewell: failed to close valve %s for room %s",
+                valve_entity,
+                name,
+            )
+            return False
+        self._last_written_valve[valve_entity] = (0.0, time.monotonic())
+        return True
