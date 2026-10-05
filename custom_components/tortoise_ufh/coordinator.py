@@ -103,7 +103,7 @@ from .core.models import (
     RoomReport,
 )
 from .readers import SourceReader
-from .writers import CommandWriter
+from .writers import CommandWriter, FarewellResult
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -136,6 +136,19 @@ _MIN_DT_SECONDS: float = 1.0
 
 _MAX_DT_SECONDS: float = 900.0
 """Upper clamp for the measured control step interval [s]."""
+
+_STARTUP_GRACE_CYCLES: float = 2.0
+"""Start-up grace for a room whose temperature has not reported yet [cycles].
+
+Issue #13 (2026-10-05): right after a Home Assistant restart a room sensor
+may have no state yet (its integration loads later, its device reconnects a
+little later) while the reader's stale cache is still empty. Stepping such a
+room would run the core's sensor-lost safe degrade — force-stopping a running
+split past its min-ON dwell and moving the valves for one cycle. Until the
+room's temperature first reports, or this many nominal cycles pass since the
+coordinator was built, the room is neither stepped nor written; after that
+the normal safe degrade applies.
+"""
 
 _STORE_KEY_MODE: str = "mode"
 """Key of the persisted global mode in the private setpoint Store."""
@@ -604,6 +617,19 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # used to re-open a farewell-parked cooling valve).
         self._parked: bool = False
 
+        # Undelivered farewell parts per room (issue #10, 2026-10-05): a
+        # farewell that could not reach the split (or, in COOLING, a valve)
+        # is retried every cycle while the room stays off — an off room is
+        # never written otherwise. Dropped when the room returns to live
+        # (the regular write path owns the actuators again).
+        self._farewell_pending: dict[str, FarewellResult] = {}
+
+        # Start-up grace (issue #13): rooms whose temperature has reported at
+        # least once since this coordinator was built, and the build time the
+        # grace window counts from.
+        self._built_monotonic: float = time.monotonic()
+        self._room_temp_seen: set[str] = set()
+
     @property
     def _entity_cache(self) -> dict[str, tuple[float, datetime]]:
         """The reader's stale cache (read/write delegate).
@@ -752,6 +778,9 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             return
         previous = self._room_states[room_name]
         self._room_states[room_name] = state
+        if state == ROOM_STATE_LIVE:
+            # Issue #10: the regular write path owns the actuators again.
+            self._farewell_pending.pop(room_name, None)
         if previous == ROOM_STATE_LIVE and state != ROOM_STATE_LIVE:
             # Farewell command (C5): leaving live (= switching off) orphans the
             # physical actuators — park them safely once before releasing
@@ -1027,6 +1056,13 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         """
         await self._ensure_setpoints_loaded()
 
+        # Issue #10: re-send what an earlier farewell could not deliver BEFORE
+        # the inputs are read, so a split that just came back running is
+        # read through the fresh farewell stamp (K10) instead of as a
+        # mismatch against the core's recorded OFF.
+        if not self._parked:
+            await self._retry_pending_farewells()
+
         # Assemble one RoomInputs per room from the configured entities.
         inputs: dict[str, RoomInputs] = {}
         any_fresh = False
@@ -1035,6 +1071,14 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             inputs[name] = room_inputs
             if room_inputs.room_temperature_c is not None:
                 any_fresh = True
+        # Issue #13: a room still inside its start-up grace is not stepped
+        # (no sensor-lost safe degrade on a sensor that is merely not up
+        # yet) and therefore produces no output and no write this cycle.
+        step_inputs = {
+            name: room_inputs
+            for name, room_inputs in inputs.items()
+            if not self._in_startup_grace(name)
+        }
 
         # Run the core black box. It never raises on a single room; guard the
         # whole step defensively at the HA boundary regardless.
@@ -1049,7 +1093,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # here so the SAME dt advances the core step AND the cooling
         # setpoint-flicker's tick (issue #7).
         dt_seconds: float = self._cycle_seconds
-        if self._building is not None and inputs:
+        if self._building is not None and step_inputs:
             now_monotonic = time.monotonic()
             if self._last_step_monotonic is None:
                 dt_seconds = self._cycle_seconds
@@ -1071,7 +1115,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             )
             try:
                 building_outputs = self._building.step(
-                    inputs,
+                    step_inputs,
                     dt_seconds=dt_seconds,
                     global_supply_temperature_c=global_supply,
                 )
@@ -1226,6 +1270,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         now = datetime.now(UTC)
         if room_temp is not None:
             self._room_last_fresh[name] = now
+            self._room_temp_seen.add(name)
         last_fresh = self._room_last_fresh.setdefault(name, now)
         age_minutes = max(0.0, (now - last_fresh).total_seconds() / 60.0)
         # Fast-source feedback: on/off + the raw HVAC mode (K4 — the core's
@@ -1722,7 +1767,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             msg = f"mode entity offers no option matching {desired!r}"
             raise HpDhwUnavailableError(msg)
         if not await self._writer.write_hp_mode(mode_entity, target):
-            msg = "select.select_option call failed"
+            msg = "select.select_option call failed or the entity is unavailable"
             raise HpDhwUnavailableError(msg)
         return target
 
@@ -1922,7 +1967,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             room_cfg: The room's configuration dict.
             name: The room name.
         """
-        await self._writer.farewell_room(
+        result = await self._writer.farewell_room(
             room_cfg.get(CONF_ENTITY_FAST_SOURCE),
             list(room_cfg.get(CONF_ENTITY_VALVES) or []),
             name,
@@ -1930,6 +1975,72 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         )
         if self._building is not None:
             self._building.notify_fast_source_farewell(name)
+        # Issue #10: keep whatever did not land for the per-cycle retry —
+        # unless the room went back to live while the farewell was in flight.
+        if not result.complete and self.get_room_state(name) != ROOM_STATE_LIVE:
+            self._farewell_pending[name] = result
+        else:
+            self._farewell_pending.pop(name, None)
+
+    async def _retry_pending_farewells(self) -> None:
+        """Re-send the undelivered parts of earlier farewells (issue #10).
+
+        The farewell is one-shot and an ``off`` room is never written again,
+        so a split (or, in COOLING, a valve) that was unreachable when its
+        room left live would otherwise keep running on the controller's last
+        command indefinitely. Every cycle, for each room still not live, the
+        writer is asked again for exactly the pending parts; it skips an
+        entity that is still unreachable, so the retry lands on the first
+        cycle the entity reports a state again. A delivered split OFF
+        re-synchronises the core machine exactly like the original farewell
+        (K10). The valve part follows the CURRENT mode: outside COOLING a
+        valve is left holding, so nothing of it is pending any more.
+        """
+        for room_cfg, name in zip(self._room_configs, self._room_names, strict=True):
+            pending = self._farewell_pending.get(name)
+            if pending is None:
+                continue
+            if self.get_room_state(name) == ROOM_STATE_LIVE:
+                self._farewell_pending.pop(name, None)
+                continue
+            fast_entity = (
+                room_cfg.get(CONF_ENTITY_FAST_SOURCE)
+                if pending.fast_source_pending
+                else None
+            )
+            result = await self._writer.farewell_room(
+                fast_entity,
+                list(pending.valves_pending),
+                name,
+                mode=self._mode,
+            )
+            if (
+                fast_entity
+                and not result.fast_source_pending
+                and self._building is not None
+            ):
+                self._building.notify_fast_source_farewell(name)
+            if result.complete:
+                self._farewell_pending.pop(name, None)
+                _LOGGER.info("Farewell for room %s delivered on retry", name)
+            else:
+                self._farewell_pending[name] = result
+
+    def _in_startup_grace(self, name: str) -> bool:
+        """Whether a room is still inside its start-up grace (issue #13).
+
+        Args:
+            name: The room name.
+
+        Returns:
+            ``True`` while the room's temperature has not reported once since
+            this coordinator was built AND fewer than
+            :data:`_STARTUP_GRACE_CYCLES` nominal cycles have passed.
+        """
+        if name in self._room_temp_seen:
+            return False
+        elapsed = time.monotonic() - self._built_monotonic
+        return elapsed < _STARTUP_GRACE_CYCLES * self._cycle_seconds
 
     async def async_farewell_all(self) -> None:
         """Park every live room's actuators (called on config-entry unload).
