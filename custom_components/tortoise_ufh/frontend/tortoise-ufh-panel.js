@@ -2700,6 +2700,17 @@ function parseState(raw) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Display a raw HA entity state: a fractional numeric state (e.g. a float32
+ * sensor reading `21.4799995422363`) is rounded to one decimal; integers and
+ * non-numeric states (`on`, `heat`, …) pass through unchanged. */
+function fmtState(raw) {
+  const s = String(raw);
+  if (/^-?\d+\.\d+$/.test(s.trim())) {
+    return parseFloat(s).toFixed(1);
+  }
+  return s;
+}
+
 /** Parse a Home Assistant state to its raw string, or null (gap) when
  * unavailable/unknown — the textual twin of `parseState`. */
 function parseTextState(raw) {
@@ -6046,7 +6057,7 @@ class TortoiseUfhPanel extends HTMLElement {
       if (!st) {
         row.stateEl.textContent = this._t("wire_missing");
       } else {
-        row.stateEl.textContent = String(val) + (unit && !bad ? " " + unit : "");
+        row.stateEl.textContent = fmtState(val) + (unit && !bad ? " " + unit : "");
       }
       row.badgeEl.style.display = bad ? "" : "none";
       row.rowEl.classList.toggle("wire-bad", bad);
