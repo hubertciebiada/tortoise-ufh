@@ -1004,3 +1004,85 @@ class TestBuildingCirculationGate:
         assert out is not None
         assert "loop_no_flow" not in out.rooms["dead"].report.flags
         assert out.rooms["dead"].report.loop_flow_status == ("inactive",)
+
+
+class TestIssue6SharedColdManifold:
+    """Regression for issue #6: closed loops on an actively cooling manifold.
+
+    In production a small closed loop on a manifold where 5 of 6 loops were
+    cooling latched ``loop_stuck_open``: its return probe sat next to the
+    cold bar and read cold by conduction, with a residual delta-T of up to
+    3.7 K, so no ``flow_epsilon_k`` separated it from the flowing loops. The
+    stuck-open detection was removed (docs/DECISIONS.md §17); these tests pin
+    the owner's acceptance criteria against that removal.
+    """
+
+    _FLOWING_DELTAS_K = (0.8, 1.1, 1.4, 1.6, 1.8)
+
+    def _inputs(self) -> dict[str, RoomInputs]:
+        inputs = {
+            f"open{i}": make_inputs(
+                mode=Mode.COOLING,
+                setpoint_c=23.0,
+                room_temperature_c=26.0,
+                humidity_pct=40.0,
+                loops=(
+                    LoopInput(
+                        valve_position_pct=None,
+                        supply_temperature_c=18.0,
+                        return_temperature_c=18.0 + delta,
+                    ),
+                ),
+            )
+            for i, delta in enumerate(self._FLOWING_DELTAS_K)
+        }
+        # The tiny closed loop: commanded closed (room below setpoint), its
+        # return held cold by conduction (<= room - 1 K) with a 3.3 K delta-T.
+        inputs["tiny"] = make_inputs(
+            mode=Mode.COOLING,
+            setpoint_c=24.0,
+            room_temperature_c=22.5,
+            humidity_pct=40.0,
+            loops=(
+                LoopInput(
+                    valve_position_pct=0.0,
+                    supply_temperature_c=18.2,
+                    return_temperature_c=21.5,
+                ),
+            ),
+        )
+        return inputs
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("epsilon_k", [0.3, 0.9, 2.0, 5.0])
+    def test_uniformly_cold_closed_loop_never_flags(self, epsilon_k: float) -> None:
+        """Criteria 1 and 3: no stuck-open flag for any ``flow_epsilon_k``."""
+        inputs = self._inputs()
+        building = BuildingController(
+            {name: ControllerConfig(flow_epsilon_k=epsilon_k) for name in inputs}
+        )
+        for cycle in range(4 * _STEPS_PER_WINDOW):
+            out = building.step(inputs, dt_seconds=_DT_S)
+            tiny = out.rooms["tiny"]
+            assert tiny.valve_position_pct == 0.0
+            assert not any("stuck" in flag for flag in tiny.report.flags)
+            assert "loop_no_flow" not in tiny.report.flags
+            # The first cycle has no previous command yet ("inactive").
+            if cycle > 0:
+                assert tiny.report.loop_flow_status == ("ok",)
+            for room in out.rooms.values():
+                assert not any("stuck" in flag for flag in room.report.flags)
+
+    @pytest.mark.unit
+    def test_flowing_loops_stay_ok_at_the_default_epsilon(self) -> None:
+        """Criterion 3: a flowing loop at delta-T 0.8 K never reads no-flow."""
+        inputs = self._inputs()
+        building = BuildingController({name: ControllerConfig() for name in inputs})
+        for _ in range(4 * _STEPS_PER_WINDOW):
+            out = building.step(inputs, dt_seconds=_DT_S)
+            for i in range(len(self._FLOWING_DELTAS_K)):
+                assert "loop_no_flow" not in out.rooms[f"open{i}"].report.flags
+        for i in range(len(self._FLOWING_DELTAS_K)):
+            report = out.rooms[f"open{i}"].report
+            assert out.rooms[f"open{i}"].valve_position_pct >= 15.0
+            assert report.loop_flow_status == ("ok",)
