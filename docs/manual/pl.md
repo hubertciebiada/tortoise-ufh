@@ -232,7 +232,11 @@ Encje per pokój (każdy pokój jest urządzeniem, można przypisać do obszaru 
 - sensory diagnostyczne: zalecane otwarcie zaworu, uchyb, trend, punkt rosy,
   człon całkujący, człon trendu, tryb szybkiego źródła, wyjaśnienie decyzji,
 - binarne: utrata czujnika, nasycenie wyjścia, aktywna ochrona przed kondensacją,
-  usterka przepływu (`flow_fault`, watchdog S6 — §8/§12).
+  usterka przepływu (`flow_fault`, watchdog S6 — §8/§12), dryf czujnika pętli
+  (`probe_fault`: czujnik zasilania lub powrotu pętli odszedł od wyuczonej linii
+  bazowej przy stojącej wodzie albo przy przepływie odbiega od zasilania głównego
+  rozdzielacza; taki czujnik jest wyłączany z danych bezpieczeństwa S1/S2/S6, a
+  atrybuty encji pokazują linię bazową i odchyłkę każdego czujnika pokoju).
 
 Usługi (domena `tortoise_ufh`):
 
@@ -252,6 +256,12 @@ data:
 service: tortoise_ufh.set_mode
 data:
   mode: cooling
+
+# Naucz od nowa linię bazową czujnika pętli po jego przełożeniu lub wymianie
+# (bez entity_id: wszystkie czujniki pętli)
+service: tortoise_ufh.reset_probe_baselines
+data:
+  entity_id: sensor.salon_zasilanie
 ```
 
 Gotowy szablon dashboardu Lovelace znajdziesz w pliku

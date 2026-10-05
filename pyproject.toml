@@ -82,6 +82,7 @@ source_paths = [
     "custom_components/tortoise_ufh/core/hp_link.py",
     "custom_components/tortoise_ufh/core/models.py",
     "custom_components/tortoise_ufh/core/pid.py",
+    "custom_components/tortoise_ufh/core/probe_health.py",
     "custom_components/tortoise_ufh/core/safety.py",
     "custom_components/tortoise_ufh/core/trend.py",
     "custom_components/tortoise_ufh/core/ufh_loop.py",

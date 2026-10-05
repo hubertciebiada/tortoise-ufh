@@ -1818,3 +1818,73 @@ pre-throttle zero stays <= 0 after the throttle; `saturated = valve >= 100 or
 low_before_throttle`), and the TRANSITIONAL engaged branches no longer set a direction text the
 emitted command always overwrites. The duplicated no-probes check of `begin_actuation_test`
 stays: it decides which refusal reason wins (`no_probes` before `dew_unsafe`).
+
+## 31. Loop water-probe health — sample gate, learned still-water baselines, drift flag (2026-10-05, issue #16; closes #6)
+
+> **Status: EXTENDS the frozen contract additively.** No `RoomInputs` / `RoomOutputs` /
+> `ControllerConfig` change and no config migration. A new pure core module
+> (`core/probe_health.py`), a new adapter module (`probes.py`), one new room flag
+> (`probe_drift`), one new per-room binary sensor (`probe_fault`), one new service
+> (`reset_probe_baselines`) and one new private Store (`tortoise_ufh.probe_health.<entry>`).
+
+**The incident (issue #16).** During a service visit one loop SUPPLY probe slipped on its
+pipe and read +5.3 K too warm for 13 days (32.2 °C on a loop fed by a 28.2 °C bar). Loop
+probes feed S1 (hottest supply, one sample trips), S2 (coldest supply in cooling — a probe
+reading too warm in a single-loop room under-protects condensation by the size of the
+offset), S6 and the circulation gate, yet they were read with a plain `read_float_state()`.
+Re-seating it produced one DS18B20 85.0 °C power-on sample that went straight into S1.
+
+**A. Sample gate (adapter, `SourceReader.read_water_temperature`).** Every loop probe, every
+manifold main probe and the global supply probe now pass a gate in the spirit of C3: a sample
+outside 0…70 °C (the DS18B20 −127 / 85 °C sentinels included) or jumping more than 15 K from
+the last accepted value is rejected; two mutually consistent samples ≥ 270 s apart accept a
+genuinely new level. A rejected sample is bridged by the last ACCEPTED value for up to 600 s
+(about two cycles), then the probe reads as missing. The 15 K jump limit is far wider than
+the room-air 4 K because a loop probe legitimately moves several kelvin within one cycle when
+its valve opens.
+
+**B. Learned still-water baselines (core, `ProbeHealthMonitor`).** Each probe's static
+measurement error (placement, tolerance) is stable to ~0.1 K month to month; a CHANGE of it is
+the fault. So nothing is calibrated: per configured manifold (the Manifolds-tab definitions),
+once every loop valve on it has been closed (≤ 2 %; a live room's last command, otherwise the
+actuator feedback) for 3 h, each loop probe's deviation from the median of all loop probes on
+that manifold is sampled in 1-h windows (median per window, ≥ 3 samples, ≥ 3 probes). A
+window is admitted to the probe's baseline (rolling median of up to 14 windows) at most once
+per 12 h of monitor time, so the baseline spans at least a week of still water. With ≥ 3
+admitted windows a departure > 1.5 K in **two consecutive windows** raises the drift flag;
+two consecutive windows back within 1.5 K clear it. A drifting window is never admitted, so
+the baseline cannot learn the fault. Main probes are not judged (the pump may still move the
+bar while every loop is closed). Loops on no configured manifold get no still-water learning:
+probes across several physical manifolds have no common median.
+
+**C. Flowing physical check.** While a manifold visibly circulates (its main pair ΔT ≥ 1 K, or
+at least TWO loops with ΔT ≥ 1 K — one loop alone could be the drifted probe faking it) and a
+loop's valve is open (≥ `flow_open_threshold_pct`), its supply probe sits on the same water
+as the main supply (the global supply for loops on no manifold): a gap > 3 K held for 30 min
+flags it, 30 min within 3 K clears it. When most open loops disagree with the main probe at
+once, the main probe is the suspect and nothing is judged.
+
+**D. Reaction.** A flagged probe is hidden from the core: a flagged supply is replaced by its
+manifold main supply (or the global supply) when one is readable, else it reads as missing
+(S2 then throttles, exactly as for a room without probes); a flagged return reads as missing.
+So S1/S2 governing supply, S6 and the circulation gate never see it. No integrator freeze, no
+valve move. The room gets the `probe_drift` flag (Flags tab, `problem` tier) and the
+`probe_fault` PROBLEM binary sensor; its attributes and the diagnostics dump list every
+probe's learned baseline, latest still-water deviation, flag and reasons. Automatic offset
+*compensation* is deliberately out of scope: part of the standstill offsets is real physics
+(supply probes sit above the bar median, returns below it), so the baseline drives detection,
+never correction. `tortoise_ufh.reset_probe_baselines` relearns a probe that was deliberately
+moved or replaced.
+
+**Limitation.** The still-water witness is "every loop valve on the manifold closed for 3 h";
+an installation whose valves never all close relies on the flowing check alone (which needs a
+main or global supply probe). A dedicated circulation-pump entity could widen the still-water
+witness later.
+
+**Issue #6 (S6 `loop_stuck_open` false positives on a shared cold manifold)** is closed by
+this round as already resolved: §17 removed the stuck-open detection entirely, which meets the
+owner's acceptance criteria (zero stuck-open flags on a uniformly cold closed manifold for any
+`flow_epsilon_k`; `flow_epsilon_k` serves `loop_no_flow` only). A regression test reproducing
+the incident (5 flowing loops at ΔT 0.8–1.8 K, one closed loop with a conduction-cold return
+and a 3.3 K ΔT, `flow_epsilon_k` 0.3…5.0) now pins it. Hard verification that a closed valve
+stops flow stays deferred to a dedicated actuation-level mechanism (§17).

@@ -447,6 +447,9 @@
       },
       "flow_fault": {
         "name": "Loop flow fault"
+      },
+      "probe_fault": {
+        "name": "Loop probe drift"
       }
     }
   },
@@ -514,6 +517,16 @@
         "cancel": {
           "name": "Cancel",
           "description": "Cancel the room's running self-test instead of starting one."
+        }
+      }
+    },
+    "reset_probe_baselines": {
+      "name": "Reset probe baselines",
+      "description": "Forget the learned still-water baseline of loop water probes so it is learned again from scratch. Use it after a probe was deliberately moved or replaced: its new static offset would otherwise read as drift. Without entities, every loop probe is reset.",
+      "fields": {
+        "entity_id": {
+          "name": "Probes",
+          "description": "The loop supply/return probe sensors to reset (all when empty)."
         }
       }
     }

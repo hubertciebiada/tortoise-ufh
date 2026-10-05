@@ -42,6 +42,7 @@ SERVICE_SET_HOME_TEMPERATURE = "set_home_temperature"
 SERVICE_SET_ROOM_OFFSET = "set_room_offset"
 SERVICE_SET_MODE = "set_mode"
 SERVICE_TEST_ACTUATION = "test_actuation"
+SERVICE_RESET_PROBE_BASELINES = "reset_probe_baselines"
 
 _ATTR_TEMPERATURE = "temperature"
 _ATTR_ROOM = "room"
@@ -49,6 +50,7 @@ _ATTR_OFFSET = "offset"
 _ATTR_MODE = "mode"
 _ATTR_DURATION_MINUTES = "duration_minutes"
 _ATTR_CANCEL = "cancel"
+_ATTR_ENTITY_ID = "entity_id"
 
 _TEST_DURATION_MIN_MINUTES = 20.0
 """Lower bound of the self-test duration [min] — shorter excursions leave too
@@ -108,6 +110,13 @@ _TEST_ACTUATION_SCHEMA = vol.Schema(
             vol.Range(min=_TEST_DURATION_MIN_MINUTES, max=_TEST_DURATION_MAX_MINUTES),
         ),
         vol.Optional(_ATTR_CANCEL, default=False): cv.boolean,
+    }
+)
+
+
+_RESET_PROBE_BASELINES_SCHEMA = vol.Schema(
+    {
+        vol.Optional(_ATTR_ENTITY_ID): cv.entity_ids,
     }
 )
 
@@ -214,6 +223,18 @@ def async_register_services(hass: HomeAssistant) -> None:
         schema=_TEST_ACTUATION_SCHEMA,
     )
 
+    async def _handle_reset_probe_baselines(call: ServiceCall) -> None:
+        coordinator = _resolve_coordinator(hass)
+        raw = call.data.get(_ATTR_ENTITY_ID)
+        coordinator.reset_probe_baselines(frozenset(raw) if raw else None)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESET_PROBE_BASELINES,
+        _handle_reset_probe_baselines,
+        schema=_RESET_PROBE_BASELINES_SCHEMA,
+    )
+
 
 @callback
 def async_unregister_services(hass: HomeAssistant) -> None:
@@ -227,5 +248,6 @@ def async_unregister_services(hass: HomeAssistant) -> None:
         SERVICE_SET_ROOM_OFFSET,
         SERVICE_SET_MODE,
         SERVICE_TEST_ACTUATION,
+        SERVICE_RESET_PROBE_BASELINES,
     ):
         hass.services.async_remove(DOMAIN, service)

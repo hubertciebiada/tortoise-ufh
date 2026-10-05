@@ -254,7 +254,12 @@ werden):
 - Diagnosesensoren: empfohlene Ventilstellung, Regelabweichung, Trend, Taupunkt,
   Integralanteil, Trendanteil, Modus der Zusatzquelle, Erläuterung der Entscheidung,
 - binäre: Sensor verloren, Ausgang gesättigt, Kondensationsschutz aktiv,
-  Durchflussstörung (`flow_fault`, Watchdog S6 — §8/§12).
+  Durchflussstörung (`flow_fault`, Watchdog S6 — §8/§12), Drift eines
+  Heizkreisfühlers (`probe_fault`: ein Vorlauf- oder Rücklauffühler hat seine
+  gelernte Stillwasser-Basislinie verlassen oder weicht bei Durchfluss vom
+  Hauptvorlauf des Verteilers ab; ein solcher Fühler wird aus den
+  Sicherheitseingaben S1/S2/S6 genommen, die Attribute zeigen Basislinie und
+  Abweichung jedes Fühlers des Raums).
 
 Dienste (Domäne `tortoise_ufh`):
 
@@ -274,6 +279,12 @@ data:
 service: tortoise_ufh.set_mode
 data:
   mode: cooling
+
+# Stillwasser-Basislinie eines Heizkreisfühlers nach Versetzen oder Tausch neu
+# lernen (ohne entity_id: alle Heizkreisfühler)
+service: tortoise_ufh.reset_probe_baselines
+data:
+  entity_id: sensor.wohnzimmer_vorlauf
 ```
 
 Eine fertige Lovelace-Dashboard-Vorlage finden Sie in der Datei
