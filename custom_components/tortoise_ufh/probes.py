@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -345,7 +345,7 @@ class ProbeHealthTracker:
 
 def _loop_probes(
     wiring: LoopWiring,
-    read: Any,
+    read: Callable[[str | None], float | None],
     valve_pct: Mapping[str, float | None],
 ) -> LoopProbes:
     """Build the core :class:`LoopProbes` of one loop."""
