@@ -1819,7 +1819,7 @@ low_before_throttle`), and the TRANSITIONAL engaged branches no longer set a dir
 emitted command always overwrites. The duplicated no-probes check of `begin_actuation_test`
 stays: it decides which refusal reason wins (`no_probes` before `dew_unsafe`).
 
-## 31. Commands are cached only when they can land; farewell retry; start-up grace (2026-10-05)
+## 31. Commands are cached only when they can land; farewell retry; start-up grace (2026-10-05, v0.22.0)
 
 **Problem (issues #10, #11, #13):** (1) the valve writer, the cooling farewell park and the
 heat-pump link writers dispatched fire-and-forget calls to missing or `unavailable` entities
@@ -1840,7 +1840,7 @@ whose temperature has not reported since the coordinator was built is not steppe
 for up to two nominal cycles; after that the normal safe degrade applies. The core is
 unchanged.
 
-## 32. Loop water-probe health — sample gate, learned still-water baselines, drift flag (2026-10-05, issue #16; closes #6)
+## 32. Loop water-probe health — sample gate, learned still-water baselines, drift flag (2026-10-05, v0.22.0, issue #16; closes #6)
 
 > **Status: EXTENDS the frozen contract additively.** No `RoomInputs` / `RoomOutputs` /
 > `ControllerConfig` change and no config migration. A new pure core module

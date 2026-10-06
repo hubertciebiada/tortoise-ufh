@@ -686,7 +686,7 @@ docs/DECISIONS.md §18).
 | Room controller raised | HEATING: hold last valve; COOLING/TRANSITIONAL/OFF: valve 0 (K5, 2026-07-12 — a crashed controller computes neither condensation defence); split OFF | `controller_error` |
 | Per-room data age > 15 min (S5, 2026-07-09) | **neutral position**: `valve_floor_pct` in heating / 0 in cooling (defer to the HP curve), split OFF; clears below 5 min | `s5_watchdog` |
 | Loop commanded open but no hydraulic response (S6, 2026-07-13) | integrator **frozen**; `binary_sensor.flow_fault` on; no valve action | `loop_no_flow` |
-| Loop probe left its still-water baseline / disagrees with the main supply while flowing (issue #16, 2026-10-05) | probe hidden from S1/S2/S6 (supply → manifold main supply, else missing); `binary_sensor.probe_fault` on; no valve action, no freeze | `probe_drift` |
+| Loop probe left its still-water baseline / disagrees with the main supply while flowing (issue #16, 2026-10-05, v0.22.0) | probe hidden from S1/S2/S6 (supply → manifold main supply, else missing); `binary_sensor.probe_fault` on; no valve action, no freeze | `probe_drift` |
 
 ### 9.1 Hydraulic no-flow watchdog (S6, 2026-07-13)
 
