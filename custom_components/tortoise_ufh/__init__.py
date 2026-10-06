@@ -42,9 +42,12 @@ class RuntimeData:
 
     Attributes:
         coordinator: The live data-update coordinator driving this entry.
+        hub_device_id: Device-registry id of the per-entry hub device that
+            every room device links to (issue #23).
     """
 
     coordinator: TortoiseUfhCoordinator
+    hub_device_id: str
 
 
 type TortoiseUfhConfigEntry = ConfigEntry[RuntimeData]
@@ -76,14 +79,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: TortoiseUfhConfigEntry) 
     coordinator = TortoiseUfhCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
-    entry.runtime_data = RuntimeData(coordinator=coordinator)
+    # K11 (2026-07-12): the hub device must exist in the registry BEFORE any
+    # platform adds a room entity whose device links to the hub, or HA logs a
+    # "will stop working" deprecation per entity. Its registry id is what room
+    # devices link to via `via_device_id` (issue #23).
+    hub_device_id = register_hub_device(hass, entry.entry_id)
+
+    entry.runtime_data = RuntimeData(
+        coordinator=coordinator, hub_device_id=hub_device_id
+    )
 
     _async_purge_retired_entities(hass, entry)
-
-    # K11 (2026-07-12): the hub device must exist in the registry BEFORE any
-    # platform adds a room entity whose device carries `via_device` -> hub,
-    # or HA logs a "will stop working" deprecation per entity.
-    register_hub_device(hass, entry.entry_id)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

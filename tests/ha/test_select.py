@@ -42,6 +42,7 @@ from custom_components.tortoise_ufh.const import (
     ROOM_STATES,
 )
 from custom_components.tortoise_ufh.core.models import Mode
+from custom_components.tortoise_ufh.device import get_entry_device
 
 pytestmark = pytest.mark.ha
 
@@ -102,7 +103,7 @@ async def test_home_mode_select_exists_on_the_hub_device(
     # Building-wide control: it belongs to the hub device, not to a room.
     registry = er.async_get(hass)
     device_id = registry.async_get(entity_id).device_id
-    hub = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    hub = get_entry_device(dr.async_get(hass), entry.entry_id, (DOMAIN, entry.entry_id))
     assert hub is not None
     assert device_id == hub.id
 

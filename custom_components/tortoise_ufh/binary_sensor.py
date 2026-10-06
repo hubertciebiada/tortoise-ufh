@@ -222,6 +222,7 @@ async def async_setup_entry(
         async_add_entities: Callback registering the new entities.
     """
     coordinator: TortoiseUfhCoordinator = entry.runtime_data.coordinator  # type: ignore[attr-defined]
+    hub_device_id = entry.runtime_data.hub_device_id
 
     entities: list[TortoiseUfhBinarySensorEntity] = []
     rooms = list(entry.data.get(CONF_ROOMS, []) or [])
@@ -233,6 +234,7 @@ async def async_setup_entry(
                 description=description,
                 entry_id=entry.entry_id,
                 room_name=room_name,
+                hub_device_id=hub_device_id,
             )
             for description in ROOM_BINARY_SENSORS
         )
@@ -259,6 +261,7 @@ class TortoiseUfhBinarySensorEntity(
         description: TortoiseUfhBinarySensorEntityDescription,
         entry_id: str,
         room_name: str,
+        hub_device_id: str,
     ) -> None:
         """Initialise a per-room binary sensor.
 
@@ -267,6 +270,8 @@ class TortoiseUfhBinarySensorEntity(
             description: The binary-sensor description with its ``value_fn``.
             entry_id: Config entry id, used to build a stable ``unique_id``.
             room_name: The room this sensor belongs to.
+            hub_device_id: Device-registry id of the hub device the room
+                device links to (issue #23).
         """
         super().__init__(coordinator)
         self.entity_description = description
@@ -274,7 +279,7 @@ class TortoiseUfhBinarySensorEntity(
 
         slug = room_slug(room_name)
         self._attr_unique_id = f"{entry_id}_{slug}_{description.key}"
-        self._attr_device_info = room_device_info(entry_id, room_name)
+        self._attr_device_info = room_device_info(entry_id, room_name, hub_device_id)
 
     @property
     def is_on(self) -> bool | None:
