@@ -12,6 +12,11 @@ coordinator's typed :class:`~.coordinator.CoordinatorData`:
   watchdog latched ``loop_no_flow`` on any of the room's loops (2026-07-13,
   issue #4): the valve was commanded open but the loop shows no hydraulic
   response.
+* ``probe_fault`` (device class ``PROBLEM``) — one of the room's loop
+  supply/return probes left its learned still-water baseline or disagrees
+  with the manifold main supply while flowing (``probe_drift``, issue #16).
+  Its attributes list each of the room's probes with the learned baseline and
+  the latest still-water deviation, so a slow drift is visible early.
 
 The former ``live_control`` binary sensor was retired in v0.5.0 — it merely
 mirrored ``control_state == "live"`` and is fully covered by the per-room
@@ -32,7 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -62,6 +67,8 @@ _FLAG_S2_THROTTLE = "s2_throttle"
 # S6 hydraulic watchdog flag (2026-07-13, issue #4): the loop shows no
 # hydraulic response to an open valve command.
 _FLAG_LOOP_NO_FLOW = "loop_no_flow"
+# Loop water-probe health flag (issue #16), stamped by the adapter.
+_FLAG_PROBE_DRIFT = "probe_drift"
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +86,7 @@ class TortoiseUfhBinarySensorEntityDescription(BinarySensorEntityDescription):
     """
 
     value_fn: Callable[[RoomRuntime], bool]
+    with_probe_attributes: bool = False
 
 
 def _sensor_lost(runtime: RoomRuntime) -> bool:
@@ -139,6 +147,18 @@ def _flow_fault(runtime: RoomRuntime) -> bool:
     return _FLAG_LOOP_NO_FLOW in runtime.report.flags
 
 
+def _probe_fault(runtime: RoomRuntime) -> bool:
+    """Return whether one of the room's loop probes is flagged (issue #16).
+
+    Args:
+        runtime: The room's runtime payload.
+
+    Returns:
+        ``True`` when the ``probe_drift`` flag is present in the report flags.
+    """
+    return _FLAG_PROBE_DRIFT in runtime.report.flags
+
+
 # Per-room binary-sensor descriptions.
 ROOM_BINARY_SENSORS: tuple[TortoiseUfhBinarySensorEntityDescription, ...] = (
     TortoiseUfhBinarySensorEntityDescription(
@@ -167,6 +187,14 @@ ROOM_BINARY_SENSORS: tuple[TortoiseUfhBinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_flow_fault,
+    ),
+    TortoiseUfhBinarySensorEntityDescription(
+        key="probe_fault",
+        translation_key="probe_fault",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_probe_fault,
+        with_probe_attributes=True,
     ),
 )
 
@@ -263,3 +291,26 @@ class TortoiseUfhBinarySensorEntity(
         if runtime is None:
             return None
         return self.entity_description.value_fn(runtime)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Per-probe health of the room's loop probes (``probe_fault`` only).
+
+        Returns:
+            ``{"probes": {entity_id: {...}}}`` with each probe's learned
+            baseline [K], latest still-water deviation [K], flag and reasons,
+            or ``None`` for every other sensor / before the first cycle.
+        """
+        if not self.entity_description.with_probe_attributes:
+            return None
+        data = self.coordinator.data
+        if data is None or data.probe_health is None:
+            return None
+        probe_ids = self.coordinator.room_probe_ids(self._room_name)
+        return {
+            "probes": {
+                pid: data.probe_health[pid]
+                for pid in sorted(probe_ids)
+                if pid in data.probe_health
+            }
+        }

@@ -447,6 +447,9 @@
       },
       "flow_fault": {
         "name": "Awaria przepływu pętli"
+      },
+      "probe_fault": {
+        "name": "Dryf czujnika pętli"
       }
     }
   },
@@ -514,6 +517,16 @@
         "cancel": {
           "name": "Anuluj",
           "description": "Anuluje trwający self-test pomieszczenia zamiast uruchamiać nowy."
+        }
+      }
+    },
+    "reset_probe_baselines": {
+      "name": "Wyzeruj linie bazowe czujników",
+      "description": "Zapomina wyuczoną linię bazową czujników wody pętli (przy stojącej wodzie), aby nauczyć się jej od nowa. Użyj po celowym przełożeniu lub wymianie czujnika: jego nowy stały offset byłby inaczej odczytany jako dryf. Bez wskazania encji zerowane są wszystkie czujniki pętli.",
+      "fields": {
+        "entity_id": {
+          "name": "Czujniki",
+          "description": "Czujniki zasilania/powrotu pętli do wyzerowania (wszystkie, gdy puste)."
         }
       }
     }

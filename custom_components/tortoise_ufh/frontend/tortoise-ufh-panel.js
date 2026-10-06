@@ -2098,6 +2098,26 @@ const FLAG_LABELS = {
     descDe:
       "Ventil lange offen, aber die Heizkreis-Sonden sehen keinen Wasserdurchfluss → der Integrator friert ein und die Entität „Durchflussstörung“ schaltet sich ein. Prüfen Sie den Ventilcontroller / Aktor / die Rotameter des Verteilers.",
   },
+  probe_drift: {
+    pl: "Dryf czujnika pętli",
+    en: "Loop probe drift",
+    de: "Drift eines Heizkreisfühlers",
+    sev: "problem", sx: null, group: "config",
+    descPl:
+      "Czujnik zasilania lub powrotu pętli odszedł od wyuczonej linii bazowej " +
+      "przy stojącej wodzie albo przy przepływie odbiega od zasilania głównego " +
+      "rozdzielacza → wyłączony z danych S1/S2/S6 (zasilanie zastępuje główne). " +
+      "Sprawdź, czy czujnik nie zsunął się z rury; atrybuty encji „dryf " +
+      "czujnika pętli” pokazują linię bazową i odchyłkę.",
+    descEn:
+      "A loop supply or return probe left its learned still-water baseline, or " +
+      "disagrees with the manifold main supply while flowing → it is dropped from " +
+      "the S1/S2/S6 inputs (a supply falls back to the main supply). Check that " +
+      "the probe has not slipped on its pipe; the loop-probe-drift entity's " +
+      "attributes show the baseline and the deviation.",
+    descDe:
+      "Ein Vorlauf- oder Rücklauffühler eines Heizkreises hat seine gelernte Stillwasser-Basislinie verlassen oder weicht bei Durchfluss vom Hauptvorlauf des Verteilers ab → er wird aus den S1/S2/S6-Eingaben genommen (ein Vorlauf fällt auf den Hauptvorlauf zurück). Prüfen Sie, ob der Fühler vom Rohr gerutscht ist; die Attribute der Entität „Drift eines Heizkreisfühlers“ zeigen Basislinie und Abweichung.",
+  },
   actuation_test_running: {
     pl: "Trwa test aktuacji",
     en: "Actuation test running",

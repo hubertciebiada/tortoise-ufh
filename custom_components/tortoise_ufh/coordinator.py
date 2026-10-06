@@ -67,6 +67,7 @@ from .const import (
     CONF_FAST_WINDOW_START,
     CONF_HEAT_PUMP,
     CONF_HOME_SETPOINT,
+    CONF_MANIFOLDS,
     CONF_ROOM_NAME,
     CONF_ROOM_OFFSET,
     CONF_ROOM_STATE,
@@ -102,6 +103,7 @@ from .core.models import (
     RoomOutputs,
     RoomReport,
 )
+from .probes import PROBE_DRIFT_FLAG, ProbeHealthTracker, room_loops
 from .readers import SourceReader
 from .writers import CommandWriter, FarewellResult
 
@@ -374,6 +376,9 @@ class CoordinatorData:
             safety-F13 2026-07-09; surfaced via websocket, no new entity).
         heat_pump: The optional heat-pump link's per-cycle view (B2,
             2026-07-12), or ``None`` when the link is not configured.
+        probe_health: Per loop-probe health diagnostics keyed by entity id
+            (issue #16: learned still-water baseline, latest deviation,
+            flag and reasons), or ``None`` before the first cycle.
 
     Raises:
         ValueError: If ``algorithm_status``, ``watchdog_state`` or ``mode`` is
@@ -388,6 +393,7 @@ class CoordinatorData:
     mode: str
     sensor_lost_rooms: int = 0
     heat_pump: HeatPumpRuntime | None = None
+    probe_health: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         """Validate the enumerated status/mode fields."""
@@ -579,6 +585,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # private state (extracted 2026-07-10; see readers.py / writers.py).
         self._reader = SourceReader(hass)
         self._writer = CommandWriter(hass)
+        # Loop water-probe health (issue #16): one sample-gated read of every
+        # loop / manifold probe per cycle, learned still-water baselines
+        # (persisted in their own Store) and the drift flags that hide a bad
+        # probe from the core's safety inputs.
+        self._probes = ProbeHealthTracker(hass, entry.entry_id, self._reader)
 
         # Per-room last-fresh-data timestamp (S6): feeds the core S5 watchdog
         # via RoomInputs.last_update_age_minutes. Seeded on first sight so a
@@ -1045,6 +1056,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         await super().async_shutdown()
         if self._setpoints_loaded:
             await self._setpoint_store.async_save(self._setpoint_snapshot())
+        await self._probes.async_flush()
 
     # -- Update cycle -------------------------------------------------------
 
@@ -1055,6 +1067,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             The freshly computed :class:`CoordinatorData`.
         """
         await self._ensure_setpoints_loaded()
+        await self._probes.async_load()
+        try:
+            self._update_probe_health()
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Loop probe health update failed")
+            self._probes.invalidate()
 
         # Issue #10: re-send what an earlier farewell could not deliver BEFORE
         # the inputs are read, so a split that just came back running is
@@ -1110,9 +1128,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             # S6 (2026-07-13): the optional global manifold supply probe
             # feeds the building-level circulation gate; None when unset
             # or unreadable (the per-loop witnesses still apply).
-            global_supply = self._reader.read_float_state(
-                self._global_supply_entity or None
-            )
+            global_supply = self._probes.water(self._global_supply_entity or None)
             try:
                 building_outputs = self._building.step(
                     step_inputs,
@@ -1152,6 +1168,16 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     room_outputs.report,
                     flags=tuple(
                         dict.fromkeys((*room_outputs.report.flags, "valve_mismatch"))
+                    ),
+                )
+                room_outputs = replace(room_outputs, report=report)
+            # Issue #16: a room owning a flagged loop probe says so (the
+            # probe itself is already hidden from the core's inputs).
+            if self.room_probe_ids(name) & self._probes.flagged:
+                report = replace(
+                    room_outputs.report,
+                    flags=tuple(
+                        dict.fromkeys((*room_outputs.report.flags, PROBE_DRIFT_FLAG))
                     ),
                 )
                 room_outputs = replace(room_outputs, report=report)
@@ -1222,6 +1248,7 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             mode=self._mode.value,
             sensor_lost_rooms=sensor_lost_rooms,
             heat_pump=heat_pump,
+            probe_health=self._probes.report(),
         )
 
     # -- Internal: input assembly -------------------------------------------
@@ -1374,10 +1401,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     valve_position_pct=self._read_valve_position(
                         valves[i] if i < len(valves) else None
                     ),
-                    supply_temperature_c=self._reader.read_float_state(
+                    # Issue #16: sample-gated, and a flagged probe is hidden
+                    # (a supply falls back to its manifold main supply).
+                    supply_temperature_c=self._probes.loop_supply(
                         supplies[i] if i < len(supplies) else None
                     ),
-                    return_temperature_c=self._reader.read_float_state(
+                    return_temperature_c=self._probes.loop_return(
                         returns[i] if i < len(returns) else None
                     ),
                 )
@@ -2055,6 +2084,72 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             if self.get_room_state(name) == ROOM_STATE_LIVE:
                 await self._async_farewell_room(room_cfg, name)
         self._parked = True
+
+    # -- Loop probe health (issue #16) ----------------------------------------
+
+    def room_probe_ids(self, name: str) -> frozenset[str]:
+        """Return the loop supply/return probe entity ids of one room.
+
+        Args:
+            name: The room name.
+
+        Returns:
+            The room's configured probe entity ids (empty for an unknown
+            room).
+        """
+        for room_cfg, room_name in zip(
+            self._room_configs, self._room_names, strict=True
+        ):
+            if room_name == name:
+                return frozenset(
+                    probe
+                    for loop in room_loops(room_cfg, name)
+                    for probe in (loop.supply, loop.ret)
+                    if probe
+                )
+        return frozenset()
+
+    def reset_probe_baselines(self, probe_ids: frozenset[str] | None = None) -> None:
+        """Relearn the still-water baselines of some or all loop probes.
+
+        For a probe that was deliberately moved or replaced (issue #16): its
+        new static offset is learned afresh instead of reading as drift.
+
+        Args:
+            probe_ids: Probe entity ids, or ``None`` for every probe.
+        """
+        self._probes.reset_baselines(probe_ids)
+
+    def _update_probe_health(self) -> None:
+        """Read every loop probe once and advance the probe-health monitor.
+
+        The still-water witness and the flowing check need each loop's valve
+        position: a LIVE room's last command (the core's own output — never
+        trusted feedback for a room we drive), otherwise the actuator's
+        reported position (an OFF room's valve stays wherever it is).
+        """
+        loops = [
+            loop
+            for room_cfg, name in zip(self._room_configs, self._room_names, strict=True)
+            for loop in room_loops(room_cfg, name)
+        ]
+        valve_pct: dict[str, float | None] = {}
+        for loop in loops:
+            if not loop.valve:
+                continue
+            runtime = self.data.rooms.get(loop.room) if self.data is not None else None
+            live = self.get_room_state(loop.room) == ROOM_STATE_LIVE
+            if live and runtime is not None:
+                valve_pct[loop.valve] = runtime.outputs.valve_position_pct
+            else:
+                valve_pct[loop.valve] = self._read_valve_position(loop.valve)
+        self._probes.update(
+            loops=loops,
+            manifolds_raw=self.config_entry.data.get(CONF_MANIFOLDS, []),
+            global_supply_entity=self._global_supply_entity or None,
+            valve_pct=valve_pct,
+            open_threshold_pct=self._global_config.flow_open_threshold_pct,
+        )
 
     # -- Internal: entity reads ---------------------------------------------
 

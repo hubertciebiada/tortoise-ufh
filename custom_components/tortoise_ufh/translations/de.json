@@ -447,6 +447,9 @@
       },
       "flow_fault": {
         "name": "Durchflussstörung im Heizkreis"
+      },
+      "probe_fault": {
+        "name": "Drift eines Heizkreisfühlers"
       }
     }
   },
@@ -514,6 +517,16 @@
         "cancel": {
           "name": "Abbrechen",
           "description": "Bricht den laufenden Selbsttest des Raums ab, anstatt einen zu starten."
+        }
+      }
+    },
+    "reset_probe_baselines": {
+      "name": "Fühler-Basislinien zurücksetzen",
+      "description": "Vergisst die gelernte Stillwasser-Basislinie der Heizkreis-Wasserfühler, sodass sie neu gelernt wird. Nach dem bewussten Versetzen oder Tauschen eines Fühlers verwenden: sein neuer statischer Versatz würde sonst als Drift gelesen. Ohne Entitäten werden alle Heizkreisfühler zurückgesetzt.",
+      "fields": {
+        "entity_id": {
+          "name": "Fühler",
+          "description": "Die Vorlauf-/Rücklauffühler der Heizkreise, die zurückgesetzt werden (alle, wenn leer)."
         }
       }
     }

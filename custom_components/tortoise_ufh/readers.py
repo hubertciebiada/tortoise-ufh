@@ -3,8 +3,9 @@
 Extracted verbatim from ``coordinator.py`` (2026-07-10): everything that turns
 a raw Home Assistant entity state into a validated controller input — the
 short stale cache, the state-age gate (C4), the room-temperature plausibility
-gate (C3), the per-loop valve-feedback plausibility (S8) and the fast-source /
-heat-pump on-off mapping — now lives in one :class:`SourceReader` with its own
+gate (C3), the loop / manifold water-probe sample gate (issue #16), the
+per-loop valve-feedback plausibility (S8) and the fast-source / heat-pump
+on-off mapping — now lives in one :class:`SourceReader` with its own
 private state, so the read path is testable without the whole coordinator.
 
 The coordinator owns exactly one :class:`SourceReader` and delegates; the
@@ -73,6 +74,33 @@ after the first, defeating the 4 K/cycle plausibility gate. 270 s is ~0.9 of
 the nominal 300 s cycle, tolerating scheduler jitter without stretching the
 two-cycle adoption promise.
 """
+
+_WATER_PLAUSIBLE_MIN_C: float = 0.0
+"""Lowest plausible loop/manifold WATER temperature [degC] (issue #16).
+
+Also rejects the DS18B20 -127 degC "no device" sentinel."""
+
+_WATER_PLAUSIBLE_MAX_C: float = 70.0
+"""Highest plausible loop/manifold water temperature [degC] (issue #16).
+
+UFH water never runs near it; it rejects the DS18B20 85.0 degC power-on value
+read before the first conversion completes — in production a re-seated probe
+fed exactly one such sample straight into S1, which trips on a single sample.
+"""
+
+_WATER_MAX_JUMP_K: float = 15.0
+"""Max plausible water-probe change between control cycles [K] (issue #16).
+
+Deliberately much wider than the room-air gate: a loop probe legitimately
+moves several kelvin within one cycle when its valve opens onto hot or
+chilled water. A bigger step is held for confirmation exactly like the room
+gate (two mutually consistent samples at least
+:data:`_TEMP_CONFIRM_MIN_AGE_S` apart accept the new level).
+"""
+
+_WATER_HOLD_MAX_S: float = 600.0
+"""How long a rejected water sample is bridged by the last ACCEPTED value [s]
+(about two control cycles); after that the probe reads as missing."""
 
 ROOM_TEMP_MAX_AGE_S: float = 45.0 * 60.0
 """Max age of a room-temperature state before it is treated as unavailable [s].
@@ -169,6 +197,11 @@ class SourceReader:
         # sample at least _TEMP_CONFIRM_MIN_AGE_S later (B5, 2026-07-12).
         self._temp_last_accepted: dict[str, float] = {}
         self._temp_pending: dict[str, tuple[float, datetime]] = {}
+        # Water-probe plausibility state (issue #16): last accepted value with
+        # its time (a rejected sample is bridged by it for a short while) and
+        # the pending jump candidate, as for the room gate.
+        self._water_last_accepted: dict[str, tuple[float, datetime]] = {}
+        self._water_pending: dict[str, tuple[float, datetime]] = {}
 
     def read_valve_position(self, entity_id: str | None) -> float | None:
         """Read a valve actuator's position [0..100 %], dispatching by domain.
@@ -282,6 +315,82 @@ class SourceReader:
         self._temp_last_accepted[entity_id] = value
         self._temp_pending.pop(entity_id, None)
         return value
+
+    def read_water_temperature(self, entity_id: str | None) -> float | None:
+        """Read a loop or manifold water probe with a sample gate (issue #16).
+
+        Loop supply/return probes feed S1 (hottest supply, one sample trips),
+        S2 (coldest supply in cooling), S6 and the circulation gate, so they
+        get the same kind of gate as the room air (C3): a sample outside
+        :data:`_WATER_PLAUSIBLE_MIN_C` .. :data:`_WATER_PLAUSIBLE_MAX_C` (the
+        DS18B20 -127 / 85 degC sentinels included) or jumping more than
+        :data:`_WATER_MAX_JUMP_K` from the last accepted value is rejected; a
+        consistent sample at least :data:`_TEMP_CONFIRM_MIN_AGE_S` after the
+        first accepts a genuinely new level. Unlike the room gate a rejected
+        sample does not drop the probe at once: the last ACCEPTED value is
+        served for up to :data:`_WATER_HOLD_MAX_S`, then the probe reads as
+        missing.
+
+        Args:
+            entity_id: The probe entity id, or ``None`` / empty.
+
+        Returns:
+            The accepted (or briefly held) temperature [degC], or ``None``.
+        """
+        if not entity_id:
+            return None
+        value = self.read_float_state(entity_id)
+        now = datetime.now(UTC)
+        if value is None:
+            self._water_pending.pop(entity_id, None)
+            return None
+        if not _WATER_PLAUSIBLE_MIN_C <= value <= _WATER_PLAUSIBLE_MAX_C:
+            _LOGGER.warning(
+                "Entity %s reported implausible water temperature %.1f degC; "
+                "rejecting sample",
+                entity_id,
+                value,
+            )
+            self._water_pending.pop(entity_id, None)
+            return self._water_hold(entity_id, now)
+        last = self._water_last_accepted.get(entity_id)
+        pending = self._water_pending.get(entity_id)
+        jumped = last is not None and abs(value - last[0]) > _WATER_MAX_JUMP_K
+        confirmed = (
+            pending is not None
+            and abs(value - pending[0]) <= _WATER_MAX_JUMP_K
+            and (now - pending[1]).total_seconds() >= _TEMP_CONFIRM_MIN_AGE_S
+        )
+        if jumped and not confirmed:
+            if pending is None or abs(value - pending[0]) > _WATER_MAX_JUMP_K:
+                _LOGGER.warning(
+                    "Entity %s jumped %.1f -> %.1f degC in one cycle; holding "
+                    "sample for confirmation",
+                    entity_id,
+                    last[0] if last is not None else float("nan"),
+                    value,
+                )
+                self._water_pending[entity_id] = (value, now)
+            return self._water_hold(entity_id, now)
+        self._water_last_accepted[entity_id] = (value, now)
+        self._water_pending.pop(entity_id, None)
+        return value
+
+    def _water_hold(self, entity_id: str, now: datetime) -> float | None:
+        """Serve the last accepted water sample while it is recent enough.
+
+        Args:
+            entity_id: The probe entity id.
+            now: The current time.
+
+        Returns:
+            The last accepted value [degC] when younger than
+            :data:`_WATER_HOLD_MAX_S`, else ``None``.
+        """
+        last = self._water_last_accepted.get(entity_id)
+        if last is None or (now - last[1]).total_seconds() > _WATER_HOLD_MAX_S:
+            return None
+        return last[0]
 
     def read_humidity(self, entity_id: str | None) -> tuple[float | None, float]:
         """Read a humidity entity with the two-stage age gate (K7, 2026-07-12).

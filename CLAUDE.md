@@ -35,7 +35,8 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   (orchestrator), `FastSourceMachine` (`fast_source.py`: split direction/dwell machine the
   controller delegates to), `TrendEstimator` (`trend.py`: filtered dT/dt), dew point,
   weather-comp feedforward, EN 1264 loop power, safety rules, the S6 hydraulic no-flow
-  watchdog + actuation self-test (`flow_watchdog.py`), the opt-in heat-pump link
+  watchdog + actuation self-test (`flow_watchdog.py`), loop water-probe health — learned
+  still-water baselines + drift flags (`probe_health.py`, issue #16), the opt-in heat-pump link
   (`hp_link.py`), the presentation-only manifold view model for the panel's Manifolds tab
   (`manifold.py`, v0.21.0), metrics. No HA import, ever. Vendored inside the integration for a self-contained HACS
   install; imports its siblings relatively (`from .X import ...`).
@@ -44,7 +45,9 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   debounces a setpoint change into one off-cycle recompute) reads source entity states, builds
   `dict[str, RoomInputs]`, calls `BuildingController.step`, and writes commands. The read
   path (stale cache + plausibility gates) lives in `readers.py` (`SourceReader`), the write
-  path (thresholds, S3 re-assert cache, C5 farewell) in `writers.py` (`CommandWriter`);
+  path (thresholds, S3 re-assert cache, C5 farewell) in `writers.py` (`CommandWriter`), the
+  loop-probe health glue (one gated read per probe per cycle, manifold grouping, Store,
+  hiding a flagged probe from the core) in `probes.py` (`ProbeHealthTracker`);
   knob introspection shared by websocket + options flow lives in `tuning.py`. Entities
   (number/sensor/binary_sensor/select), config_flow + options flow (add/edit/remove room,
   settings), websocket (incl. `get_tuning`/`set_tuning`), services, panel registration.

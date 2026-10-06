@@ -70,6 +70,9 @@ def _serialize_coordinator_data(
             }
             for name, runtime in data.rooms.items()
         },
+        # Issue #16: learned still-water baseline + latest deviation + flag
+        # of every loop probe, keyed by entity id.
+        "probe_health": data.probe_health,
     }
 
 
