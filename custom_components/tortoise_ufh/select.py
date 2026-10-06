@@ -101,6 +101,7 @@ async def async_setup_entry(
         async_add_entities: Callback to register the created entities.
     """
     coordinator: TortoiseUfhCoordinator = entry.runtime_data.coordinator
+    hub_device_id = entry.runtime_data.hub_device_id
 
     entities: list[SelectEntity] = [
         TortoiseUfhHomeModeSelect(
@@ -118,6 +119,7 @@ async def async_setup_entry(
                 description=CONTROL_STATE_DESCRIPTION,
                 entry_id=entry.entry_id,
                 room_name=room_name,
+                hub_device_id=hub_device_id,
             )
         )
 
@@ -201,6 +203,7 @@ class TortoiseUfhControlStateSelect(
         description: SelectEntityDescription,
         entry_id: str,
         room_name: str,
+        hub_device_id: str,
     ) -> None:
         """Initialise the control-state select entity.
 
@@ -209,6 +212,8 @@ class TortoiseUfhControlStateSelect(
             description: The select description (the control-state control).
             entry_id: Config-entry id, used to build a stable ``unique_id``.
             room_name: The room this select controls.
+            hub_device_id: Device-registry id of the hub device the room
+                device links to (issue #23).
         """
         super().__init__(coordinator)
         self.entity_description = description
@@ -216,7 +221,7 @@ class TortoiseUfhControlStateSelect(
 
         slug = room_slug(room_name)
         self._attr_unique_id = f"{entry_id}_{slug}_{description.key}"
-        self._attr_device_info = room_device_info(entry_id, room_name)
+        self._attr_device_info = room_device_info(entry_id, room_name, hub_device_id)
 
     @property
     def current_option(self) -> str:

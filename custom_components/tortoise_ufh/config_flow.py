@@ -117,7 +117,7 @@ from .core.manifold import (
     ManifoldLoopConfig,
     validate_manifolds,
 )
-from .device import room_slug
+from .device import get_entry_device, room_slug
 from .entity_validator import EntityValidator
 from .tuning import flicker_open_max_pct, global_controller
 
@@ -2165,8 +2165,10 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 registry.async_remove(reg_entry.entity_id)
 
         device_registry = dr.async_get(self.hass)
-        device = device_registry.async_get_device(
-            identifiers={(DOMAIN, f"{entry.entry_id}_{removed_slug}")}
+        device = get_entry_device(
+            device_registry,
+            entry.entry_id,
+            (DOMAIN, f"{entry.entry_id}_{removed_slug}"),
         )
         if device is not None:
             device_registry.async_remove_device(device.id)

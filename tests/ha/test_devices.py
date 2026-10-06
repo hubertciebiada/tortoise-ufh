@@ -28,6 +28,7 @@ from custom_components.tortoise_ufh.device import (
     HUB_MODEL,
     MANUFACTURER,
     ROOM_MODEL,
+    get_entry_device,
     room_slug,
 )
 
@@ -41,8 +42,8 @@ def _room_device(
 ) -> dr.DeviceEntry | None:
     """Resolve a room's device entry from its stable identifier."""
     registry = dr.async_get(hass)
-    return registry.async_get_device(
-        identifiers={(DOMAIN, f"{entry_id}_{room_slug(room)}")}
+    return get_entry_device(
+        registry, entry_id, (DOMAIN, f"{entry_id}_{room_slug(room)}")
     )
 
 
@@ -53,7 +54,7 @@ async def test_room_devices_created_with_hub_link(
     entry = setup_integration
     registry = dr.async_get(hass)
 
-    hub = registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    hub = get_entry_device(registry, entry.entry_id, (DOMAIN, entry.entry_id))
     assert hub is not None
     assert hub.manufacturer == MANUFACTURER
     assert hub.model == HUB_MODEL
@@ -75,7 +76,7 @@ async def test_entities_attached_to_their_devices(
     entry = setup_integration
     entity_registry = er.async_get(hass)
     device_registry = dr.async_get(hass)
-    hub = device_registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    hub = get_entry_device(device_registry, entry.entry_id, (DOMAIN, entry.entry_id))
     assert hub is not None
 
     per_room = (
@@ -238,7 +239,7 @@ async def test_hub_device_registered_before_platforms(
         logging.getLogger().removeHandler(handler)
 
     registry = dr.async_get(hass)
-    hub = registry.async_get_device(identifiers={(DOMAIN, mock_entry.entry_id)})
+    hub = get_entry_device(registry, mock_entry.entry_id, (DOMAIN, mock_entry.entry_id))
     assert hub is not None
     assert hub.model == HUB_MODEL
     for room in _ROOMS:
@@ -246,3 +247,49 @@ async def test_hub_device_registered_before_platforms(
         assert device is not None
         assert device.via_device_id == hub.id
     assert handler.records == []
+
+
+async def test_room_entity_survives_entity_id_change(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Issue #23: renaming a room entity's entity_id keeps it live.
+
+    An entity-ID change re-adds the entity from a core frame. On HA 2026.9+
+    a room ``DeviceInfo`` still carrying the deprecated ``via_device`` makes
+    the device registry raise there, so the entity vanished (no state under
+    either id) until the entry was reloaded. Room devices now link to the hub
+    via ``via_device_id`` wherever the core supports it.
+    """
+    entry = setup_integration
+    entity_registry = er.async_get(hass)
+    old_id = entity_registry.async_get_entity_id(
+        "binary_sensor", DOMAIN, f"{entry.entry_id}_salon_sensor_lost"
+    )
+    assert old_id is not None
+    new_id = "binary_sensor.salon_renamed_sensor_lost"
+
+    entity_registry.async_update_entity(old_id, new_entity_id=new_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(old_id) is None
+    assert hass.states.get(new_id) is not None
+    hub = get_entry_device(dr.async_get(hass), entry.entry_id, (DOMAIN, entry.entry_id))
+    device = _room_device(hass, entry.entry_id, "Salon")
+    assert hub is not None
+    assert device is not None
+    assert device.via_device_id == hub.id
+
+
+async def test_room_device_info_links_hub_by_registry_id() -> None:
+    """Issue #23: the room device links the hub by the core-supported key."""
+    from custom_components.tortoise_ufh.device import (
+        SUPPORTS_VIA_DEVICE_ID,
+        room_device_info,
+    )
+
+    info = room_device_info("entry1", "Salon", "hub-device-id")
+    if SUPPORTS_VIA_DEVICE_ID:
+        assert info.get("via_device_id") == "hub-device-id"
+        assert "via_device" not in info
+    else:
+        assert info.get("via_device") == (DOMAIN, "entry1")

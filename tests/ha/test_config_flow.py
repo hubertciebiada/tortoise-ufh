@@ -48,6 +48,7 @@ from custom_components.tortoise_ufh.const import (
     ROOM_STATE_OFF,
     VALID_TEMP_UNITS,
 )
+from custom_components.tortoise_ufh.device import get_entry_device
 from custom_components.tortoise_ufh.entity_validator import EntityValidator
 
 pytestmark = pytest.mark.ha
@@ -532,14 +533,14 @@ async def test_options_flow_remove_room_cleans_registry(
     # The removed room's device is gone too; Salon's device survives.
     device_registry = dr.async_get(hass)
     assert (
-        device_registry.async_get_device(
-            identifiers={(DOMAIN, f"{entry.entry_id}_lazienka")}
+        get_entry_device(
+            device_registry, entry.entry_id, (DOMAIN, f"{entry.entry_id}_lazienka")
         )
         is None
     )
     assert (
-        device_registry.async_get_device(
-            identifiers={(DOMAIN, f"{entry.entry_id}_salon")}
+        get_entry_device(
+            device_registry, entry.entry_id, (DOMAIN, f"{entry.entry_id}_salon")
         )
         is not None
     )

@@ -325,6 +325,7 @@ async def async_setup_entry(
         async_add_entities: Callback to register the created entities.
     """
     coordinator: TortoiseUfhCoordinator = entry.runtime_data.coordinator  # type: ignore[attr-defined]
+    hub_device_id = entry.runtime_data.hub_device_id
 
     entities: list[TortoiseUfhSensorEntity] = []
 
@@ -341,6 +342,7 @@ async def async_setup_entry(
                 description=description,
                 entry_id=entry.entry_id,
                 room_name=room_name,
+                hub_device_id=hub_device_id,
             )
             for description in ROOM_SENSORS
         )
@@ -352,6 +354,7 @@ async def async_setup_entry(
             description=description,
             entry_id=entry.entry_id,
             room_name=None,
+            hub_device_id=hub_device_id,
         )
         for description in GLOBAL_SENSORS
     )
@@ -376,6 +379,7 @@ class TortoiseUfhSensorEntity(CoordinatorEntity[TortoiseUfhCoordinator], SensorE
         description: TortoiseUfhSensorEntityDescription,
         entry_id: str,
         room_name: str | None,
+        hub_device_id: str,
     ) -> None:
         """Initialise a Tortoise-UFH diagnostic sensor.
 
@@ -385,6 +389,8 @@ class TortoiseUfhSensorEntity(CoordinatorEntity[TortoiseUfhCoordinator], SensorE
             entry_id: The config entry id (used for the unique id).
             room_name: The room name for a per-room sensor, or ``None`` for a
                 global sensor.
+            hub_device_id: Device-registry id of the hub device the room
+                device links to (issue #23).
         """
         super().__init__(coordinator)
         self.entity_description = description
@@ -393,7 +399,9 @@ class TortoiseUfhSensorEntity(CoordinatorEntity[TortoiseUfhCoordinator], SensorE
         if room_name is not None:
             slug = room_slug(room_name)
             self._attr_unique_id = f"{entry_id}_{slug}_{description.key}"
-            self._attr_device_info = room_device_info(entry_id, room_name)
+            self._attr_device_info = room_device_info(
+                entry_id, room_name, hub_device_id
+            )
         else:
             self._attr_unique_id = f"{entry_id}_{description.key}"
             self._attr_device_info = hub_device_info(entry_id)
