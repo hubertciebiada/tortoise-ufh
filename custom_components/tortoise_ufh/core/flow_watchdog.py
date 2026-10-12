@@ -11,8 +11,11 @@ detection and one manual self-test:
 * ``loop_no_flow`` — the valve has been commanded open (>=
   ``flow_open_threshold_pct``) for at least ``flow_response_window_min`` while
   the loop shows **no hydraulic signature** (``|T_supply - T_return|`` below
-  ``flow_epsilon_k`` AND no probe displacement toward the source since the
-  window opened), although circulation in the system is plausible.
+  ``flow_epsilon_k`` AND no probe displacement toward the source from the
+  coldest/warmest point since the last evidence), although circulation in
+  the system is plausible. After evidence, a steady loop only becomes
+  suspicious again once it departs from that evidence state (see
+  :data:`_ARM_DEPARTURE_K`).
 * :class:`ActuationSelfTest` — a deliberate, MANUAL valve excursion (100 %
   for 20-30 min) whose verdict reuses the same displacement-based flow
   evidence, run per room via the ``tortoise_ufh.test_actuation`` service.
@@ -83,6 +86,22 @@ GLOBAL_SUPPLY_MARGIN_K: float = 3.0
 side of the mean room temperature to prove circulation [K] (heating:
 ``gs >= mean + 3``; cooling: ``gs <= mean - 3``).
 Public: consumed by ``BuildingController._circulation_evident``."""
+
+_ARM_DEPARTURE_K: float = 0.5
+"""How far a loop must depart from its last evidence state before a steady
+loop counts as suspicious again [K] (issue: Toilet false S6, 2026-10-12).
+
+After flow evidence the window is DISARMED: a short, high-flow loop at a
+steady source temperature can show neither a supply-return difference above
+``flow_epsilon_k`` nor any displacement, so time alone proves nothing. The
+window re-arms when either probe moves AWAY from the source by this much
+versus the evidence sample (a stagnant loop cooling toward the screed in
+heating, warming in cooling), or — when that sample was a through-flow
+witness (``|T_supply - T_return| >= flow_epsilon_k``) — as soon as the
+difference falls back below ``flow_epsilon_k``. Equal to
+:data:`_FLOW_DELTA_EVIDENCE_K`: a stagnant loop typically settles less than
+1 K from its last flowing state (the twin's frozen cooling loop moves
+~0.9 K), so a larger margin would leave it unarmed for good."""
 
 _SELFTEST_DELTA_K: float = 1.0
 """Displacement threshold for the actuation self-test verdict [K]. Raised
@@ -168,6 +187,8 @@ class LoopFlowMonitor:
         self._no_flow_elapsed_s: float = 0.0
         self._ref_supply_c: float | None = None
         self._ref_return_c: float | None = None
+        self._anchor: tuple[float, float] | None = None
+        self._armed: bool = True
         self._no_flow_active: bool = False
         self._status: str = "inactive"
 
@@ -192,10 +213,7 @@ class LoopFlowMonitor:
         the deliberate excursion moved the loop temperatures, so the pre-test
         references would fake displacement evidence (or its absence).
         """
-        self._no_flow_elapsed_s = 0.0
-        self._ref_supply_c = None
-        self._ref_return_c = None
-        self._no_flow_active = False
+        self._reset_no_flow()
         self._status = "inactive"
 
     def update(
@@ -273,10 +291,12 @@ class LoopFlowMonitor:
     # -- internal -------------------------------------------------------------
 
     def _reset_no_flow(self) -> None:
-        """Reset the no-flow window, references and flag."""
+        """Reset the no-flow window, references, anchor and flag."""
         self._no_flow_elapsed_s = 0.0
         self._ref_supply_c = None
         self._ref_return_c = None
+        self._anchor = None
+        self._armed = True  # a (re)opened window starts armed
         self._no_flow_active = False
 
     def _update_no_flow(
@@ -290,7 +310,28 @@ class LoopFlowMonitor:
         epsilon_k: float,
         window_s: float,
     ) -> None:
-        """Advance the no-flow window (command is at/above the threshold)."""
+        """Advance the no-flow window (command is at/above the threshold).
+
+        Three refinements over the original v0.9.0 window (2026-10-12, a
+        false ``loop_no_flow`` on a short, high-flow loop):
+
+        * **Ratcheting references.** Between two evidence samples the
+          references follow the extreme AWAY from the source (heating: the
+          running minimum; cooling: the maximum), so a live loop re-warming
+          after a compressor pause counts as displacement even when it does
+          not exceed the temperature it had before the pause.
+        * **Arming.** The opening of the window (the valve command crossing
+          the open threshold) arms it. Evidence DISARMS it: a loop that
+          already proved flow and then just sits steady is not accumulating
+          suspicion — a short loop can legitimately show a supply-return
+          difference below ``flow_epsilon_k`` and no displacement for hours
+          of a steady compressor run. It re-arms only when the loop departs
+          from the evidence sample (see :meth:`_departed`: a stagnant loop
+          drifting away from the source, or a lost through-flow delta-T).
+        * Only an ARMED window accumulates, and only while circulation is
+          proven (unchanged gate semantics).
+        """
+        heating = mode is Mode.HEATING
         if self._ref_supply_c is None or self._ref_return_c is None:
             self._ref_supply_c = supply_c
             self._ref_return_c = return_c
@@ -305,19 +346,70 @@ class LoopFlowMonitor:
         )
         if evidence:
             # Physical evidence is decisive: clear immediately, refresh the
-            # references so a later stall is measured from here. No extra
-            # hysteresis needed — the >= 30 min window is the anti-flap and
-            # a noisy "evidence" sample errs toward NO alarm.
+            # references and the anchor so a later stall is measured from
+            # here, and disarm. A noisy "evidence" sample errs toward NO
+            # alarm.
             self._no_flow_elapsed_s = 0.0
             self._ref_supply_c = supply_c
             self._ref_return_c = return_c
+            self._anchor = (supply_c, return_c)
+            self._armed = False
             self._no_flow_active = False
             return
-        if circulation_evident is True:
+        # Ratchet the references away from the source.
+        if heating:
+            self._ref_supply_c = min(self._ref_supply_c, supply_c)
+            self._ref_return_c = min(self._ref_return_c, return_c)
+        else:
+            self._ref_supply_c = max(self._ref_supply_c, supply_c)
+            self._ref_return_c = max(self._ref_return_c, return_c)
+        if not self._armed and self._anchor is not None:
+            self._armed = self._departed(
+                heating=heating,
+                supply_c=supply_c,
+                return_c=return_c,
+                anchor=self._anchor,
+                epsilon_k=epsilon_k,
+            )
+        if self._armed and circulation_evident is True:
             self._no_flow_elapsed_s += dt_seconds
         # circulation None/False: HOLD (no accumulation, no reset).
         if self._no_flow_elapsed_s >= window_s:
             self._no_flow_active = True
+
+    @staticmethod
+    def _departed(
+        *,
+        heating: bool,
+        supply_c: float,
+        return_c: float,
+        anchor: tuple[float, float],
+        epsilon_k: float,
+    ) -> bool:
+        """Whether the loop left its last evidence state (re-arm test).
+
+        Args:
+            heating: ``True`` in HEATING (away from the source = colder).
+            supply_c: Current supply temperature [degC].
+            return_c: Current return temperature [degC].
+            anchor: ``(supply, return)`` of the last evidence sample [degC].
+            epsilon_k: ``flow_epsilon_k`` [K].
+
+        Returns:
+            ``True`` when either probe moved away from the source by
+            :data:`_ARM_DEPARTURE_K`, or the anchor was a through-flow
+            witness (``|supply - return| >= epsilon_k``). Only called on a
+            cycle WITHOUT evidence, so the current difference is already
+            below ``epsilon_k`` — the through-flow witness was lost.
+        """
+        anchor_supply_c, anchor_return_c = anchor
+        sign = 1.0 if heating else -1.0
+        if (
+            sign * (anchor_supply_c - supply_c) >= _ARM_DEPARTURE_K
+            or sign * (anchor_return_c - return_c) >= _ARM_DEPARTURE_K
+        ):
+            return True
+        return abs(anchor_supply_c - anchor_return_c) >= epsilon_k
 
 
 class FlowWatchdog:
