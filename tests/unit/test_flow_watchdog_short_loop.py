@@ -343,3 +343,16 @@ def test_partial_recovery_does_not_disarm() -> None:
     _step(monitor, 25.8, 25.8)  # +0.4 K from the trough: no evidence
     _step(monitor, 25.8, 25.8)
     assert monitor.no_flow_active is True
+
+
+@pytest.mark.unit
+def test_references_start_at_the_evidence_sample() -> None:
+    """Displacement after evidence is measured from the EVIDENCE sample,
+    not re-captured one cycle later."""
+    monitor = LoopFlowMonitor()
+    _step(monitor, 24.0, 24.0, epsilon_k=1.0)
+    _step(monitor, 25.0, 24.0, epsilon_k=1.0)  # through-flow evidence
+    _step(monitor, 25.3, 24.4, epsilon_k=1.0)  # dT lost: armed, +0.3 K
+    _step(monitor, 25.5, 24.6, epsilon_k=1.0)  # +0.5 K from 25.0: evidence
+    _step(monitor, 25.5, 24.6, epsilon_k=1.0)
+    assert monitor.no_flow_active is False
