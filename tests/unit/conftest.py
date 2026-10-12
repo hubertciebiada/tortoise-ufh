@@ -85,7 +85,6 @@ def make_inputs(
     fast_source_hvac_mode: str | None = None,
     humidity_stale_frac: float = 0.0,
     fast_source_allowed: bool = True,
-    circulation_evident: bool | None = None,
 ) -> RoomInputs:
     """Build a :class:`RoomInputs` with test-friendly keyword defaults.
 
@@ -108,8 +107,6 @@ def make_inputs(
             ``[0, 1]`` (K7/D5) — 0 fresh, 1 at 120 min of age.
         fast_source_allowed: Quiet-hours verdict (B1) — ``False`` means the
             fast source must not run this cycle.
-        circulation_evident: The S6 building-level circulation gate
-            (``True`` / ``False`` / ``None`` = unknown).
 
     Returns:
         A validated :class:`RoomInputs`.
@@ -129,5 +126,4 @@ def make_inputs(
         fast_source_hvac_mode=fast_source_hvac_mode,
         humidity_stale_frac=humidity_stale_frac,
         fast_source_allowed=fast_source_allowed,
-        circulation_evident=circulation_evident,
     )

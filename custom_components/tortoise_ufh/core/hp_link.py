@@ -375,7 +375,7 @@ def cooling_demand(
     * ``"sensor_lost" not in report.flags`` — the room is not degraded.
 
     Each calling room contributes its FINAL commanded valve position times its
-    loop count (``len(report.loop_flow_status)``, stamped by the S6 wrapper to
+    loop count (``report.loop_count``, stamped by the room controller to
     exactly the configured loop count; a report without the stamp counts as
     one loop). Demand is real only when the total meets ``min_open_pct``: a
     single loop trickling from the buffer tank must not force a compressor
@@ -403,7 +403,7 @@ def cooling_demand(
             and "sensor_lost" not in report.flags
         ):
             calling = True
-            open_pct += out.valve_position_pct * max(1, len(report.loop_flow_status))
+            open_pct += out.valve_position_pct * max(1, report.loop_count)
     return CoolingDemand(
         open_pct=open_pct,
         threshold_pct=min_open_pct,

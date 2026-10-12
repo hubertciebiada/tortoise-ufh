@@ -162,7 +162,7 @@ const STR = {
       "Wszystkie flagi diagnostyczne. Wyszarzone są nieaktywne; zapalone (w kolorze) " +
       "zadziałały w co najmniej jednym pokoju. Kliknij ikonę „i” przy fladze po pełne " +
       "objaśnienie. Pełny słownik jest też w instrukcji (docs/manual/pl.md §12).",
-    flag_grp_safety: "Bezpieczeństwo (S1–S6)",
+    flag_grp_safety: "Bezpieczeństwo (S1–S5)",
     flag_grp_assist: "Wspomaganie (split)",
     flag_grp_config: "Konfiguracja / stan",
     flag_grp_other: "Pozostałe",
@@ -309,18 +309,12 @@ const STR = {
     tune_cooling_supply_base_c: "Bazowa temperatura wody chłodzenia",
     tune_heating_supply_base_c: "Bazowa temperatura wody grzania",
     tune_heating_supply_slope: "Nachylenie krzywej wody grzania",
-    tune_grp_flow: "Watchdog przepływu (S6)",
-    tune_flow_epsilon_k: "Minimalna ΔT uznawana za przepływ",
-    tune_flow_open_threshold_pct: "Próg komendy otwarcia watchdoga",
-    tune_flow_response_window_min: "Okno odpowiedzi hydraulicznej",
     val_th_command: "Komenda",
     val_th_raw: "Surowy",
     val_th_floor: "Podłoga",
     val_th_sat: "Saturacja",
     val_th_s2: "Dławienie S2",
     val_th_feedback: "Feedback",
-    val_th_flow: "Przepływ",
-    val_th_test: "Test aktuacji",
     val_raw_tooltip: "P {p} · I {i} · Trend {t} · FF {f}",
     val_floor_chip: "min. otwarcie {v}%",
     val_s2_flow: "przepływ {v}%",
@@ -329,22 +323,12 @@ const STR = {
     val_supply: "Zasilanie",
     val_return: "Powrót",
     val_dt: "ΔT",
-    val_flow_cap: "Przepływ",
-    val_test_cap: "Test",
     val_feedback_pos: "poz. {v}%",
     val_no_loops: "brak przypisanych zaworów",
     val_show_loops: "Pokaż pętle ({n})",
     val_hide_loops: "Ukryj pętle",
     val_empty: "Brak skonfigurowanych pokoi.",
-    flow_ok: "ok",
-    flow_no_flow: "brak przepływu?",
-    test_btn_start: "Testuj aktuację",
-    test_btn_cancel: "Anuluj test",
     test_running_min: "~{m} min",
-    test_passed: "zaliczony",
-    test_failed: "niezaliczony",
-    test_aborted: "przerwany",
-    test_untested: "niezbadana",
     ast_th_kind: "Rodzaj",
     ast_th_group: "Grupa",
     ast_th_command: "Komenda",
@@ -477,21 +461,6 @@ const STR = {
       "O ile kelwinów rośnie nastawa wody grzania na każdy 1 K temperatury " +
       "zewnętrznej poniżej temperatury neutralnej. Domyślnie 0,5 K/K; " +
       "typowo 0,3–0,8 dla dobrze ocieplonego domu z podłogówką.",
-    tip_knob_flow_epsilon_k:
-      "Watchdog przepływu (S6): minimalna różnica temperatur zasilanie−powrót " +
-      "pętli uznawana za dowód przepływu wody. Poniżej niej (i bez ruchu sond " +
-      "ku źródłu) otwarta komenda bez odpowiedzi hydraulicznej podnosi flagę " +
-      "„brak przepływu”. Domyślnie 0,3 K; podnieś przy szumiących sondach.",
-    tip_knob_flow_open_threshold_pct:
-      "Watchdog przepływu (S6): od jakiej komendy zaworu pętla ma obowiązek " +
-      "pokazać odpowiedź hydrauliczną. Poniżej progu pętla nie jest oceniana " +
-      "pod kątem braku przepływu. Domyślnie 15 %.",
-    tip_knob_flow_response_window_min:
-      "Watchdog przepływu (S6): ile minut ciągłego braku sygnatury przepływu " +
-      "(przy otwartej komendzie i wiarygodnej cyrkulacji) podnosi flagę „brak " +
-      "przepływu”. Płyta jest " +
-      "wolna — minimum 30 min, żeby uniknąć trzepotania. Domyślnie 45 min; " +
-      "1440 praktycznie wyłącza watchdoga.",
     // Tooltipy szczegółów pokoju (tip_dec_*) i nagłówków tabel (tip_val_* /
     // tip_ast_* / tip_th_*) — treść wspólna z docs/manual/pl.md: zmieniaj razem.
     tip_th_assist:
@@ -569,18 +538,6 @@ const STR = {
     tip_val_feedback:
       "Pozycja raportowana przez siłownik; trwała rozbieżność z komendą " +
       "podnosi flagę valve_mismatch.",
-    tip_flow_chip:
-      "Zdrowie przepływu z sond wody pętli (watchdog S6) — niezależny, " +
-      "fizyczny świadek aktuacji, który nie ufa feedbackowi encji zaworu " +
-      "(ten kanał potrafi kłamać po restarcie kontrolera). „brak przepływu?” " +
-      "= otwarta komenda bez sygnatury hydraulicznej; „—” = brak sond lub " +
-      "watchdog wstrzymany (cyrkulacja niepewna).",
-    tip_actuation_test:
-      "Ręczny self-test aktuacji: zawór jest celowo wysterowany na 100 % na " +
-      "20–30 min, a o wyniku decyduje odpowiedź hydrauliczna sond pętli. " +
-      "Do uruchamiania po serwisie lub zdarzeniu zasilania. Wymaga pokoju w " +
-      "stanie Steruje i sond wody; reguły bezpieczeństwa (przegrzanie, " +
-      "kondensacja) przerywają test. Podczas testu integrator jest zamrożony.",
     tip_ast_timer:
       "Blokada minimalnego czasu pracy/postoju: tyle jeszcze musi upłynąć, " +
       "zanim wspomaganie może zmienić stan. Chroni sprężarkę.",
@@ -754,7 +711,7 @@ const STR = {
       "Every diagnostic flag. Dimmed ones are inactive; lit (coloured) ones have fired in " +
       "at least one room. Click the info icon next to a flag for the full explanation. The " +
       "full dictionary is also in the manual (docs/manual/pl.md §12).",
-    flag_grp_safety: "Safety (S1–S6)",
+    flag_grp_safety: "Safety (S1–S5)",
     flag_grp_assist: "Assist (split)",
     flag_grp_config: "Configuration / state",
     flag_grp_other: "Other",
@@ -1262,54 +1219,7 @@ const STR = {
     hp_flicker_return: "Return / inlet",
     hp_flicker_outlet: "Outlet / supply",
     hp_flicker_freq: "Compressor",
-    // S6 hydraulic no-flow watchdog + actuation self-test (issue #4,
-    // 2026-07-13). EN mirror of the PL keys above.
-    tune_grp_flow: "Flow watchdog (S6)",
-    tune_flow_epsilon_k: "Minimum ΔT counted as flow",
-    tune_flow_open_threshold_pct: "Watchdog open-command threshold",
-    tune_flow_response_window_min: "Hydraulic response window",
-    tip_knob_flow_epsilon_k:
-      "Flow watchdog (S6): the minimum loop supply−return temperature " +
-      "difference counted as evidence of water flow. Below it (and with no " +
-      "probe movement toward the source) an open command with no hydraulic " +
-      "response raises the “no flow” flag. Default 0.3 K; raise for noisy " +
-      "probes.",
-    tip_knob_flow_open_threshold_pct:
-      "Flow watchdog (S6): the valve command above which a loop is expected " +
-      "to show a hydraulic response. Below the threshold the loop is not " +
-      "evaluated for no-flow. Default 15 %.",
-    tip_knob_flow_response_window_min:
-      "Flow watchdog (S6): how many minutes of continuous missing flow " +
-      "signature (with an open command and plausible circulation) raise the " +
-      "“no flow” flag. The " +
-      "slab is slow — minimum 30 min to avoid flapping. Default 45 min; 1440 " +
-      "effectively disables the watchdog.",
-    tip_flow_chip:
-      "Flow health from the loop water probes (S6 watchdog) — an " +
-      "independent, physical witness of actuation that does NOT trust the " +
-      "valve entity's feedback (that channel can lie after a controller " +
-      "reset). “no flow?” = an open command with no hydraulic signature; " +
-      "“—” = no probes, or the watchdog is on hold (circulation uncertain).",
-    tip_actuation_test:
-      "Manual actuation self-test: the valve is deliberately driven to " +
-      "100 % for 20–30 min and the verdict comes from the loop probes' " +
-      "hydraulic response. Run it after maintenance or a power event. " +
-      "Requires the room in Control and water probes; safety rules " +
-      "(overheat, condensation) abort the test. The integrator is frozen " +
-      "during the test.",
-    val_th_flow: "Flow",
-    val_th_test: "Actuation test",
-    val_flow_cap: "Flow",
-    val_test_cap: "Test",
-    flow_ok: "ok",
-    flow_no_flow: "no flow?",
-    test_btn_start: "Test actuation",
-    test_btn_cancel: "Cancel test",
     test_running_min: "~{m} min",
-    test_passed: "passed",
-    test_failed: "failed",
-    test_aborted: "aborted",
-    test_untested: "untested",
     // Manifolds tab (v0.21.0) — the KAN-therm InoxFlow UFST drawing.
     mf_empty:
       "No manifolds configured. Add them in the integration options: " +
@@ -1353,7 +1263,7 @@ const STR = {
       "mindestens einem Raum ausgelöst. Klicken Sie auf das Info-Symbol neben einer Meldung " +
       "für die vollständige Erklärung. Das vollständige Verzeichnis steht auch im Handbuch " +
       "(docs/manual/de.md §12).",
-    flag_grp_safety: "Sicherheit (S1–S6)",
+    flag_grp_safety: "Sicherheit (S1–S5)",
     flag_grp_assist: "Zusatzquelle (Split)",
     flag_grp_config: "Konfiguration / Zustand",
     flag_grp_other: "Sonstige",
@@ -1871,54 +1781,7 @@ const STR = {
     hp_flicker_return: "Rücklauf / Eintritt",
     hp_flicker_outlet: "Vorlauf / Austritt",
     hp_flicker_freq: "Verdichter",
-    // Hydraulischer No-Flow-Watchdog S6 + Aktuator-Selbsttest (issue #4,
-    // 2026-07-13). DE-Spiegel der obigen Schlüssel.
-    tune_grp_flow: "Durchfluss-Watchdog (S6)",
-    tune_flow_epsilon_k: "Minimale ΔT, die als Durchfluss zählt",
-    tune_flow_open_threshold_pct: "Öffnungsbefehl-Schwelle des Watchdogs",
-    tune_flow_response_window_min: "Hydraulisches Antwortfenster",
-    tip_knob_flow_epsilon_k:
-      "Durchfluss-Watchdog (S6): die minimale Vorlauf−Rücklauf-Temperaturdifferenz " +
-      "des Heizkreises, die als Nachweis von Wasserdurchfluss zählt. Darunter (und " +
-      "ohne Sondenbewegung zur Quelle hin) löst ein Öffnungsbefehl ohne hydraulische " +
-      "Antwort die Meldung „kein Durchfluss“ aus. Standard 0,3 K; bei verrauschten " +
-      "Sonden erhöhen.",
-    tip_knob_flow_open_threshold_pct:
-      "Durchfluss-Watchdog (S6): der Ventilbefehl, oberhalb dessen ein Heizkreis " +
-      "eine hydraulische Antwort zeigen muss. Unterhalb der Schwelle wird der " +
-      "Heizkreis nicht auf fehlenden Durchfluss geprüft. Standard 15 %.",
-    tip_knob_flow_response_window_min:
-      "Durchfluss-Watchdog (S6): wie viele Minuten durchgehend fehlender " +
-      "Durchflusssignatur (bei geöffnetem Befehl und plausibler Zirkulation) die " +
-      "Meldung „kein Durchfluss“ auslösen. Die " +
-      "Platte ist träge — Minimum 30 min, um Flattern zu vermeiden. Standard 45 min; " +
-      "1440 deaktiviert den Watchdog praktisch.",
-    tip_flow_chip:
-      "Durchfluss-Gesundheit von den Wassersonden des Heizkreises (S6-Watchdog) — " +
-      "ein unabhängiger, physischer Zeuge der Aktuierung, der der Rückmeldung der " +
-      "Ventil-Entität NICHT vertraut (dieser Kanal kann nach einem Reglerneustart " +
-      "lügen). „kein Durchfluss?“ = ein Öffnungsbefehl ohne hydraulische Signatur; " +
-      "„—“ = keine Sonden oder der Watchdog pausiert (Zirkulation unsicher).",
-    tip_actuation_test:
-      "Manueller Aktuator-Selbsttest: Das Ventil wird bewusst für 20–30 min auf " +
-      "100 % gefahren, und das Urteil ergibt sich aus der hydraulischen Antwort der " +
-      "Heizkreis-Sonden. Führen Sie ihn nach Wartung oder einem Stromereignis aus. " +
-      "Erfordert den Raum in Regelung und Wassersonden; Sicherheitsregeln " +
-      "(Überhitzung, Kondensation) brechen den Test ab. Während des Tests ist der " +
-      "Integrator eingefroren.",
-    val_th_flow: "Durchfluss",
-    val_th_test: "Aktuierungstest",
-    val_flow_cap: "Durchfluss",
-    val_test_cap: "Test",
-    flow_ok: "ok",
-    flow_no_flow: "kein Durchfluss?",
-    test_btn_start: "Aktuierung testen",
-    test_btn_cancel: "Test abbrechen",
     test_running_min: "~{m} min",
-    test_passed: "bestanden",
-    test_failed: "nicht bestanden",
-    test_aborted: "abgebrochen",
-    test_untested: "ungetestet",
     // Reiter Verteiler (v0.21.0) — die Zeichnung des KAN-therm InoxFlow UFST.
     mf_empty:
       "Keine Verteiler konfiguriert. Fügen Sie sie in den Integrationsoptionen " +
@@ -1951,9 +1814,8 @@ const STR = {
  *
  * Codes mirror the exact strings the report carries: the safety-rule names
  * merged into the report (`s1_floor_overheat`, `s2_condensation`,
- * `s3_emergency_heat`, `s4_emergency_cool`, `s5_watchdog`) and the S6
- * watchdog (`loop_no_flow`, `actuation_test_running`,
- * `actuation_test_failed`); the room-controller flags (`s2_throttle` — the
+ * `s3_emergency_heat`, `s4_emergency_cool`, `s5_watchdog`); the
+ * room-controller flags (`s2_throttle` — the
  * graduated local dew throttle, split from the hard rule 2026-07-12 —
  * `rh_stale_gated`, `fast_source_*`, `cooling_disabled`, `unknown_room`,
  * `controller_error`, `sensor_lost`); and the adapter-stamped `valve_mismatch`
@@ -1963,7 +1825,7 @@ const STR = {
  * dot + chip colour: `ok` < `info` < `warn` < `problem` < `alarm`, where `info`
  * is a neutral, *intentional steady state* — e.g. a room deliberately opted out
  * of cooling — that must NOT read as a fault and never escalates the roll-up
- * above the quiet neutral tint), `sx` (safety-rule code `"S1".."S6"` or `null`),
+ * above the quiet neutral tint), `sx` (safety-rule code `"S1".."S5"` or `null`),
  * `group`
  * (`"safety"|"assist"|"config"` — the annunciator bucket), and `descPl`/`descEn`
  * (the full "i"-tooltip explanation). The flag annunciator, the severity
@@ -1974,7 +1836,7 @@ const STR = {
  * The report booleans `saturated` / `valve_floor_applied` are rendered from
  * their own STR keys in the decision view, never through this map.
  *
- * Order is logical (S1→S6, then assist, then config) so the annunciator can
+ * Order is logical (S1→S5, then assist, then config) so the annunciator can
  * iterate `Object.entries()` without a separate sort table.
  */
 const FLAG_LABELS = {
@@ -2082,22 +1944,7 @@ const FLAG_LABELS = {
     descDe:
       "Keine frischen Raumdaten seit >15 min → neutrale Ventilstellung + Alarm. Verschwindet nach 5 min durchgehend frischer Daten.",
   },
-  loop_no_flow: {
-    pl: "Brak przepływu w pętli",
-    en: "Loop no flow",
-    de: "Kein Durchfluss im Heizkreis",
-    sev: "alarm", sx: "S6", group: "safety",
-    descPl:
-      "Zawór długo otwarty, a sondy pętli nie widzą przepływu wody → integrator " +
-      "zamrożony, zapala się encja „usterka przepływu”. Sprawdź sterownik " +
-      "zaworu / siłownik / rotametry rozdzielacza.",
-    descEn:
-      "Valve open a long time but the loop probes see no water flow → the " +
-      "integrator freezes and the flow-fault entity turns on. Check the valve " +
-      "controller / actuator / manifold rotameters.",
-    descDe:
-      "Ventil lange offen, aber die Heizkreis-Sonden sehen keinen Wasserdurchfluss → der Integrator friert ein und die Entität „Durchflussstörung“ schaltet sich ein. Prüfen Sie den Ventilcontroller / Aktor / die Rotameter des Verteilers.",
-  },
+
   probe_drift: {
     pl: "Dryf czujnika pętli",
     en: "Loop probe drift",
@@ -2106,46 +1953,20 @@ const FLAG_LABELS = {
     descPl:
       "Czujnik zasilania lub powrotu pętli odszedł od wyuczonej linii bazowej " +
       "przy stojącej wodzie albo przy przepływie odbiega od zasilania głównego " +
-      "rozdzielacza → wyłączony z danych S1/S2/S6 (zasilanie zastępuje główne). " +
+      "rozdzielacza → wyłączony z danych S1/S2 (zasilanie zastępuje główne). " +
       "Sprawdź, czy czujnik nie zsunął się z rury; atrybuty encji „dryf " +
       "czujnika pętli” pokazują linię bazową i odchyłkę.",
     descEn:
       "A loop supply or return probe left its learned still-water baseline, or " +
       "disagrees with the manifold main supply while flowing → it is dropped from " +
-      "the S1/S2/S6 inputs (a supply falls back to the main supply). Check that " +
+      "the S1/S2 inputs (a supply falls back to the main supply). Check that " +
       "the probe has not slipped on its pipe; the loop-probe-drift entity's " +
       "attributes show the baseline and the deviation.",
     descDe:
-      "Ein Vorlauf- oder Rücklauffühler eines Heizkreises hat seine gelernte Stillwasser-Basislinie verlassen oder weicht bei Durchfluss vom Hauptvorlauf des Verteilers ab → er wird aus den S1/S2/S6-Eingaben genommen (ein Vorlauf fällt auf den Hauptvorlauf zurück). Prüfen Sie, ob der Fühler vom Rohr gerutscht ist; die Attribute der Entität „Drift eines Heizkreisfühlers“ zeigen Basislinie und Abweichung.",
+      "Ein Vorlauf- oder Rücklauffühler eines Heizkreises hat seine gelernte Stillwasser-Basislinie verlassen oder weicht bei Durchfluss vom Hauptvorlauf des Verteilers ab → er wird aus den S1/S2-Eingaben genommen (ein Vorlauf fällt auf den Hauptvorlauf zurück). Prüfen Sie, ob der Fühler vom Rohr gerutscht ist; die Attribute der Entität „Drift eines Heizkreisfühlers“ zeigen Basislinie und Abweichung.",
   },
-  actuation_test_running: {
-    pl: "Trwa test aktuacji",
-    en: "Actuation test running",
-    de: "Aktuierungstest läuft",
-    sev: "ok", sx: "S6", group: "safety",
-    descPl:
-      "Trwa ręczny test aktuacji (zawór celowo na 100 %). Informacyjnie — " +
-      "poczekaj lub anuluj.",
-    descEn:
-      "A manual actuation self-test is running (valve deliberately at 100 %). " +
-      "Informational — wait or cancel.",
-    descDe:
-      "Ein manueller Aktuator-Selbsttest läuft (Ventil bewusst auf 100 %). Informativ — warten oder abbrechen.",
-  },
-  actuation_test_failed: {
-    pl: "Test aktuacji niezaliczony",
-    en: "Actuation test failed",
-    de: "Aktuierungstest nicht bestanden",
-    sev: "alarm", sx: "S6", group: "safety",
-    descPl:
-      "Test aktuacji nie przeszedł — pętla nie odpowiedziała hydraulicznie na " +
-      "pełne otwarcie. Sprawdź sterownik / siłownik / przepływ tej pętli.",
-    descEn:
-      "Actuation self-test failed — the loop did not respond hydraulically to " +
-      "full open. Check the controller / actuator / flow of that loop.",
-    descDe:
-      "Aktuator-Selbsttest nicht bestanden — der Heizkreis reagierte hydraulisch nicht auf volle Öffnung. Prüfen Sie Controller / Aktor / Durchfluss dieses Heizkreises.",
-  },
+
+
   fast_source_mismatch: {
     pl: "Wspomaganie w innym stanie niż komenda",
     en: "Assist state differs from command",
@@ -2457,15 +2278,6 @@ const KNOB_GROUPS = [
     key: "dew",
     labelKey: "tune_grp_dew",
     knobs: ["dew_margin_k", "dew_ramp_k"],
-  },
-  {
-    key: "flow",
-    labelKey: "tune_grp_flow",
-    knobs: [
-      "flow_epsilon_k",
-      "flow_open_threshold_pct",
-      "flow_response_window_min",
-    ],
   },
   {
     key: "hp",
@@ -3797,7 +3609,7 @@ class TortoiseUfhPanel extends HTMLElement {
     return this._t("flag_desc_unknown");
   }
 
-  /** Safety-rule code (`"S1".."S6"`) for a flag, or `null`. */
+  /** Safety-rule code (`"S1".."S5"`) for a flag, or `null`. */
   _flagSx(code) {
     const meta = FLAG_LABELS[code];
     return meta && meta.sx ? meta.sx : null;

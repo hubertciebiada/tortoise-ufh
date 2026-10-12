@@ -1954,3 +1954,34 @@ steady is flagged one window (of proven circulation) after its probes drift 0.5 
 from the source or lose their through-flow ΔT — not one window after the last evidence; a
 dead loop whose probes do not move at all after it proved flow is not flagged. The twin's frozen cooling actuator still latches within
 the existing acceptance window.
+
+## 34. S6 no-flow watchdog and actuation self-test removed (2026-10-12, v0.22.3)
+
+**Incident.** On v0.22.2 Toaleta raised `loop_no_flow` again, this time while the heat pump's
+compressor was stopped: the slab and the manifold bar keep warming and spreading heat on
+their own, so the loop probes show no "response" even though nothing is wrong.
+
+**Decision (owner).** Remove the watchdog. Temperatures at the loop can prove that water
+flows; they can never prove that it does not. Steady source temperature, a short high-flow
+loop, a compressor pause, the manifold bar heating the supply probe — each looks like
+"no flow". Every refinement (§§15, 17, 31, 33) traded one false alarm for another.
+
+**Removed.** `core/flow_watchdog.py` (`loop_no_flow`, the circulation gate, the integrator
+freeze it drove), the manual `ActuationSelfTest` + `tortoise_ufh.test_actuation` service
+(its "failed" verdict rests on the same inference), `binary_sensor.<room>_flow_fault`
+(purged from the entity registry), the knobs `flow_epsilon_k`, `flow_open_threshold_pct`,
+`flow_response_window_min`, the S6 `RoomReport` fields and the panel's flow/test UI.
+`RoomReport.loop_count` replaces the loop count the heat-pump link used to read from the
+S6 status. Config entry migration **v4→v5** strips the retired knobs from the stored
+globals and from every per-room override (an override left empty is dropped); the
+coordinator also ignores them defensively.
+
+**Kept.** Probe health (`probe_drift` / `probe_fault`, issue #16) — it judges the probes
+themselves, not flow, and keeps a drifting probe out of S1/S2. `entity_global_supply` stays
+as the manifold main-supply reference for probe health. Safety rules S1–S5, the valve
+re-assert and `valve_mismatch` are unchanged.
+
+**Trade-off.** A stuck or echoing actuator (issue #4) is no longer detected by Tortoise.
+The loop still protects itself through S1/S2 and the cooling dew-point layers; actuation
+faults must be caught by the actuator's own diagnostics or by the owner noticing a room
+that does not follow its setpoint.

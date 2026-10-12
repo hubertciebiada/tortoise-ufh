@@ -35,10 +35,12 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.tortoise_ufh import async_migrate_entry
 from custom_components.tortoise_ufh.const import (
+    CONF_CONTROLLER,
     CONF_LIVE_CONTROL,
     CONF_PARTICIPATES,
     CONF_ROOM_NAME,
     CONF_ROOM_STATE,
+    CONF_ROOM_TUNING,
     CONF_ROOMS,
     DOMAIN,
     ROOM_STATE_LIVE,
@@ -119,7 +121,7 @@ async def test_migrate_v1_chain_state_precedence(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 4
+    assert entry.version == 5
     assert entry.options[CONF_ROOM_STATE] == {"Salon": expected}
     # No shadow literal may survive the chain.
     assert ROOM_STATE_SHADOW not in entry.options[CONF_ROOM_STATE].values()
@@ -141,7 +143,7 @@ async def test_migrate_v1_no_options_defaults_every_room_to_off(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 4
+    assert entry.version == 5
     assert entry.options[CONF_ROOM_STATE] == {
         "Salon": ROOM_STATE_OFF,
         "Lazienka": ROOM_STATE_OFF,
@@ -225,7 +227,7 @@ async def test_migrate_v2_state_conversion(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 4
+    assert entry.version == 5
     assert entry.options[CONF_ROOM_STATE] == {"Salon": expected}
 
 
@@ -242,7 +244,7 @@ async def test_migrate_v2_without_state_map_does_not_invent_one(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 4
+    assert entry.version == 5
     assert CONF_ROOM_STATE not in entry.options
     assert entry.options.get("unrelated") is True
 
@@ -261,7 +263,7 @@ async def test_migrate_v3_drops_the_retired_mode_entity(hass: HomeAssistant) -> 
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 4
+    assert entry.version == 5
     assert "entity_mode" not in entry.data
     assert entry.data[CONF_ROOMS] == [{CONF_ROOM_NAME: "Salon"}]
 
@@ -275,14 +277,51 @@ async def test_migrate_v3_without_a_mode_entity_just_bumps(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 4
+    assert entry.version == 5
     assert dict(entry.data) == data_before
+
+
+async def test_v4_to_v5_strips_the_retired_flow_watchdog_keys(
+    hass: HomeAssistant,
+) -> None:
+    """v4 -> v5 drops the removed S6 tuning keys everywhere (DECISIONS §34).
+
+    The keys go from the global tuning in data and options and from every
+    per-room override; an override left empty is dropped, other knobs stay.
+    """
+    entry = _entry(
+        hass,
+        rooms=[{CONF_ROOM_NAME: "Salon"}, {CONF_ROOM_NAME: "Toaleta"}],
+        options={
+            CONF_CONTROLLER: {
+                "kp": 12.0,
+                "flow_epsilon_k": 0.4,
+                "flow_open_threshold_pct": 15.0,
+                "flow_response_window_min": 55.0,
+            },
+            CONF_ROOM_TUNING: {
+                "Toaleta": {"flow_epsilon_k": 1.0},
+                "Salon": {"ki": 0.5, "flow_response_window_min": 60.0},
+            },
+        },
+        version=4,
+    )
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_CONTROLLER: {"flow_epsilon_k": 0.3}}
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert entry.version == 5
+    assert entry.data[CONF_CONTROLLER] == {}
+    assert entry.options[CONF_CONTROLLER] == {"kp": 12.0}
+    assert entry.options[CONF_ROOM_TUNING] == {"Salon": {"ki": 0.5}}
 
 
 async def test_migrate_rejects_newer_version(hass: HomeAssistant) -> None:
     """A version newer than the code knows about is refused (no downgrade)."""
     entry = _entry(hass, rooms=[{CONF_ROOM_NAME: "Salon"}])
-    hass.config_entries.async_update_entry(entry, version=5)
+    hass.config_entries.async_update_entry(entry, version=6)
 
     assert await async_migrate_entry(hass, entry) is False
 
@@ -325,7 +364,7 @@ async def test_v1_entry_sets_up_and_migrates(
 
     # The entry loaded on the migrated (v3) schema.
     assert entry.state is ConfigEntryState.LOADED
-    assert entry.version == 4
+    assert entry.version == 5
 
     coordinator = entry.runtime_data.coordinator
     # participates=True + live=True -> live; the other room -> shadow -> off.

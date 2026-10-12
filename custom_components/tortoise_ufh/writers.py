@@ -70,7 +70,8 @@ reset/overridden — rewrite this cycle instead of waiting out the re-assert
 period. Numerically equal to the coordinator's S8
 ``_VALVE_MISMATCH_TOLERANCE_PCT`` so the write path heals exactly the
 divergences S8 would flag. An ECHOING (lying) feedback channel never trips
-this trigger — that failure mode is the S6 hydraulic watchdog's job.
+this trigger; nothing detects that failure mode since the temperature-based
+S6 watchdog was removed (2026-10-12, DECISIONS §34).
 """
 
 _DEFAULT_HP_STEP_C: float = 1.0

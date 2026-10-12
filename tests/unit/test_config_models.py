@@ -927,35 +927,6 @@ class TestControllerConfigBoundaryPins:
         )
 
     @pytest.mark.unit
-    @pytest.mark.parametrize("value", [0.0, 0.5, 100.0])
-    def test_flow_open_threshold_boundaries_allowed(self, value: float) -> None:
-        """``flow_open_threshold_pct`` 0 and 100 are inclusive endpoints (S6)."""
-        cfg = ControllerConfig(flow_open_threshold_pct=value)
-        assert cfg.flow_open_threshold_pct == value
-
-    @pytest.mark.unit
-    def test_flow_open_threshold_exact_message(self) -> None:
-        """A flow-open threshold above 100 raises with the exact message."""
-        with pytest.raises(ValueError) as exc_info:
-            ControllerConfig(flow_open_threshold_pct=100.1)
-        assert str(exc_info.value) == (
-            "flow_open_threshold_pct must be in [0, 100], got 100.1"
-        )
-
-    @pytest.mark.unit
-    def test_flow_response_window_sub_minute_allowed(self) -> None:
-        """Any positive ``flow_response_window_min`` is valid (S6, sim use)."""
-        cfg = ControllerConfig(flow_response_window_min=0.5)
-        assert cfg.flow_response_window_min == 0.5
-
-    @pytest.mark.unit
-    def test_flow_response_window_exact_message(self) -> None:
-        """A zero flow-response window raises with the exact message."""
-        with pytest.raises(ValueError) as exc_info:
-            ControllerConfig(flow_response_window_min=0.0)
-        assert str(exc_info.value) == "flow_response_window_min must be > 0, got 0.0"
-
-    @pytest.mark.unit
     def test_cycle_seconds_sub_second_allowed(self) -> None:
         """Any positive ``cycle_seconds`` is valid (``> 0``)."""
         cfg = ControllerConfig(cycle_seconds=0.5)
@@ -1366,52 +1337,11 @@ class TestRoomReportValidation:
         assert str(exc_info.value) == "dew_throttle_factor must be in [0, 1], got 1.5"
 
     @pytest.mark.unit
-    def test_loop_flow_status_bad_entry_exact_message(self) -> None:
-        """An unknown ``loop_flow_status`` entry raises the exact message."""
+    def test_negative_loop_count_exact_message(self) -> None:
+        """A negative ``loop_count`` raises with the exact message."""
         with pytest.raises(ValueError) as exc_info:
-            replace(_report(), loop_flow_status=("stuck",))
-        assert str(exc_info.value) == (
-            "loop_flow_status entries must be one of "
-            "['inactive', 'no_flow', 'ok'], got 'stuck'"
-        )
-
-    @pytest.mark.unit
-    def test_actuation_test_status_bad_exact_message(self) -> None:
-        """An unknown ``actuation_test_status`` raises the exact message."""
-        with pytest.raises(ValueError) as exc_info:
-            replace(_report(), actuation_test_status="exploded")
-        assert str(exc_info.value) == (
-            "actuation_test_status must be one of "
-            "['aborted', 'failed', 'passed', 'running'] or None, got 'exploded'"
-        )
-
-    @pytest.mark.unit
-    @pytest.mark.parametrize("minutes", [0.0, 0.5])
-    def test_actuation_remaining_zero_and_fraction_allowed(
-        self, minutes: float
-    ) -> None:
-        """``actuation_test_remaining_min`` 0 and sub-1 values are valid."""
-        report = replace(_report(), actuation_test_remaining_min=minutes)
-        assert report.actuation_test_remaining_min == minutes
-
-    @pytest.mark.unit
-    def test_actuation_remaining_negative_exact_message(self) -> None:
-        """A negative ``actuation_test_remaining_min`` raises exactly."""
-        with pytest.raises(ValueError) as exc_info:
-            replace(_report(), actuation_test_remaining_min=-0.5)
-        assert str(exc_info.value) == (
-            "actuation_test_remaining_min must be >= 0, got -0.5"
-        )
-
-    @pytest.mark.unit
-    def test_actuation_test_loops_bad_entry_exact_message(self) -> None:
-        """An unknown ``actuation_test_loops`` entry raises exactly."""
-        with pytest.raises(ValueError) as exc_info:
-            replace(_report(), actuation_test_loops=("bogus",))
-        assert str(exc_info.value) == (
-            "actuation_test_loops entries must be one of "
-            "['failed', 'passed', 'untested'], got 'bogus'"
-        )
+            replace(_report(), loop_count=-1)
+        assert str(exc_info.value) == "loop_count must be >= 0, got -1"
 
 
 class TestRoomReportToDictKeys:
@@ -1438,10 +1368,7 @@ class TestRoomReportToDictKeys:
             room_temperature_c=21.4,
             dew_excluded_reason="no_humidity",
             fast_dwell_remaining_s=120.0,
-            loop_flow_status=("ok",),
-            actuation_test_status="running",
-            actuation_test_remaining_min=3.0,
-            actuation_test_loops=("passed",),
+            loop_count=2,
         )
         assert report.to_dict() == {
             "error_c": -0.4,
@@ -1461,8 +1388,5 @@ class TestRoomReportToDictKeys:
             "room_temperature_c": 21.4,
             "dew_excluded_reason": "no_humidity",
             "fast_dwell_remaining_s": 120.0,
-            "loop_flow_status": ["ok"],
-            "actuation_test_status": "running",
-            "actuation_test_remaining_min": 3.0,
-            "actuation_test_loops": ["passed"],
+            "loop_count": 2,
         }

@@ -14,8 +14,6 @@ import json
 import pytest
 
 from custom_components.tortoise_ufh.core.manifold import (
-    LOOP_FLAG_NO_FLOW,
-    LOOP_FLAG_TEST_FAILED,
     MANIFOLD_CIRCUITS_MAX,
     MANIFOLD_SIDE_LEFT,
     MANIFOLD_SIDE_RIGHT,
@@ -64,9 +62,7 @@ def _rooms() -> tuple[RoomLoopSources, ...]:
             supplies=("sensor.bedroom_z1", "sensor.bedroom_z2"),
             returns=("sensor.bedroom_p1", None),
             valve_command_pct=40.0,
-            flags=("loop_no_flow",),
-            loop_flow_status=("ok", "no_flow"),
-            actuation_test_loops=("failed", "untested"),
+            flags=("s1_floor_overheat", "sensor_lost"),
         ),
     )
 
@@ -317,18 +313,15 @@ def test_build_free_and_dangling_positions_are_empty() -> None:
 
 
 def test_build_maps_room_and_loop_flags_to_the_circuit() -> None:
-    """Valve-side room flags fan out; S6 / self-test verdicts land per loop."""
+    """Valve-side room flags fan out to every loop the room owns."""
     (view,) = build_manifold_views([_east()], _rooms(), _readings())
     corridor, bedroom_a, _free, bedroom_b = view.positions
 
     # valve_mismatch is valve-side; sensor_lost is not a loop flag.
     assert corridor.flags == ("valve_mismatch",)
-    # loop_no_flow only on the loop whose status says no_flow (index 1).
-    assert LOOP_FLAG_NO_FLOW not in bedroom_a.flags
-    assert LOOP_FLAG_NO_FLOW in bedroom_b.flags
-    # The failed self-test verdict is on loop index 0 only.
-    assert bedroom_a.flags == (LOOP_FLAG_TEST_FAILED,)
-    assert LOOP_FLAG_TEST_FAILED not in bedroom_b.flags
+    # S1 closes the valve, so it lands on both of the bedroom's loops.
+    assert bedroom_a.flags == ("s1_floor_overheat",)
+    assert bedroom_b.flags == ("s1_floor_overheat",)
 
 
 def test_build_keeps_manifold_order_and_side() -> None:
@@ -374,5 +367,5 @@ def test_view_to_dict_is_json_serialisable_with_the_contract_keys() -> None:
         "flags",
     }
     assert set(position["valve"]) == {"pct", "command_pct", "entity_id"}
-    assert position["flags"] == [LOOP_FLAG_TEST_FAILED]
+    assert position["flags"] == ["s1_floor_overheat"]
     assert payload["positions"][2]["room_name"] is None

@@ -57,17 +57,17 @@ from dataclasses import dataclass, field
 from statistics import median
 from typing import Any
 
-from .flow_watchdog import CIRCULATION_DELTA_K
-
 __all__ = [
     "BASELINE_MAX_WINDOWS",
     "BASELINE_MIN_WINDOWS",
     "BASELINE_SPACING_S",
+    "CIRCULATION_DELTA_K",
     "DRIFT_K",
     "DRIFT_WINDOWS",
     "FLOW_PERSIST_S",
     "FLOW_SUPPLY_MAX_K",
     "MIN_GROUP_PROBES",
+    "OPEN_THRESHOLD_PCT",
     "STILL_CLOSED_MAX_PCT",
     "STILL_SETTLE_S",
     "STILL_WINDOW_S",
@@ -77,6 +77,17 @@ __all__ = [
     "ProbeHealthReport",
     "ProbeStatus",
 ]
+
+
+CIRCULATION_DELTA_K: float = 1.0
+"""``|T_supply - T_return|`` of a pair that shows the manifold circulates [K].
+Moved here from the removed S6 flow watchdog (2026-10-12, v0.22.3); probe
+health only uses it to pick cycles where the water is visibly moving."""
+
+OPEN_THRESHOLD_PCT: float = 15.0
+"""Valve position at or above which a loop counts as open for the flowing
+check [%] (the former S6 ``flow_open_threshold_pct`` default; a fixed
+constant since that knob was removed, 2026-10-12, v0.22.3)."""
 
 
 # --- Module constants (deliberately NOT tuning knobs — fixed like S6's) -----
@@ -230,7 +241,7 @@ class ManifoldProbes:
         """Whether the manifold visibly circulates water this cycle.
 
         ``True`` when the main supply/return pair shows ``|delta-T| >=``
-        :data:`~tortoise_ufh.core.flow_watchdog.CIRCULATION_DELTA_K`, or at
+        :data:`CIRCULATION_DELTA_K`, or at
         least TWO loops do (one loop alone could be a drifted probe faking
         the signature). Probes in ``excluded`` (already flagged) never count.
 
@@ -420,7 +431,7 @@ class ProbeHealthMonitor:
         groups: Sequence[ManifoldProbes],
         *,
         dt_seconds: float,
-        open_threshold_pct: float,
+        open_threshold_pct: float = OPEN_THRESHOLD_PCT,
     ) -> ProbeHealthReport:
         """Advance every manifold by one control cycle.
 
@@ -429,8 +440,8 @@ class ProbeHealthMonitor:
                 appear in one group only.
             dt_seconds: Elapsed time this cycle [s] (> 0).
             open_threshold_pct: Valve position at or above which a loop
-                counts as open for the flowing check [%] (the S6
-                ``flow_open_threshold_pct``).
+                counts as open for the flowing check [%] (default
+                :data:`OPEN_THRESHOLD_PCT`).
 
         Returns:
             The :class:`ProbeHealthReport` after this cycle.

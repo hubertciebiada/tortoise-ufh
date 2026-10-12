@@ -103,7 +103,7 @@ _DEFAULT_SETPOINT_C: float = 21.0
 # valve position, so a loop commanded 0 % for hours still "flowed" — exactly
 # the stuck-open signature. The probes are now actuation-aware
 # UNCONDITIONALLY (an opt-in flag would have left the old scenarios with
-# unphysical readings and false S6 alarms): with flow the probes relax fast
+# unphysical readings): with flow the probes relax fast
 # to the source targets; in stagnation both relax to the slab temperature.
 
 _PROBE_FLOW_TAU_S: float = 120.0
@@ -114,11 +114,8 @@ _PROBE_STAGNATION_TAU_S: float = 600.0
 
 Chosen deliberately: after flow stops, the pipe water near the probes
 equilibrates with the slab/manifold environment within tens of minutes —
-much faster than the slab's own multi-hour tau. With this value the residual
-supply-return difference of a freshly closed healthy loop decays below the
-default ``flow_epsilon_k`` (0.3 K) in ~28 min, comfortably inside the 45-min
-S6 stuck-open window, so healthy scenario runs raise no flags (acceptance
-criterion 4)."""
+much faster than the slab's own multi-hour tau: the residual supply-return
+difference of a freshly closed healthy loop decays below 0.3 K in ~28 min."""
 
 _PROBE_STAGNATION_MAX_VALVE_PCT: float = 5.0
 """Physical valve opening at/below which the loop water STAGNATES [%].

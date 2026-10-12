@@ -667,12 +667,6 @@ def _manifold_views(
                         else None
                     ),
                     flags=report.flags if report is not None else (),
-                    loop_flow_status=(
-                        report.loop_flow_status if report is not None else ()
-                    ),
-                    actuation_test_loops=(
-                        report.actuation_test_loops if report is not None else ()
-                    ),
                 )
             )
         except ValueError:

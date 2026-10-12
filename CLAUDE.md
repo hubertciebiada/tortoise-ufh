@@ -34,8 +34,7 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   `PIDController`, `RoomController` (the per-room black box) + `BuildingController`
   (orchestrator), `FastSourceMachine` (`fast_source.py`: split direction/dwell machine the
   controller delegates to), `TrendEstimator` (`trend.py`: filtered dT/dt), dew point,
-  weather-comp feedforward, EN 1264 loop power, safety rules, the S6 hydraulic no-flow
-  watchdog + actuation self-test (`flow_watchdog.py`), loop water-probe health — learned
+  weather-comp feedforward, EN 1264 loop power, safety rules, loop water-probe health — learned
   still-water baselines + drift flags (`probe_health.py`, issue #16), the opt-in heat-pump link
   (`hp_link.py`), the presentation-only manifold view model for the panel's Manifolds tab
   (`manifold.py`, v0.21.0), metrics. No HA import, ever. Vendored inside the integration for a self-contained HACS
@@ -113,7 +112,8 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
 - **Later additive behaviours (no I/O-contract change, no config migration):** opt-in per-room
   quiet hours + opt-in heat-pump link (`hp_link.py`: mode/water-setpoint sync, always preserving
   `+DHW`) (v0.8.0); the S6 hydraulic no-flow watchdog + manual actuation self-test
-  (`flow_watchdog.py`, witnessed by loop supply/return probes, never valve feedback) (v0.9.0);
+  (v0.9.0, REMOVED in v0.22.3 — loop temperatures can prove flow but never its absence,
+  DECISIONS §34);
   cooling boost-hold — the floor valve holds its pre-boost position during a split boost so the
   slab keeps discharging (v0.11.0, DECISIONS §18); the panel `info` severity tier for
   intentional steady states like `cooling_disabled` (v0.11.1, §19); and the opt-in

@@ -16,9 +16,8 @@ notice a change:
   characters.
 * Integrator hygiene: mode-change reset, inactivity decay clock, bumpless
   setpoint re-seed boundary.
-* The actuation self-test gates (begin preconditions, dew abort, safety
-  abort, watchdog pause) and the fast-source reconciliation hooks
-  (farewell, group-conflict resolution).
+* The fast-source reconciliation hooks (farewell, group-conflict
+  resolution).
 * Dry-assist hysteresis (separate temperature / humidity states) and the
   governing-supply selection feeding the S1/S2 safety proxies.
 
@@ -858,88 +857,6 @@ class TestIntegratorStateMachine:
         )
         # Without the bumpless re-seed the integral would be ~2 %.
         assert out.report.i_term > 10.0
-
-
-class TestSelfTestGates:
-    """Actuation self-test: begin gates, dew abort, safety abort, watchdog."""
-
-    def _probed_cooling(self, humidity: float) -> RoomInputs:
-        """Cooling inputs with both water probes on one loop (supply 20)."""
-        return make_inputs(
-            mode=Mode.COOLING,
-            setpoint_c=24.0,
-            room_temperature_c=26.0,
-            humidity_pct=humidity,
-            loops=(LoopInput(None, 20.0, 21.0),),
-        )
-
-    def test_begin_allowed_in_heating(self) -> None:
-        """A heating room with both probes may start the test."""
-        controller = RoomController(ControllerConfig(), name="salon")
-        controller.step(
-            make_inputs(room_temperature_c=19.0, loops=(LoopInput(None, 30.0, 29.0),)),
-            dt_seconds=_DT,
-        )
-        assert controller.begin_actuation_test(1500.0) is None
-
-    def test_begin_allowed_in_cooling_with_full_dew_headroom(self) -> None:
-        """Cooling may start only with the dew throttle fully open (== 1.0)."""
-        controller = RoomController(ControllerConfig(), name="salon")
-        controller.step(self._probed_cooling(50.0), dt_seconds=_DT)
-        assert controller.begin_actuation_test(1500.0) is None
-
-    def test_running_test_continues_at_full_dew_factor(self) -> None:
-        """A cooling test with the throttle fully open keeps running."""
-        controller = RoomController(ControllerConfig(), name="salon")
-        controller.step(self._probed_cooling(50.0), dt_seconds=_DT)
-        assert controller.begin_actuation_test(1500.0) is None
-        out = controller.step(self._probed_cooling(50.0), dt_seconds=_DT)
-        assert "actuation_test_running" in out.report.flags
-        assert out.valve_position_pct == pytest.approx(100.0)
-
-    def test_running_test_aborts_when_dew_throttle_engages(self) -> None:
-        """The throttle collapsing mid-test aborts it, never "finishes by force"."""
-        controller = RoomController(ControllerConfig(), name="salon")
-        controller.step(self._probed_cooling(50.0), dt_seconds=_DT)
-        assert controller.begin_actuation_test(1500.0) is None
-        # RH 65 -> dew ~18.9, supply 20 -> gap ~1.1: factor < 1, no hard S2.
-        out = controller.step(self._probed_cooling(65.0), dt_seconds=_DT)
-        assert 0.0 < out.report.dew_throttle_factor < 1.0
-        assert "actuation_test_running" not in out.report.flags
-        assert "s2_condensation" not in out.report.flags
-
-    def test_s1_overheat_aborts_a_running_test(self) -> None:
-        """An S1 trip overrides the excursion and aborts the measurement."""
-        controller = RoomController(ControllerConfig(), name="salon")
-        controller.step(
-            make_inputs(room_temperature_c=19.0, loops=(LoopInput(None, 30.0, 29.0),)),
-            dt_seconds=_DT,
-        )
-        assert controller.begin_actuation_test(1500.0) is None
-        out = controller.step(
-            make_inputs(room_temperature_c=19.0, loops=(LoopInput(None, 45.0, 44.0),)),
-            dt_seconds=_DT,
-        )
-        assert "s1_floor_overheat" in out.report.flags
-        assert "actuation_test_running" not in out.report.flags
-
-    def test_flow_watchdog_paused_during_test(self) -> None:
-        """The S6 no-flow watchdog is held while the excursion runs (S6/C)."""
-        cfg = ControllerConfig(
-            flow_response_window_min=1.0, flow_open_threshold_pct=15.0
-        )
-        controller = RoomController(cfg, name="salon")
-        stagnant = make_inputs(
-            room_temperature_c=19.0,
-            loops=(LoopInput(None, 30.0, 30.0),),  # zero delta-T: no flow
-            circulation_evident=True,
-        )
-        controller.step(stagnant, dt_seconds=_DT)
-        assert controller.begin_actuation_test(1500.0) is None
-        for _ in range(3):
-            out = controller.step(stagnant, dt_seconds=_DT)
-            assert "actuation_test_running" in out.report.flags
-            assert "loop_no_flow" not in out.report.flags
 
 
 class TestFarewellAndGroupConflict:
