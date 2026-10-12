@@ -75,6 +75,7 @@ from .const import (
     CONF_ROOMS,
     DEFAULT_ROOM_STATE,
     DOMAIN,
+    RETIRED_CONTROLLER_KEYS,
     ROOM_STATE_LIVE,
     ROOM_STATE_OFF,
     ROOM_STATES,
@@ -512,8 +513,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # config/options flow is not a no-op; fall back to library defaults on
         # any invalid persisted value.
         merged_controller: dict[str, Any] = {
-            **entry.data.get(CONF_CONTROLLER, {}),
-            **entry.options.get(CONF_CONTROLLER, {}),
+            key: value
+            for key, value in {
+                **entry.data.get(CONF_CONTROLLER, {}),
+                **entry.options.get(CONF_CONTROLLER, {}),
+            }.items()
+            if key not in RETIRED_CONTROLLER_KEYS
         }
         try:
             controller_config = ControllerConfig(**merged_controller)
@@ -533,7 +538,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             if isinstance(room_tuning, Mapping):
                 raw_override = room_tuning.get(name, {})
                 if isinstance(raw_override, Mapping):
-                    override = dict(raw_override)
+                    override = {
+                        key: value
+                        for key, value in raw_override.items()
+                        if key not in RETIRED_CONTROLLER_KEYS
+                    }
             if not override:
                 self._controller_configs[name] = controller_config
                 continue
@@ -564,8 +573,8 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         self._hp_options: dict[str, Any] = (
             dict(raw_hp) if isinstance(raw_hp, Mapping) else {}
         )
-        # Optional GLOBAL manifold supply probe (S6 circulation gate,
-        # 2026-07-13): a top-level options key set in options -> settings.
+        # Optional GLOBAL manifold supply probe (2026-07-13): a top-level
+        # options key set in options -> settings; feeds loop-probe health.
         self._global_supply_entity: str = str(
             entry.options.get(CONF_ENTITY_GLOBAL_SUPPLY, "") or ""
         )
@@ -976,65 +985,6 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         """Cancel any pending debounced recompute (called on entry unload)."""
         self._recompute_debouncer.async_cancel()
 
-    # -- Actuation self-test (S6/C, 2026-07-13) ------------------------------
-
-    async def async_test_actuation(
-        self,
-        room_name: str,
-        *,
-        duration_s: float,
-        cancel: bool = False,
-    ) -> str | None:
-        """Start (or cancel) a room's manual actuation self-test (S6/C).
-
-        Adapter-level preconditions are validated here (the panel and the
-        ``tortoise_ufh.test_actuation`` service share this one entry point);
-        the core re-validates its own (mode, per-loop probes, dew headroom)
-        in :meth:`~tortoise_ufh.core.controller.RoomController.begin_actuation_test`.
-        A successful start/cancel schedules a debounced recompute so the
-        excursion (or the return to the PI value) is written within seconds
-        instead of at the next 5-minute cycle.
-
-        Args:
-            room_name: The room to test.
-            duration_s: Test duration [s] (the service bounds it to 20-30
-                minutes).
-            cancel: ``True`` cancels a running test instead of starting one.
-
-        Returns:
-            ``None`` on success, else a refusal reason: ``"unknown_room"``,
-            ``"not_ready"`` (no core controller yet), ``"room_not_live"``
-            (only a LIVE room may move a physical valve), ``"no_probes"``
-            (the room has no loop with BOTH water probes configured), or a
-            core refusal (``"already_running"``, ``"mode_inactive"``,
-            ``"dew_unsafe"``).
-        """
-        if room_name not in self._room_names:
-            return "unknown_room"
-        if self._building is None:
-            return "not_ready"
-        if cancel:
-            self._building.cancel_actuation_test(room_name)
-            self._schedule_recompute()
-            return None
-        if self.get_room_state(room_name) != ROOM_STATE_LIVE:
-            return "room_not_live"
-        room_cfg = next(
-            cfg
-            for cfg, name in zip(self._room_configs, self._room_names, strict=True)
-            if name == room_name
-        )
-        supplies: list[str] = list(room_cfg.get(CONF_ENTITY_SUPPLY) or [])
-        returns: list[str] = list(room_cfg.get(CONF_ENTITY_RETURN) or [])
-        if not any(
-            supplies[i] and returns[i] for i in range(min(len(supplies), len(returns)))
-        ):
-            return "no_probes"
-        reason = self._building.begin_actuation_test(room_name, duration_s=duration_s)
-        if reason is None:
-            self._schedule_recompute()
-        return reason
-
     async def async_shutdown(self) -> None:
         """Shut the coordinator down and flush the setpoint Store (K3/K5).
 
@@ -1125,15 +1075,9 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     # ~15-min EMA would carry the artefact for 2-3 cycles.
                     self._building.invalidate_trends()
             self._last_step_monotonic = now_monotonic
-            # S6 (2026-07-13): the optional global manifold supply probe
-            # feeds the building-level circulation gate; None when unset
-            # or unreadable (the per-loop witnesses still apply).
-            global_supply = self._probes.water(self._global_supply_entity or None)
             try:
                 building_outputs = self._building.step(
-                    step_inputs,
-                    dt_seconds=dt_seconds,
-                    global_supply_temperature_c=global_supply,
+                    step_inputs, dt_seconds=dt_seconds
                 )
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("BuildingController.step failed")
@@ -2148,7 +2092,6 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             manifolds_raw=self.config_entry.data.get(CONF_MANIFOLDS, []),
             global_supply_entity=self._global_supply_entity or None,
             valve_pct=valve_pct,
-            open_threshold_pct=self._global_config.flow_open_threshold_pct,
         )
 
     # -- Internal: entity reads ---------------------------------------------

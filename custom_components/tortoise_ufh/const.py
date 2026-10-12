@@ -223,11 +223,10 @@ example: ``sensor.panasonic_heat_pump_main_main_outlet_temp``."""
 
 CONF_ENTITY_GLOBAL_SUPPLY: str = "entity_global_supply"
 """Optional GLOBAL manifold supply-temperature probe (sensor, temperature;
-top-level ``entry.options`` key set in options -> settings; S6, 2026-07-13).
-Feeds the S6 hydraulic watchdog's circulation gate: when it reads clearly
-source-side of the mean room temperature, circulation is proven even while
-every per-loop probe pair sits post-valve. Unset = the gate relies on the
-per-loop delta-T witnesses only."""
+top-level ``entry.options`` key set in options -> settings; 2026-07-13).
+Loop water-probe health uses it as the main supply of a manifold without its
+own main probe (issue #16). It once also fed the S6 no-flow watchdog's
+circulation gate, removed 2026-10-12 (v0.22.3, DECISIONS §34)."""
 
 # ---------------------------------------------------------------------------
 # Configuration keys — manifolds (options flow; presentation only, v0.21.0)
@@ -360,13 +359,6 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     ("hp_flicker_stuck_minutes", 5.0, 120.0, 1.0),
     ("hp_flicker_min_off_minutes", 5.0, 120.0, 1.0),
     ("hp_flicker_max_starts_per_h", 1.0, 6.0, 1.0),
-    # S6 hydraulic no-flow watchdog (2026-07-13, issue #4). The response
-    # window's UI minimum is 30 min — the slab is slow and shorter windows
-    # would flap (the CORE accepts any positive value so simulation tests
-    # can run short windows); 1440 min effectively disables the watchdog.
-    ("flow_epsilon_k", 0.1, 3.0, 0.1),
-    ("flow_open_threshold_pct", 5.0, 100.0, 1.0),
-    ("flow_response_window_min", 30.0, 1440.0, 5.0),
 )
 """Numeric :class:`~tortoise_ufh.config.ControllerConfig` fields exposed as
 advanced knobs, each as ``(field, min, max, step)``.
@@ -420,9 +412,6 @@ CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "hp_flicker_stuck_minutes": "min",
     "hp_flicker_min_off_minutes": "min",
     "hp_flicker_max_starts_per_h": "1/h",
-    "flow_epsilon_k": "K",
-    "flow_open_threshold_pct": "%",
-    "flow_response_window_min": "min",
     "outdoor_ff_enabled": "",
     "hp_flicker_enabled": "",
 }
@@ -478,3 +467,12 @@ VALID_PERCENT_UNITS: set[str] = {"%"}
 
 VALID_POWER_UNITS: set[str] = {"W"}
 """Accepted unit strings for a power source entity (watts)."""
+
+
+RETIRED_CONTROLLER_KEYS: frozenset[str] = frozenset(
+    {"flow_epsilon_k", "flow_open_threshold_pct", "flow_response_window_min"}
+)
+"""Tuning keys of the removed S6 no-flow watchdog (2026-10-12, v0.22.3,
+DECISIONS §34). The v4 -> v5 config-entry migration strips them from the
+stored global tuning and every per-room override; any copy that still turns
+up is ignored when building a :class:`ControllerConfig`."""

@@ -320,7 +320,7 @@ class SourceReader:
         """Read a loop or manifold water probe with a sample gate (issue #16).
 
         Loop supply/return probes feed S1 (hottest supply, one sample trips),
-        S2 (coldest supply in cooling), S6 and the circulation gate, so they
+        S2 (coldest supply in cooling) and loop-probe health, so they
         get the same kind of gate as the room air (C3): a sample outside
         :data:`_WATER_PLAUSIBLE_MIN_C` .. :data:`_WATER_PLAUSIBLE_MAX_C` (the
         DS18B20 -127 / 85 degC sentinels included) or jumping more than

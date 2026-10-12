@@ -71,14 +71,14 @@ def _output(
 ) -> RoomOutputs:
     """Build a RoomOutputs for the demand gate: final valve + loop count.
 
-    The loop count travels as the length of ``report.loop_flow_status`` (the
-    S6 wrapper stamps one entry per configured loop); ``loops=0`` leaves the
-    stamp empty to exercise the gate's one-loop fallback.
+    The loop count travels as ``report.loop_count`` (the room controller
+    stamps the configured loop count); ``loops=0`` leaves the stamp at 0 to
+    exercise the gate's one-loop fallback.
     """
     return RoomOutputs(
         valve_position_pct=valve_pct,
         fast_source=FastSourceCommand(on=False),
-        report=_report(loop_flow_status=("inactive",) * loops, **report_overrides),
+        report=_report(loop_count=loops, **report_overrides),
     )
 
 

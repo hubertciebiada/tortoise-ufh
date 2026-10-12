@@ -164,9 +164,9 @@ Zakładki:
   i **surowe dane** raportu.
 - **Flagi** — **annunciator flag** (od v0.10.3 osobna zakładka; wcześniej u góry Pokoje):
   zwijana, pogrupowana **lista** (styl jak „Strojenie") wszystkich znanych flag w sekcjach
-  **Bezpieczeństwo (S1–S6) / Wspomaganie / Konfiguracja** — wiersze **wyszarzone**, gdy
+  **Bezpieczeństwo (S1–S5) / Wspomaganie / Konfiguracja** — wiersze **wyszarzone**, gdy
   nieaktywne, i **zapalone** (lewy pasek koloru severity + status „aktywna ×N pokoi", lista
-  pokoi w dymku), gdy zadziałają; zabezpieczenia noszą kod **S1–S6** na plakietce, a pod
+  pokoi w dymku), gdy zadziałają; zabezpieczenia noszą kod **S1–S5** na plakietce, a pod
   ikoną **„i"** przy każdej fladze jest pełne objaśnienie (§12). Nagłówek zwija/rozwija
   listę, a nawet po zwinięciu pokazuje plakietkę podsumowania.
 - **Strojenie** — nastawy globalne + rzadkie nadpisania per pokój (§8), od v0.8.0
@@ -189,9 +189,8 @@ Zakładki:
   rozdzielacza z żywymi wartościami przy obwodach (otwarcie siłownika koloruje jego
   korpus i opuszcza wskaźnik rotametru (0 u góry skali, jak w prawdziwym przepływomierzu); nad każdą pętlą jej etykieta, przy siłowniku
   otwarcie, pod króćcami zasilanie i powrót) oraz **tabela pętli** (Pętla · Otwarcie
-  z paskiem · Zasilanie · Powrót · ΔT · Stan z flagami dotyczącymi pętli: brak
-  przepływu S6, rozjazd zaworu, nieudany test aktuacji, S1/S2). Każda wartość, za
-  którą stoi encja, to ukryty odnośnik (tylko kursor) do natywnego okna encji
+  z paskiem · Zasilanie · Powrót · ΔT · Stan z flagami zaworowymi pokoju: S1/S2,
+  rozjazd zaworu). Każda wartość, za którą stoi encja, to ukryty odnośnik (tylko kursor) do natywnego okna encji
   z historią. Otwarcie to pozycja zgłaszana przez siłownik, a gdy jej brak — komenda
   regulatora; obwód bez pętli jest rysowany bez etykiet. Bez rozdzielaczy zakładka
   podpowiada, gdzie je skonfigurować (§4).
@@ -232,10 +231,10 @@ Encje per pokój (każdy pokój jest urządzeniem, można przypisać do obszaru 
 - sensory diagnostyczne: zalecane otwarcie zaworu, uchyb, trend, punkt rosy,
   człon całkujący, człon trendu, tryb szybkiego źródła, wyjaśnienie decyzji,
 - binarne: utrata czujnika, nasycenie wyjścia, aktywna ochrona przed kondensacją,
-  usterka przepływu (`flow_fault`, watchdog S6 — §8/§12), dryf czujnika pętli
+  dryf czujnika pętli
   (`probe_fault`: czujnik zasilania lub powrotu pętli odszedł od wyuczonej linii
   bazowej przy stojącej wodzie albo przy przepływie odbiega od zasilania głównego
-  rozdzielacza; taki czujnik jest wyłączany z danych bezpieczeństwa S1/S2/S6, a
+  rozdzielacza; taki czujnik jest wyłączany z danych bezpieczeństwa S1/S2, a
   atrybuty encji pokazują linię bazową i odchyłkę każdego czujnika pokoju).
 
 Usługi (domena `tortoise_ufh`):
@@ -356,24 +355,6 @@ sprzężeniem — §11)**
 | **Bazowa temperatura wody chłodzenia** (`cooling_supply_base_c`) | °C | 18 | Nastawa wody chłodzenia pisana do pompy, gdy dom chłodzi: zapisywana wartość to maksimum z tej bazy i globalnego bezpiecznego punktu rosy — nigdy poniżej punktu rosy. Działa tylko przy skonfigurowanej encji nastawy chłodzenia (opcje → Pompa ciepła). Parametr globalny — nie da się go nadpisać per pokój. Domyślnie 18 °C. |
 | **Bazowa temperatura wody grzania** (`heating_supply_base_c`) | °C | 26 | Zasilanie wody grzewczej przy neutralnej temperaturze zewnętrznej (parametr „Temperatura neutralna członu pogodowego", domyślnie 15 °C). Poniżej niej nastawa rośnie według nachylenia krzywej; całość obcinana do 20–40 °C. Pisana do pompy tylko przy skonfigurowanej encji nastawy grzania — domyślnie pompa jedzie na własnej krzywej. Parametr globalny. Domyślnie 26 °C. |
 | **Nachylenie krzywej wody grzania** (`heating_supply_slope`) | K/K | 0,5 | O ile kelwinów rośnie nastawa wody grzania na każdy 1 K temperatury zewnętrznej poniżej temperatury neutralnej. Domyślnie 0,5 K/K; typowo 0,3–0,8 dla dobrze ocieplonego domu z podłogówką. |
-
-**Watchdog przepływu (S6; działa tylko z czujnikami zasilania i powrotu pętli)**
-
-| Parametr | Jednostka | Domyślnie | Co robi i kiedy ruszać |
-|---|---|---|---|
-| **Minimalna ΔT uznawana za przepływ** (`flow_epsilon_k`) | K | 0,3 | Najmniejsza różnica zasilanie−powrót pętli, którą watchdog uznaje za dowód, że woda faktycznie płynie. Poniżej niej (i bez ruchu sond ku źródłu) otwarta komenda bez odpowiedzi hydraulicznej podnosi flagę „brak przepływu". Podnieś przy szumiących czujnikach. |
-| **Próg komendy otwarcia watchdoga** (`flow_open_threshold_pct`) | % | 15 | Od jakiej komendy zaworu pętla ma obowiązek pokazać odpowiedź hydrauliczną. Poniżej progu pętla nie jest oceniana pod kątem braku przepływu. |
-| **Okno odpowiedzi hydraulicznej** (`flow_response_window_min`) | min | 45 | Ile minut ciągłego braku sygnatury przepływu (przy otwartej komendzie i wiarygodnej cyrkulacji) podnosi flagę; to samo okno pilnuje zaworu, który nie domyka. Płyta jest wolna — minimum 30 min, żeby uniknąć trzepotania; 1440 praktycznie wyłącza watchdoga. |
-
-Watchdog to niezależny, **fizyczny** świadek pracy zaworów: opiera się wyłącznie na
-czujnikach wody pętli i **nie ufa** pozycji zgłaszanej przez encję zaworu (ten kanał
-potrafi „echować" komendę po restarcie kontrolera — realna awaria z lata 2026, gdy
-zawory stały, a raportowały posłuszeństwo). Reakcja jest bierna: flaga + encja
-`binary_sensor` „usterka przepływu" + zamrożenie integratora; watchdog sam nie rusza
-zaworem. W zakładce Rozdzielacze pętla bez przepływu dostaje flagę (ok / brak przepływu? / nie
-domyka?) oraz przycisk **ręcznego testu aktuacji** — zawór jest celowo otwierany na
-100 % na 20–30 min, a o wyniku decyduje odpowiedź sond (do uruchamiania po serwisie lub
-zdarzeniu zasilania; przerywany przez reguły bezpieczeństwa).
 
 ## 9. Chłodzenie podłogowe i kondensacja
 
@@ -616,7 +597,7 @@ Wszystkie te flagi widzisz też jako **annunciator w osobnej zakładce „Flagi"
 od v0.10.3 własna zakładka, wcześniej u góry Pokoje) —
 zwijaną, pogrupowaną **listę** (styl jak „Strojenie"): każda flaga to wiersz — **wyszarzony**,
 gdy nieaktywna, i **zapalony** (lewy pasek koloru + status „aktywna ×N pokoi"), gdy zadziała.
-Zabezpieczenia noszą kod **S1–S6**, a pod ikoną **„i"** przy każdej fladze jest jej pełne
+Zabezpieczenia noszą kod **S1–S5**, a pod ikoną **„i"** przy każdej fladze jest jej pełne
 objaśnienie. Lista renderuje się z jednego rejestru — nowa flaga pojawia się w niej
 automatycznie. Pełny słownik poniżej:
 
@@ -645,9 +626,6 @@ automatycznie. Pełny słownik poniżej:
 | `s5_watchdog` | Brak świeżych danych pokoju > 15 min — pozycja neutralna, alarm w raporcie. | Sprawdź czujniki/sieć; kasuje się po 5 min ciągłych świeżych danych. |
 | `unknown_room` | Pokój bez konfiguracji regulatora (stan przejściowy po zmianach konfiguracji). | Przeładuj integrację; jeśli trwa — usuń i dodaj pokój. |
 | `controller_error` | Wyjątek w regulatorze pokoju — bezpieczna degradacja (w grzaniu zawór trzyma pozycję, w chłodzeniu 0; split OFF). | Zajrzyj do logów HA i zgłoś problem (patrz §13). |
-| `loop_no_flow` | Watchdog przepływu (S6): zawór jest otwarty od dłuższego czasu, ale sondy pętli nie widzą przepływu wody — integrator zamrożony, encja „usterka przepływu" włączona. | Sprawdź kontroler zaworów/siłownik i przepływ na rozdzielaczu (rotametry). Watchdog nie ufa feedbackowi zaworu — patrz §8, „Watchdog przepływu". |
-| `actuation_test_running` | Trwa ręczny test aktuacji tego pokoju (zawór celowo na 100 %). | Informacyjne. Zaczekaj do końca albo anuluj w panelu. |
-| `actuation_test_failed` | Test aktuacji zakończony niepowodzeniem — pętla nie odpowiedziała hydraulicznie na otwarcie. | Sprawdź kontroler/siłownik/przepływ tej pętli. |
 
 ## 13. Rozwiązywanie problemów
 
@@ -704,6 +682,22 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **0.22.3 (2026-10-12)** — **usunięty watchdog przepływu (S6)** razem ze wszystkim, co do
+  niego należało: flagą `loop_no_flow` i wywoływanym przez nią zamrożeniem integratora,
+  encją binarną „usterka przepływu" (`flow_fault`), ręcznym **testem aktuacji** (usługa
+  `tortoise_ufh.test_actuation`, flagi `actuation_test_running` / `actuation_test_failed`,
+  przycisk w panelu i werdykty per pętla), bramką cyrkulacji budynku oraz trzema parametrami
+  strojenia z grupy „Watchdog przepływu (S6)" (`flow_epsilon_k`, `flow_open_threshold_pct`,
+  `flow_response_window_min`). Powód: temperatury wody w pętli potrafią dowieść, że woda
+  płynie, ale nigdy, że *nie* płynie (krótka pętla albo woda o temperaturze posadzki nie
+  zostawia śladu, a belka rozdzielacza grzeje/chłodzi sondy przez przewodzenie), więc
+  wykrywanie dawało fałszywe alarmy i zamrażało integrator PI. Zablokowany lub „echujący"
+  siłownik nie jest już wykrywany automatycznie. Bez zmian zostaje zdrowie sond pętli
+  (`probe_drift`, encja `probe_fault`, usługa `reset_probe_baselines`) i reguły S1–S5;
+  grupy flag w panelu mają teraz etykietę „S1–S5", a kolumna Stan w zakładce Rozdzielacze
+  pokazuje tylko flagi zaworowe pokoju (S1/S2, rozjazd zaworu). Zapisane per pokój
+  nadpisanie `flow_epsilon_k` jest usuwane automatycznie przy aktualizacji (migracja
+  konfiguracji v4→v5).
 - **0.12.0 (2026-07-14)** — **niemiecki (DE) interfejs i dokumentacja** + porządki w
   dokumentach. Aplikacja (panel, encje, kreator konfiguracji, usługi) ma teraz pełne
   tłumaczenie niemieckie, z fallbackiem do angielskiego dla pozostałych języków. Manual

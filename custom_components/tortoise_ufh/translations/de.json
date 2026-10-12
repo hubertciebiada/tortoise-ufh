@@ -72,9 +72,6 @@
           "ff_neutral_c": "Neutrale Außentemperatur der Vorsteuerung (°C)",
           "ff_gain_pct_per_k": "Verstärkung der Vorsteuerung (%/K)",
           "ff_max_pct": "Obergrenze der Vorsteuerung (%)",
-          "flow_epsilon_k": "Durchfluss-Watchdog: minimale ΔT, die als Durchfluss gilt (K)",
-          "flow_open_threshold_pct": "Durchfluss-Watchdog: Schwelle des Öffnungsbefehls (%)",
-          "flow_response_window_min": "Durchfluss-Watchdog: Antwortfenster (min)",
           "outdoor_ff_enabled": "Außen-Vorsteuerung aktiviert"
         }
       },
@@ -147,14 +144,11 @@
           "ff_neutral_c": "Neutrale Außentemperatur der Vorsteuerung (°C)",
           "ff_gain_pct_per_k": "Verstärkung der Vorsteuerung (%/K)",
           "ff_max_pct": "Obergrenze der Vorsteuerung (%)",
-          "flow_epsilon_k": "Durchfluss-Watchdog: minimale ΔT, die als Durchfluss gilt (K)",
-          "flow_open_threshold_pct": "Durchfluss-Watchdog: Schwelle des Öffnungsbefehls (%)",
-          "flow_response_window_min": "Durchfluss-Watchdog: Antwortfenster (min)",
           "outdoor_ff_enabled": "Außen-Vorsteuerung aktiviert",
           "entity_global_supply": "Globaler Vorlauftemperatursensor am Verteiler (optional)"
         },
         "data_description": {
-          "entity_global_supply": "Optionale Sonde am Vorlaufbalken des Verteilers, vor den Heizkreisventilen. Sie speist das Zirkulations-Gate des hydraulischen Durchfluss-Watchdogs: Wenn sie klar quellseitig gegenüber der mittleren Raumtemperatur misst, gilt die Zirkulation als nachgewiesen, selbst wenn jede Heizkreis-Sonde hinter dem Ventil sitzt. Hinweis: Während WW-Bereitung/Abtauung (Entität „Pumpe verfügbar“ aus) ignoriert das Gate diese Sonde."
+          "entity_global_supply": "Optionaler Fühler am Vorlaufbalken des Verteilers, vor den Kreisventilen. Die Überwachung der Kreisfühler nutzt ihn als Hauptvorlauf eines Verteilers ohne eigenen Hauptfühler."
         }
       },
       "add_room": {
@@ -445,9 +439,6 @@
       "s2_condensation_active": {
         "name": "Kondensationsschutz aktiv"
       },
-      "flow_fault": {
-        "name": "Durchflussstörung im Heizkreis"
-      },
       "probe_fault": {
         "name": "Drift eines Heizkreisfühlers"
       }
@@ -499,24 +490,6 @@
         "mode": {
           "name": "Modus",
           "description": "Betriebsmodus des Systems (Heizung / Übergang / Kühlung / Aus)."
-        }
-      }
-    },
-    "test_actuation": {
-      "name": "Aktuierung testen",
-      "description": "Führt einen manuellen Aktuator-Selbsttest für einen Raum aus: Das Ventil wird für die angegebene Dauer bewusst auf 100 % gefahren, und die hydraulische Antwort des Heizkreises (Vorlauf-/Rücklaufsonden) entscheidet über Bestehen oder Nichtbestehen. Gedacht zur Ausführung nach Wartung oder einem Stromereignis — niemals geplant. Erfordert, dass der Raum AKTIV ist und Wassersonden konfiguriert sind; Sicherheitsregeln (Überhitzung, Kondensation) brechen den Test ab.",
-      "fields": {
-        "room": {
-          "name": "Raum",
-          "description": "Bezeichner des zu testenden Raums."
-        },
-        "duration_minutes": {
-          "name": "Dauer",
-          "description": "Testdauer in Minuten (20-30; Standard 25)."
-        },
-        "cancel": {
-          "name": "Abbrechen",
-          "description": "Bricht den laufenden Selbsttest des Raums ab, anstatt einen zu starten."
         }
       }
     },

@@ -14,12 +14,8 @@ reach:
   the 300 s default, unknown-room degradation without breaking the
   remaining rooms, and the K5 controller-error degrade echo.
 * ``_unknown_room_output`` — the closed-valve, fast-OFF safe output.
-* ``_circulation_evident`` — the S6 building-level circulation gate
-  (loop delta-T evidence, global-probe margins, the judged/None tri-state).
 * ``_band_excess_k`` — the group arbiter's demand strength
   ``max(0, |error| - deadband)``.
-* ``begin_actuation_test`` / ``cancel_actuation_test`` — the adapter hooks
-  (``"unknown_room"`` refusal, start, cancel).
 
 Units: temperatures in degC, ``dt_seconds`` in seconds. This module never
 imports ``homeassistant``.
@@ -36,13 +32,8 @@ from custom_components.tortoise_ufh.core.controller import (
     classify_dew_eligibility,
 )
 from custom_components.tortoise_ufh.core.dew_point import dew_point
-from custom_components.tortoise_ufh.core.flow_watchdog import (
-    CIRCULATION_DELTA_K,
-    GLOBAL_SUPPLY_MARGIN_K,
-)
 from custom_components.tortoise_ufh.core.models import (
     FastSourceMode,
-    LoopInput,
     Mode,
     RoomInputs,
     RoomOutputs,
@@ -249,87 +240,6 @@ class TestBuildingStep:
         )
 
 
-class TestCirculationGate:
-    """S6: the building-level circulation tri-state (True / False / None)."""
-
-    def test_no_evidence_returns_none(self) -> None:
-        """No loop probes and no global probe: nothing can judge -> None."""
-        out = BuildingController._circulation_evident({"salon": make_inputs()}, None)
-        assert out is None
-
-    def test_probeless_first_loop_does_not_stop_the_scan(self) -> None:
-        """A loop without both probes is SKIPPED, not a stop for the rest."""
-        inputs = {
-            "salon": make_inputs(
-                loops=(
-                    LoopInput(None, None, None),
-                    LoopInput(None, 30.0, 28.0),
-                )
-            )
-        }
-        assert BuildingController._circulation_evident(inputs, None) is True
-
-    def test_loop_delta_at_threshold_is_circulation(self) -> None:
-        """``|supply - return| == CIRCULATION_DELTA_K`` already proves flow."""
-        inputs = {
-            "salon": make_inputs(
-                loops=(LoopInput(None, 30.0, 30.0 - CIRCULATION_DELTA_K),)
-            )
-        }
-        assert BuildingController._circulation_evident(inputs, None) is True
-
-    def test_loop_delta_below_threshold_judges_false(self) -> None:
-        """Evidence exists but shows no circulation -> False (not None)."""
-        inputs = {"salon": make_inputs(loops=(LoopInput(None, 30.0, 29.5),))}
-        assert BuildingController._circulation_evident(inputs, None) is False
-
-    def test_global_probe_needs_room_temperatures(self) -> None:
-        """Without any room temperature the global probe cannot judge."""
-        inputs = {"salon": make_inputs(room_temperature_c=None)}
-        assert BuildingController._circulation_evident(inputs, 40.0) is None
-
-    def test_global_probe_compares_against_the_mean(self) -> None:
-        """Heating: supply >= mean(temps) + margin proves circulation."""
-        inputs = {
-            "a": make_inputs(room_temperature_c=20.0),
-            "b": make_inputs(room_temperature_c=22.0),
-        }
-        # mean 21.0, margin 3.0 -> threshold 24.0; 24.5 proves flow.
-        assert BuildingController._circulation_evident(inputs, 24.5) is True
-
-    def test_heating_supply_at_margin_boundary_is_circulation(self) -> None:
-        """Heating: supply exactly at ``t_mean + margin`` counts (>=)."""
-        inputs = {"salon": make_inputs(room_temperature_c=20.0)}
-        supply = 20.0 + GLOBAL_SUPPLY_MARGIN_K
-        assert BuildingController._circulation_evident(inputs, supply) is True
-
-    def test_heating_supply_inside_margin_judges_false(self) -> None:
-        """Heating with supply inside the margin: judged, no flow -> False."""
-        inputs = {"salon": make_inputs(room_temperature_c=20.0)}
-        assert BuildingController._circulation_evident(inputs, 21.0) is False
-
-    def test_cooling_hot_supply_judges_false(self) -> None:
-        """A cooling building with a HOT supply shows no circulation."""
-        inputs = {"salon": make_inputs(mode=Mode.COOLING, room_temperature_c=25.0)}
-        assert BuildingController._circulation_evident(inputs, 30.0) is False
-
-    def test_heating_cold_supply_judges_false(self) -> None:
-        """A heating building with a COLD supply shows no circulation."""
-        inputs = {"salon": make_inputs(room_temperature_c=20.0)}
-        assert BuildingController._circulation_evident(inputs, 10.0) is False
-
-    def test_cooling_supply_at_margin_boundary_is_circulation(self) -> None:
-        """Cooling: supply exactly at ``t_mean - margin`` counts (<=)."""
-        inputs = {"salon": make_inputs(mode=Mode.COOLING, room_temperature_c=25.0)}
-        supply = 25.0 - GLOBAL_SUPPLY_MARGIN_K
-        assert BuildingController._circulation_evident(inputs, supply) is True
-
-    def test_cooling_supply_inside_margin_judges_false(self) -> None:
-        """Cooling with supply above the margin: judged, no flow -> False."""
-        inputs = {"salon": make_inputs(mode=Mode.COOLING, room_temperature_c=25.0)}
-        assert BuildingController._circulation_evident(inputs, 24.0) is False
-
-
 class TestBandExcess:
     """The group arbiter's demand strength ``max(0, |error| - deadband)``."""
 
@@ -344,28 +254,3 @@ class TestBandExcess:
         # Inside the band the excess clamps to 0.
         inside = make_inputs(setpoint_c=21.0, room_temperature_c=21.1)
         assert building._band_excess_k(inside, "salon") == 0.0
-
-
-class TestActuationTestHooks:
-    """The S6/C actuation self-test adapter hooks on the building level."""
-
-    def test_begin_and_cancel_actuation_test(self) -> None:
-        """Unknown rooms refuse/no-op; a known room starts and cancels."""
-        building = BuildingController({"salon": ControllerConfig()})
-        inputs = make_inputs(
-            room_temperature_c=19.0, loops=(LoopInput(None, 32.0, 28.0),)
-        )
-        building.step({"salon": inputs}, dt_seconds=300.0)
-        # Unknown room: a named refusal, and cancel is a silent no-op.
-        assert building.begin_actuation_test("ghost", duration_s=900.0) == (
-            "unknown_room"
-        )
-        building.cancel_actuation_test("ghost")
-        # Known room: the test starts (None) and runs on the next cycle.
-        assert building.begin_actuation_test("salon", duration_s=900.0) is None
-        running = building.step({"salon": inputs}, dt_seconds=300.0)
-        assert "actuation_test_running" in running.rooms["salon"].report.flags
-        # Cancel: the next cycle no longer carries the excursion.
-        building.cancel_actuation_test("salon")
-        after = building.step({"salon": inputs}, dt_seconds=300.0)
-        assert "actuation_test_running" not in after.rooms["salon"].report.flags

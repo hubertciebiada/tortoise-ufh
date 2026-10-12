@@ -1,6 +1,6 @@
 """Config flow for the Tortoise-UFH integration.
 
-Implements the multi-step setup wizard (``VERSION = 4``) and the options flow.
+Implements the multi-step setup wizard (``VERSION = 5``) and the options flow.
 
 Wizard steps:
     1. ``user``       — home location (latitude / longitude, decimal degrees).
@@ -800,7 +800,7 @@ def _manifold_schema_dict(
 class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
     """Multi-step setup wizard for Tortoise-UFH."""
 
-    VERSION = 4
+    VERSION = 5
 
     @staticmethod
     def async_get_options_flow(
@@ -1266,7 +1266,7 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         panel and the per-room ``select`` entities. Writes the state map to
         ``entry.options[CONF_ROOM_STATE]``. An unknown or invalid persisted
         state falls back to :data:`DEFAULT_ROOM_STATE` (``off``). Also hosts
-        the OPTIONAL global manifold supply probe (S6, 2026-07-13) stored as
+        the OPTIONAL global manifold supply probe (2026-07-13) stored as
         the top-level ``entry.options[CONF_ENTITY_GLOBAL_SUPPLY]``; leaving
         the picker empty removes the key.
         """

@@ -8,10 +8,6 @@ coordinator's typed :class:`~.coordinator.CoordinatorData`:
 * ``output_saturated`` — the computed valve position hit a 0 % or 100 % bound.
 * ``s2_condensation_active`` (device class ``PROBLEM``) — the per-room S2
   dew-point protection fully throttled floor cooling to avoid condensation.
-* ``flow_fault`` (device class ``PROBLEM``) — the S6 hydraulic no-flow
-  watchdog latched ``loop_no_flow`` on any of the room's loops (2026-07-13,
-  issue #4): the valve was commanded open but the loop shows no hydraulic
-  response.
 * ``probe_fault`` (device class ``PROBLEM``) — one of the room's loop
   supply/return probes left its learned still-water baseline or disagrees
   with the manifold main supply while flowing (``probe_drift``, issue #16).
@@ -20,8 +16,9 @@ coordinator's typed :class:`~.coordinator.CoordinatorData`:
 
 The former ``live_control`` binary sensor was retired in v0.5.0 — it merely
 mirrored ``control_state == "live"`` and is fully covered by the per-room
-control-state select; orphaned registry entries are purged on setup
-(``__init__._async_purge_retired_entities``).
+control-state select. The ``flow_fault`` binary sensor of the S6 no-flow
+watchdog was retired in v0.22.3 (DECISIONS §34). Orphaned registry entries of
+both are purged on setup (``__init__._async_purge_retired_entities``).
 
 Every sensor is ``EntityCategory.DIAGNOSTIC`` and read-only, joins its room's
 device and is named via ``translation_key``. The entities are
@@ -64,9 +61,6 @@ _FLAG_S2_CONDENSATION = "s2_condensation"
 # 2026-07-12 (B7): the "condensation protection active" entity keeps firing
 # on EITHER layer, exactly like it did when both shared one flag string.
 _FLAG_S2_THROTTLE = "s2_throttle"
-# S6 hydraulic watchdog flag (2026-07-13, issue #4): the loop shows no
-# hydraulic response to an open valve command.
-_FLAG_LOOP_NO_FLOW = "loop_no_flow"
 # Loop water-probe health flag (issue #16), stamped by the adapter.
 _FLAG_PROBE_DRIFT = "probe_drift"
 
@@ -131,22 +125,6 @@ def _s2_condensation_active(runtime: RoomRuntime) -> bool:
     return _FLAG_S2_CONDENSATION in flags or _FLAG_S2_THROTTLE in flags
 
 
-def _flow_fault(runtime: RoomRuntime) -> bool:
-    """Return whether the S6 hydraulic watchdog latched a flow fault (S6).
-
-    Fires on ``loop_no_flow`` (2026-07-13, issue #4): the valve was commanded
-    open but the loop shows no hydraulic response — the frozen-actuator
-    incident. A single PROBLEM entity per room is the automation hook.
-
-    Args:
-        runtime: The room's runtime payload.
-
-    Returns:
-        ``True`` when the ``loop_no_flow`` flag is present in the report flags.
-    """
-    return _FLAG_LOOP_NO_FLOW in runtime.report.flags
-
-
 def _probe_fault(runtime: RoomRuntime) -> bool:
     """Return whether one of the room's loop probes is flagged (issue #16).
 
@@ -180,13 +158,6 @@ ROOM_BINARY_SENSORS: tuple[TortoiseUfhBinarySensorEntityDescription, ...] = (
         device_class=BinarySensorDeviceClass.PROBLEM,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_s2_condensation_active,
-    ),
-    TortoiseUfhBinarySensorEntityDescription(
-        key="flow_fault",
-        translation_key="flow_fault",
-        device_class=BinarySensorDeviceClass.PROBLEM,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=_flow_fault,
     ),
     TortoiseUfhBinarySensorEntityDescription(
         key="probe_fault",

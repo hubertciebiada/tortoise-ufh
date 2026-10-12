@@ -169,23 +169,6 @@ class ControllerConfig:
             short-cycle. 100 = one fully open loop; the UI caps the value
             dynamically at ``total loops x 100`` (the core cannot know the
             loop count, hence the loose static upper bound). GLOBAL knob.
-        flow_epsilon_k: Minimum loop supply-return temperature difference
-            counting as flow evidence for the S6 hydraulic no-flow watchdog
-            [K] (> 0; 2026-07-13, S6). Below it — and with no probe
-            displacement toward the source — an open valve command with no
-            hydraulic response raises ``loop_no_flow``. Raise for noisy
-            probes; lower with care.
-        flow_open_threshold_pct: Valve command above which the S6 watchdog
-            starts expecting a hydraulic response from the loop [%] (in
-            [0, 100]; 2026-07-13, S6). Below it the loop is not evaluated
-            for no-flow.
-        flow_response_window_min: Minutes of continuous missing flow
-            signature (with an open command and plausible circulation)
-            before ``loop_no_flow`` is raised [min] (> 0;
-            2026-07-13, S6). The slab is slow — the UI enforces a 30-min
-            minimum (the core accepts any positive value so simulation
-            tests can use short windows); the 1440-min maximum effectively
-            disables the watchdog.
         cycle_seconds: Nominal control-cycle period [s] (> 0, default 300 = 5
             minutes).
         valve_write_threshold_pct: Minimum valve change before a new value is
@@ -245,11 +228,6 @@ class ControllerConfig:
     hp_flicker_min_off_minutes: float = 20.0
     hp_flicker_max_starts_per_h: float = 2.0
     hp_flicker_min_open_pct: float = 250.0
-    # S6 hydraulic no-flow watchdog knobs (2026-07-13): thresholds/windows of
-    # the loop-probe actuation witness; see core/flow_watchdog.py.
-    flow_epsilon_k: float = 0.3
-    flow_open_threshold_pct: float = 15.0
-    flow_response_window_min: float = 45.0
     cycle_seconds: float = 300.0
     # 2.0 -> 5.0 (2026-07-12, K2b): measured on the twin (steady_heating
     # @ 300 s, tail 24-48 h), the 2 pp threshold did NOT bound kt's noise
@@ -276,10 +254,7 @@ class ControllerConfig:
                 ``hp_flicker_stuck_minutes`` [5, 120],
                 ``hp_flicker_min_off_minutes`` [5, 120],
                 ``hp_flicker_max_starts_per_h`` [1, 6],
-                ``hp_flicker_min_open_pct`` [100, 10000]), or an S6 watchdog
-                knob is out of range (``flow_epsilon_k`` > 0,
-                ``flow_open_threshold_pct`` [0, 100],
-                ``flow_response_window_min`` > 0).
+                ``hp_flicker_min_open_pct`` [100, 10000]).
         """
         for gain_name, gain in (
             ("kp", self.kp),
@@ -388,21 +363,6 @@ class ControllerConfig:
             msg = (
                 "hp_flicker_min_open_pct must be in [100, 10000], got "
                 f"{self.hp_flicker_min_open_pct}"
-            )
-            raise ValueError(msg)
-        if self.flow_epsilon_k <= 0:
-            msg = f"flow_epsilon_k must be > 0, got {self.flow_epsilon_k}"
-            raise ValueError(msg)
-        if not 0.0 <= self.flow_open_threshold_pct <= 100.0:
-            msg = (
-                "flow_open_threshold_pct must be in [0, 100], got "
-                f"{self.flow_open_threshold_pct}"
-            )
-            raise ValueError(msg)
-        if self.flow_response_window_min <= 0:
-            msg = (
-                "flow_response_window_min must be > 0, got "
-                f"{self.flow_response_window_min}"
             )
             raise ValueError(msg)
         if self.cycle_seconds <= 0:

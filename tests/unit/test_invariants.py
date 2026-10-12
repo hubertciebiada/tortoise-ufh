@@ -147,7 +147,6 @@ def _inputs(
         fast_source_hvac_mode=draw(st.one_of(st.none(), _HVAC)),
         humidity_stale_frac=draw(st.floats(0.0, 1.0)),
         fast_source_allowed=draw(st.booleans()),
-        circulation_evident=draw(st.one_of(st.none(), st.booleans())),
     )
 
 

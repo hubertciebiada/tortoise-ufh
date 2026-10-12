@@ -122,10 +122,11 @@ def _async_purge_retired_entities(
 
     v0.5.0 retired the per-room ``live_control`` binary sensor (it merely
     mirrored ``control_state == "live"``, fully covered by the control-state
-    select). The platform no longer creates it, so on upgrade its registry
-    entries would linger as orphans — sweep them here on every setup. This is
-    plain registry hygiene keyed on the frozen unique-id suffix; it needs no
-    config-entry version bump (unlike the v1 -> v2 data migration).
+    select); v0.22.3 retired the per-room ``flow_fault`` binary sensor with the
+    S6 no-flow watchdog (DECISIONS §34). The platform no longer creates them,
+    so on upgrade their registry entries would linger as orphans — sweep them
+    here on every setup. This is plain registry hygiene keyed on the frozen
+    unique-id suffixes; it needs no config-entry version bump.
 
     Args:
         hass: The Home Assistant instance.
@@ -136,12 +137,10 @@ def _async_purge_retired_entities(
     registry = er.async_get(hass)
     for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
         if reg_entry.domain == "binary_sensor" and reg_entry.unique_id.endswith(
-            "_live_control"
+            ("_live_control", "_flow_fault")
         ):
             registry.async_remove(reg_entry.entity_id)
-            _LOGGER.debug(
-                "Purged retired live_control binary sensor %s", reg_entry.entity_id
-            )
+            _LOGGER.debug("Purged retired binary sensor %s", reg_entry.entity_id)
 
 
 async def async_migrate_entry(
@@ -175,8 +174,15 @@ async def async_migrate_entry(
     a helper writes an automation calling ``select.select_option``. No registry
     cleanup is needed — the key never had an entity of its own.
 
+    v4 -> v5 (S6 no-flow watchdog removed, 2026-10-12, v0.22.3; DECISIONS §34):
+    the watchdog's three tuning keys (``flow_epsilon_k``,
+    ``flow_open_threshold_pct``, ``flow_response_window_min``) are stripped
+    from the global tuning (``data`` and ``options``) and from every per-room
+    override; a room override left empty is dropped. Without this an old key
+    would make ``ControllerConfig(**kwargs)`` reject the whole tuning.
+
     A v1 entry passes every block sequentially in one call (each block ends at
-    the version the next one picks up) and lands on v4.
+    the version the next one picks up) and lands on v5.
 
     Args:
         hass: The Home Assistant instance.
@@ -189,13 +195,16 @@ async def async_migrate_entry(
     from homeassistant.helpers import entity_registry as er
 
     from .const import (
+        CONF_CONTROLLER,
         CONF_LIVE_CONTROL,
         CONF_PARTICIPATES,
         CONF_ROOM_NAME,
         CONF_ROOM_STATE,
+        CONF_ROOM_TUNING,
         CONF_ROOMS,
         DEFAULT_PARTICIPATES,
         DOMAIN,
+        RETIRED_CONTROLLER_KEYS,
         ROOM_STATE_LIVE,
         ROOM_STATE_OFF,
         ROOM_STATE_SHADOW,
@@ -208,7 +217,7 @@ async def async_migrate_entry(
     # likewise no longer a named constant, kept only to purge it from data.
     legacy_mode_entity_key = "entity_mode"
 
-    if entry.version > 4:
+    if entry.version > 5:
         # Downgrade from an unknown future version is not supported.
         return False
 
@@ -300,6 +309,37 @@ async def async_migrate_entry(
         hass.config_entries.async_update_entry(entry, data=new_data_v4, version=4)
         _LOGGER.debug(
             "Migrated Tortoise-UFH entry %s to v4 (retired the mode entity)",
+            entry.entry_id,
+        )
+
+    if entry.version == 4:
+        # S6 no-flow watchdog removed (2026-10-12, v0.22.3; DECISIONS §34).
+        def _strip(tuning: Any) -> Any:
+            if not isinstance(tuning, dict):
+                return tuning
+            return {
+                key: value
+                for key, value in tuning.items()
+                if key not in RETIRED_CONTROLLER_KEYS
+            }
+
+        new_data_v5 = dict(entry.data)
+        if CONF_CONTROLLER in new_data_v5:
+            new_data_v5[CONF_CONTROLLER] = _strip(new_data_v5[CONF_CONTROLLER])
+        new_options_v5 = dict(entry.options)
+        if CONF_CONTROLLER in new_options_v5:
+            new_options_v5[CONF_CONTROLLER] = _strip(new_options_v5[CONF_CONTROLLER])
+        room_tuning = new_options_v5.get(CONF_ROOM_TUNING)
+        if isinstance(room_tuning, dict):
+            stripped = {name: _strip(t) for name, t in room_tuning.items()}
+            new_options_v5[CONF_ROOM_TUNING] = {
+                name: t for name, t in stripped.items() if t
+            }
+        hass.config_entries.async_update_entry(
+            entry, data=new_data_v5, options=new_options_v5, version=5
+        )
+        _LOGGER.debug(
+            "Migrated Tortoise-UFH entry %s to v5 (retired the S6 tuning keys)",
             entry.entry_id,
         )
 

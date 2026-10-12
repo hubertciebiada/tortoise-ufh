@@ -177,10 +177,10 @@ Reiter:
   Abschnitt **Diagnose-Entitäten** und die **Rohdaten** des Berichts.
 - **Meldungen** — der **Meldungs-Annunciator** (seit v0.10.3 ein eigener Reiter;
   früher oben in Räume): eine einklappbare, gruppierte **Liste** (Stil wie
-  „Abstimmung“) aller bekannten Meldungen in den Abschnitten **Sicherheit (S1–S6) /
+  „Abstimmung“) aller bekannten Meldungen in den Abschnitten **Sicherheit (S1–S5) /
   Zusatzquelle / Konfiguration** — Zeilen **abgeblendet**, wenn inaktiv, und
   **leuchtend** (linker Farbbalken der Schwere + Status „aktiv ×N Räume“, Raumliste in
-  der Sprechblase), wenn sie auslösen; Sicherheitsregeln tragen den Code **S1–S6** auf
+  der Sprechblase), wenn sie auslösen; Sicherheitsregeln tragen den Code **S1–S5** auf
   der Plakette, und unter dem **„i“**-Symbol bei jeder Meldung steht die vollständige
   Erklärung (§12). Die Kopfzeile klappt die Liste ein/aus und zeigt selbst
   eingeklappt eine Zusammenfassungsplakette.
@@ -207,9 +207,8 @@ Reiter:
   färbt den Stellantrieb und senkt den Schwimmer des Durchflussmessers (0 oben auf der Skala, wie am echten Gerät); über jedem
   Kreis seine Beschriftung, am Antrieb die Öffnung, unter den Anschlüssen Vorlauf und
   Rücklauf) sowie eine **Tabelle der Heizkreise** (Heizkreis · Öffnung mit Balken ·
-  Vorlauf · Rücklauf · ΔT · Zustand mit den kreisbezogenen Meldungen: kein Durchfluss
-  S6, Ventilabweichung, fehlgeschlagener Stelltest, S1/S2). Jeder Wert mit einer
-  Entität ist ein versteckter Link (nur Cursor) zum nativen Entitätsdialog mit
+  Vorlauf · Rücklauf · ΔT · Zustand mit den ventilseitigen Meldungen des Raums: S1/S2,
+  Ventilabweichung). Jeder Wert mit einer Entität ist ein versteckter Link (nur Cursor) zum nativen Entitätsdialog mit
   Verlauf. Die Öffnung ist die vom Antrieb gemeldete Position, ersatzweise der Befehl
   des Reglers; ein Anschluss ohne Kreis wird ohne Beschriftungen gezeichnet. Ohne
   Verteiler zeigt der Reiter, wo sie konfiguriert werden (§4).
@@ -254,11 +253,11 @@ werden):
 - Diagnosesensoren: empfohlene Ventilstellung, Regelabweichung, Trend, Taupunkt,
   Integralanteil, Trendanteil, Modus der Zusatzquelle, Erläuterung der Entscheidung,
 - binäre: Sensor verloren, Ausgang gesättigt, Kondensationsschutz aktiv,
-  Durchflussstörung (`flow_fault`, Watchdog S6 — §8/§12), Drift eines
+  Drift eines
   Heizkreisfühlers (`probe_fault`: ein Vorlauf- oder Rücklauffühler hat seine
   gelernte Stillwasser-Basislinie verlassen oder weicht bei Durchfluss vom
   Hauptvorlauf des Verteilers ab; ein solcher Fühler wird aus den
-  Sicherheitseingaben S1/S2/S6 genommen, die Attribute zeigen Basislinie und
+  Sicherheitseingaben S1/S2 genommen, die Attribute zeigen Basislinie und
   Abweichung jedes Fühlers des Raums).
 
 Dienste (Domäne `tortoise_ufh`):
@@ -383,28 +382,6 @@ lädt den Regler neu — der PID-Integrator wird auf null gesetzt.**
 | **Basistemperatur Kühlwasser** (`cooling_supply_base_c`) | °C | 18 | Der an die Wärmepumpe geschriebene Kühlwasser-Sollwert, während das Haus kühlt: Der geschriebene Wert ist das Maximum aus dieser Basis und dem globalen sicheren Taupunkt — nie unter dem Taupunkt. Nur aktiv, wenn die Kühl-Sollwert-Entität konfiguriert ist (Optionen → Wärmepumpe). Globaler Parameter — kann nicht je Raum übersteuert werden. Standard 18 °C. |
 | **Basistemperatur Heizwasser** (`heating_supply_base_c`) | °C | 26 | Heizungsvorlauf bei der neutralen Außentemperatur (Parameter „Neutrale Außentemperatur der Vorsteuerung“, Standard 15 °C). Darunter steigt der Sollwert entlang der Kurvensteigung; das Ergebnis wird auf 20–40 °C begrenzt. Nur an die Pumpe geschrieben, wenn die Heiz-Sollwert-Entität konfiguriert ist — standardmäßig folgt die Pumpe ihrer eigenen Kurve. Globaler Parameter. Standard 26 °C. |
 | **Kurvensteigung Heizwasser** (`heating_supply_slope`) | K/K | 0,5 | Um wie viele Kelvin der Heizwasser-Sollwert je 1 K Außentemperatur unterhalb des Neutralpunkts steigt. Standard 0,5 K/K; typisch 0,3–0,8 für ein gut gedämmtes Fußbodenheizungshaus. |
-
-**Durchfluss-Watchdog (S6; wirkt nur mit Vorlauf- und Rücklaufsensoren des
-Heizkreises)**
-
-| Parameter | Einheit | Standard | Was er bewirkt und wann man ihn ändert |
-|---|---|---|---|
-| **Minimale ΔT, die als Durchfluss zählt** (`flow_epsilon_k`) | K | 0,3 | Kleinste Vorlauf−Rücklauf-Differenz des Heizkreises, die der Watchdog als Nachweis dafür wertet, dass tatsächlich Wasser fließt. Darunter (und ohne Sondenbewegung zur Quelle hin) löst ein Öffnungsbefehl ohne hydraulische Antwort die Meldung „kein Durchfluss“ aus. Bei verrauschten Sensoren erhöhen. |
-| **Öffnungsbefehl-Schwelle des Watchdogs** (`flow_open_threshold_pct`) | % | 15 | Ab welchem Ventilbefehl ein Heizkreis eine hydraulische Antwort zeigen muss. Unterhalb der Schwelle wird der Heizkreis nicht auf fehlenden Durchfluss geprüft. |
-| **Hydraulisches Antwortfenster** (`flow_response_window_min`) | min | 45 | Wie viele Minuten durchgehend fehlender Durchflusssignatur (bei geöffnetem Befehl und plausibler Zirkulation) die Meldung auslösen; dasselbe Fenster überwacht ein Ventil, das nicht schließt. Die Platte ist träge — Minimum 30 min, um Flattern zu vermeiden; 1440 deaktiviert den Watchdog praktisch. |
-
-Der Watchdog ist ein unabhängiger, **physischer** Zeuge der Ventilarbeit: Er stützt
-sich ausschließlich auf die Wassersensoren des Heizkreises und **vertraut nicht** der
-von der Ventil-Entität gemeldeten Position (dieser Kanal kann den Befehl nach einem
-Reglerneustart „nachplappern“ — eine reale Störung aus dem Sommer 2026, als die
-Ventile stillstanden, aber Gehorsam meldeten). Die Reaktion ist passiv: Meldung +
-`binary_sensor`-Entität „Durchflussstörung“ + Einfrieren des Integrators; der Watchdog
-bewegt selbst kein Ventil. Im Reiter Verteiler gibt es einen Chip zur
-Durchfluss-Gesundheit (ok / kein Durchfluss? / schließt nicht?) sowie die Schaltfläche
-für den **manuellen Aktuierungstest** — das Ventil wird bewusst für 20–30 min auf
-100 % geöffnet, und über das Ergebnis entscheidet die Antwort der Sonden (zur
-Ausführung nach Wartung oder einem Stromereignis; wird durch Sicherheitsregeln
-abgebrochen).
 
 ## 9. Flächenkühlung und Kondensation
 
@@ -670,7 +647,7 @@ Alle diese Meldungen sehen Sie auch als **Annunciator im eigenen Reiter „Meldu
 (seit v0.10.0; seit v0.10.3 ein eigener Reiter, früher oben in Räume) — eine
 einklappbare, gruppierte **Liste** (Stil wie „Abstimmung“): Jede Meldung ist eine
 Zeile — **abgeblendet**, wenn inaktiv, und **leuchtend** (linker Farbbalken + Status
-„aktiv ×N Räume“), wenn sie auslöst. Sicherheitsregeln tragen den Code **S1–S6**, und
+„aktiv ×N Räume“), wenn sie auslöst. Sicherheitsregeln tragen den Code **S1–S5**, und
 unter dem **„i“**-Symbol bei jeder Meldung steht ihre vollständige Erklärung. Die Liste
 rendert aus einem einzigen Register — eine neue Meldung erscheint darin automatisch.
 Das vollständige Verzeichnis unten:
@@ -700,9 +677,6 @@ Das vollständige Verzeichnis unten:
 | `s5_watchdog` | Keine frischen Raumdaten seit > 15 min — neutrale Stellung, Alarm im Bericht. | Prüfen Sie Sensoren/Netzwerk; löscht sich nach 5 min durchgehend frischer Daten. |
 | `unknown_room` | Raum ohne Reglerkonfiguration (Übergangszustand nach Konfigurationsänderungen). | Laden Sie die Integration neu; hält es an — entfernen Sie den Raum und fügen Sie ihn hinzu. |
 | `controller_error` | Ausnahme im Raumregler — sichere Degradierung (beim Heizen hält das Ventil die Stellung, beim Kühlen 0; Split AUS). | Sehen Sie in die HA-Protokolle und melden Sie das Problem (siehe §13). |
-| `loop_no_flow` | Durchfluss-Watchdog (S6): Das Ventil ist seit längerer Zeit offen, aber die Heizkreis-Sonden sehen keinen Wasserdurchfluss — Integrator eingefroren, Entität „Durchflussstörung“ eingeschaltet. | Prüfen Sie den Ventilcontroller/Aktor und den Durchfluss am Verteiler (Rotameter). Der Watchdog vertraut der Ventilrückmeldung nicht — siehe §8, „Durchfluss-Watchdog“. |
-| `actuation_test_running` | Ein manueller Aktuierungstest dieses Raums läuft (Ventil bewusst auf 100 %). | Informativ. Warten Sie bis zum Ende oder brechen Sie im Panel ab. |
-| `actuation_test_failed` | Aktuierungstest fehlgeschlagen — der Heizkreis reagierte hydraulisch nicht auf die Öffnung. | Prüfen Sie Controller/Aktor/Durchfluss dieses Heizkreises. |
 
 ## 13. Fehlerbehebung
 
@@ -765,6 +739,24 @@ für das ganze Haus.
 
 **Versionsverlauf / Migrationen**
 
+- **0.22.3 (2026-10-12)** — **Durchfluss-Watchdog (S6) entfernt** samt allem, was daran
+  hing: die Meldung `loop_no_flow` und das dadurch ausgelöste Einfrieren des Integrators,
+  die binäre Entität „Durchflussstörung im Heizkreis“ (`flow_fault`), der manuelle
+  **Aktuierungstest** (Dienst `tortoise_ufh.test_actuation`, Meldungen
+  `actuation_test_running` / `actuation_test_failed`, die Schaltfläche im Panel und die
+  Urteile je Heizkreis), das gebäudeweite Zirkulations-Gate sowie die drei Parameter der
+  Gruppe „Durchfluss-Watchdog (S6)“ (`flow_epsilon_k`, `flow_open_threshold_pct`,
+  `flow_response_window_min`). Grund: Wassertemperaturen im Heizkreis können beweisen,
+  dass Wasser fließt, aber nie, dass es *nicht* fließt (ein kurzer Kreis oder Wasser auf
+  Bodentemperatur zeigt keine Signatur, und der Verteilerbalken erwärmt/kühlt die Sonden
+  durch Wärmeleitung) — die Erkennung erzeugte Fehlalarme und fror den PI-Integrator ein.
+  Ein klemmender oder „nachplappernder“ Stellantrieb wird nicht mehr automatisch erkannt.
+  Unverändert bleiben die Gesundheit der Heizkreisfühler (`probe_drift`, Entität
+  `probe_fault`, Dienst `reset_probe_baselines`) und die Regeln S1–S5; die
+  Meldungsgruppen im Panel heißen nun „S1–S5“, und die Spalte Zustand im Reiter Verteiler
+  zeigt nur noch die ventilseitigen Meldungen des Raums (S1/S2, Ventilabweichung). Eine
+  gespeicherte raumbezogene Übersteuerung von `flow_epsilon_k` wird beim Update
+  automatisch entfernt (Konfigurationsmigration v4→v5).
 - **0.12.0 (2026-07-14)** — **deutsche (DE) Oberfläche und Dokumentation** plus
   Dokumentations-Aufräumen. Die App (Panel, Entitäten, Konfigurationsassistent, Dienste) ist
   jetzt vollständig auf Deutsch übersetzt, mit englischem Fallback für alle anderen Sprachen.

@@ -685,52 +685,18 @@ docs/DECISIONS.md §18).
 | Room has no controller (orchestrator) | valve 0, split OFF | `unknown_room` |
 | Room controller raised | HEATING: hold last valve; COOLING/TRANSITIONAL/OFF: valve 0 (K5, 2026-07-12 — a crashed controller computes neither condensation defence); split OFF | `controller_error` |
 | Per-room data age > 15 min (S5, 2026-07-09) | **neutral position**: `valve_floor_pct` in heating / 0 in cooling (defer to the HP curve), split OFF; clears below 5 min | `s5_watchdog` |
-| Loop commanded open but no hydraulic response (S6, 2026-07-13) | integrator **frozen**; `binary_sensor.flow_fault` on; no valve action | `loop_no_flow` |
-| Loop probe left its still-water baseline / disagrees with the main supply while flowing (issue #16, 2026-10-05, v0.22.0) | probe hidden from S1/S2/S6 (supply → manifold main supply, else missing); `binary_sensor.probe_fault` on; no valve action, no freeze | `probe_drift` |
+| Loop probe left its still-water baseline / disagrees with the main supply while flowing (issue #16, 2026-10-05, v0.22.0) | probe hidden from S1/S2 (supply → manifold main supply, else missing); `binary_sensor.probe_fault` on; no valve action, no freeze | `probe_drift` |
 
-### 9.1 Hydraulic no-flow watchdog (S6, 2026-07-13)
+### 9.1 Hydraulic no-flow watchdog — REMOVED (2026-10-12, v0.22.3)
 
-The data path (age gates, plausibility, `valve_mismatch`) cannot catch a `valve` entity
-that **echoes the commanded position back as feedback** — a real production failure mode
-(issue #4: both controllers froze after a reboot yet reported obedience; 2.5 h of LIVE
-cooling with a frozen-open loop outside both condensation guards). S6 (pure core
-`flow_watchdog.py`) uses the per-loop `entity_supply` / `entity_return` probes as an
-INDEPENDENT physical witness and **never reads the valve feedback**.
-
-```
-flow_signature = |T_supply − T_return| ≥ flow_epsilon_k
-                 OR T_supply / T_return ≥ 0.5 K toward the source side (cooling: down,
-                    heating: up) from that probe's extreme AWAY from the source since
-                    the last signature (heating: running min, cooling: running max)
-armed          = window just opened (cmd crossed the threshold)
-                 OR, since the last signature, a probe moved ≥ 0.5 K away from the
-                    source, or a through-flow signature (ΔT ≥ ε) fell back below ε
-circulation_evident = any OTHER loop shows a healthy ΔT
-                      OR entity_global_supply reads source-side          # else HOLD (no accrual)
-loop_no_flow    : cmd ≥ flow_open_threshold_pct, armed and circulation_evident
-                  for ≥ flow_response_window_min with NO flow_signature  → freeze integrator
-```
-
-A signature disarms the window: a short, high-flow loop at a steady source temperature
-legitimately shows neither ΔT ≥ ε nor displacement for hours, so steady time after proven
-flow is not suspicion (2026-10-12, v0.22.2, DECISIONS §33).
-
-(The former stuck-open reverse detection — a closed COOLING valve suspected of
-leaking because the room stayed below setpoint — was removed 2026-07-13; its room-air witness
-could not hard-verify actuation. See docs/DECISIONS.md §17.)
-
-The window starts on the SECOND cycle (the first sets the reference), so the flag lands
-within one window + one cycle. The RETURN probe is weighted over supply (supply may sit on
-the manifold bar before the valve). Rooms without probes: inactive (`—`). Reaction is
-PASSIVE — flag + `binary_sensor.flow_fault` (device class PROBLEM) + integrator freeze;
-never an automatic valve move. The `entity_global_supply` evidence path is **suspended
-while any room reports `hp_active_for_ufh is False`** (DHW/defrost) — a manifold probe can
-read source-side while UFH loops are legitimately starved, so it would otherwise bank
-no-flow windows on healthy loops; the per-loop witness path needs no guard (the other loops
-are not flowing either → HOLD). The manual
-`tortoise_ufh.test_actuation` service drives one room's valve to 100 % for 20–30 min and
-reads the probe response (`actuation_test_running` / `actuation_test_failed`), gated by the
-condensation/overheat safety rules and the room being LIVE with probes.
+The S6 no-flow watchdog (`flow_watchdog.py`, `loop_no_flow` + integrator freeze,
+`binary_sensor.flow_fault`, the three `flow_*` knobs) and the manual
+`tortoise_ufh.test_actuation` self-test were removed (DECISIONS §34). Loop probe
+temperatures can prove that water flows, but never that it does not: a short loop at a
+steady source temperature, a compressor pause or the manifold bar warming the probe all
+look like "no response", so every refinement still raised false alarms. A stuck or
+echoing actuator is no longer detected by Tortoise; loop probes now serve only the S1/S2
+safety rules and probe health (§ `probe_drift`).
 
 `BuildingController.step` never raises on a single room: it catches `(ValueError, ArithmeticError)`
 per room and substitutes a degraded `RoomOutputs`; it also counts the currently degraded rooms
@@ -838,3 +804,4 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 | 2026-09-10 | Blind commands (DECISIONS §28 note, v0.20.1): `FastSourceMachine` records a command as the S4 reconciliation reference — and restarts the settle counter — only in a cycle whose `sync` saw the unit, and any cycle without feedback un-syncs it, so the first visible feedback after a restart or any gap is adopted as the truth (first-sync rule, now also replacing a blind running direction when the unit reports one, keeping the machine's direction on an ambiguous report and the dry band for a unit found drying; the "late first feedback" guard is retired). A force in a cycle that did not see the unit no longer ends a manual hold. Adapter: nothing is written or cached (farewell included) to a missing / `unavailable` climate entity (`unknown` is still written). Fixes a split the controller had started itself being put under a manual hold after an HA restart; a feedback blip no longer ends a manual hold. |
 | 2026-09-25 | S3 in COOLING (DECISIONS §30, v0.21.13): the frost rule no longer opens the floor when the loops carry chilled water — valve 0, split HEATING (air side only, like S4); before, a freezing COOLING room (even one opted out of cooling) got 100 % chilled water unless S2 had humidity to close it. Also dead code removed: the `dew_factor >= 1.0` disjunct of `saturated`, the overwritten engaged-branch direction texts in TRANSITIONAL. |
 | 2026-10-12 | S6 short-loop false alarm (DECISIONS §33, v0.22.2): displacement references ratchet to the probe's extreme away from the source since the last signature (a re-heat after a compressor pause is evidence even below the pre-pause peak), and a signature disarms the window until the loop departs from it by ≥ 0.5 K or loses its through-flow ΔT. No knob, contract or migration change. |
+| 2026-10-12 | S6 removed (DECISIONS §34, v0.22.3): the temperature-based no-flow watchdog (`loop_no_flow`, its integrator freeze, circulation gating, `binary_sensor.flow_fault`) and the `test_actuation` self-test are deleted — loop temperatures can prove flow but not its absence. Config migration v4→v5 strips `flow_epsilon_k`, `flow_open_threshold_pct`, `flow_response_window_min` (globals and per-room overrides). `RoomReport` drops the S6 fields and gains `loop_count`. |

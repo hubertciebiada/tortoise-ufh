@@ -186,7 +186,6 @@ class ProbeHealthTracker:
         manifolds_raw: Any,
         global_supply_entity: str | None,
         valve_pct: Mapping[str, float | None],
-        open_threshold_pct: float,
     ) -> None:
         """Read every probe once and advance the monitor by one cycle.
 
@@ -197,7 +196,6 @@ class ProbeHealthTracker:
             global_supply_entity: The optional global supply probe.
             valve_pct: Valve position per VALVE entity id [%] — the last
                 command for a live room, the feedback otherwise.
-            open_threshold_pct: The S6 ``flow_open_threshold_pct`` [%].
         """
         now = time.monotonic()
         if self._last_monotonic is None:
@@ -254,9 +252,7 @@ class ProbeHealthTracker:
                 if wiring.supply:
                     fallback[wiring.supply] = global_supply
 
-        self._report = self._monitor.update(
-            groups, dt_seconds=dt_s, open_threshold_pct=open_threshold_pct
-        )
+        self._report = self._monitor.update(groups, dt_seconds=dt_s)
         self._monitor.retain(
             frozenset(p for loop in loops for p in (loop.supply, loop.ret) if p)
         )

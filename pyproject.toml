@@ -78,7 +78,6 @@ source_paths = [
     "custom_components/tortoise_ufh/core/controller.py",
     "custom_components/tortoise_ufh/core/dew_point.py",
     "custom_components/tortoise_ufh/core/fast_source.py",
-    "custom_components/tortoise_ufh/core/flow_watchdog.py",
     "custom_components/tortoise_ufh/core/hp_link.py",
     "custom_components/tortoise_ufh/core/models.py",
     "custom_components/tortoise_ufh/core/pid.py",

@@ -49,12 +49,6 @@ LOOP_ROOM_FLAGS: frozenset[str] = frozenset(
 every circuit the room owns (S1 closes the valve, the S2 hard backstop closes
 it, S8 says the actuator does not follow the command)."""
 
-LOOP_FLAG_NO_FLOW: str = "loop_no_flow"
-"""Per-loop S6 verdict (``RoomReport.loop_flow_status[i] == "no_flow"``)."""
-
-LOOP_FLAG_TEST_FAILED: str = "actuation_test_failed"
-"""Per-loop self-test verdict (``RoomReport.actuation_test_loops[i] == "failed"``)."""
-
 
 # ---------------------------------------------------------------------------
 # Configuration (the storage form: ``to_dict()`` is what the adapter persists)
@@ -292,10 +286,6 @@ class RoomLoopSources:
         valve_command_pct: The commanded valve position [0..100 %] common to
             all the room's loops, or ``None`` when unknown.
         flags: The room report's flags.
-        loop_flow_status: Per-loop S6 status (``"ok"`` / ``"no_flow"`` /
-            ``"inactive"``), aligned with the loops.
-        actuation_test_loops: Per-loop self-test verdicts, aligned with the
-            loops.
 
     Raises:
         ValueError: If ``name`` is empty or ``valve_command_pct`` is outside
@@ -308,8 +298,6 @@ class RoomLoopSources:
     returns: tuple[str | None, ...] = ()
     valve_command_pct: float | None = None
     flags: tuple[str, ...] = ()
-    loop_flow_status: tuple[str, ...] = ()
-    actuation_test_loops: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate the name and the command range."""
@@ -392,8 +380,7 @@ class ManifoldPositionView:
         return_: The loop's return-water probe reading (``"return"`` in the
             dict form; the trailing underscore only dodges the keyword).
         delta_k: ``supply - return`` [K] when both probes read, else ``None``.
-        flags: Loop-related flags (see :data:`LOOP_ROOM_FLAGS`,
-            :data:`LOOP_FLAG_NO_FLOW`, :data:`LOOP_FLAG_TEST_FAILED`).
+        flags: Loop-related flags (see :data:`LOOP_ROOM_FLAGS`).
     """
 
     position: int
@@ -501,20 +488,9 @@ def _default_label(room: RoomLoopSources, loop_index: int) -> str:
     return f"{room.name} {loop_index + 1}"
 
 
-def _loop_flags(room: RoomLoopSources, loop_index: int) -> tuple[str, ...]:
-    """Collect the flags relevant to one loop of a room (report order kept)."""
-    flags: list[str] = [flag for flag in room.flags if flag in LOOP_ROOM_FLAGS]
-    if (
-        loop_index < len(room.loop_flow_status)
-        and room.loop_flow_status[loop_index] == "no_flow"
-    ):
-        flags.append(LOOP_FLAG_NO_FLOW)
-    if (
-        loop_index < len(room.actuation_test_loops)
-        and room.actuation_test_loops[loop_index] == "failed"
-    ):
-        flags.append(LOOP_FLAG_TEST_FAILED)
-    return tuple(dict.fromkeys(flags))
+def _loop_flags(room: RoomLoopSources) -> tuple[str, ...]:
+    """Collect the room flags that belong on each of its loops (order kept)."""
+    return tuple(dict.fromkeys(flag for flag in room.flags if flag in LOOP_ROOM_FLAGS))
 
 
 def build_manifold_views(
@@ -579,7 +555,7 @@ def build_manifold_views(
                         if supply is not None and return_ is not None
                         else None
                     ),
-                    flags=_loop_flags(room, index),
+                    flags=_loop_flags(room),
                 )
             )
         views.append(

@@ -1,3 +1,7 @@
+> **SUPERSEDED — removed in v0.22.3 (2026-10-12, DECISIONS §34).** The S6 no-flow
+> watchdog and the actuation self-test described below no longer exist; this file is kept
+> for history only.
+
 # Change request: hydraulic no-flow watchdog — valve feedback can lie, the loop probes don't
 
 **Status:** proposal (agent-facing change request)

@@ -68,8 +68,6 @@ from .hp_link import (
     round_to_step_c,
 )
 from .manifold import (
-    LOOP_FLAG_NO_FLOW,
-    LOOP_FLAG_TEST_FAILED,
     LOOP_ROOM_FLAGS,
     MANIFOLD_CIRCUITS_MAX,
     MANIFOLD_CIRCUITS_MIN,
@@ -155,8 +153,6 @@ __all__ = [
     "HEATING_SUPPLY_MIN_C",
     "HEISHAMON_MODE_OPTIONS",
     "K_PEX",
-    "LOOP_FLAG_NO_FLOW",
-    "LOOP_FLAG_TEST_FAILED",
     "LOOP_ROOM_FLAGS",
     "MANIFOLD_CIRCUITS_MAX",
     "MANIFOLD_CIRCUITS_MIN",
