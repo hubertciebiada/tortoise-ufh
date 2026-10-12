@@ -699,12 +699,21 @@ INDEPENDENT physical witness and **never reads the valve feedback**.
 
 ```
 flow_signature = |T_supply − T_return| ≥ flow_epsilon_k
-                 OR T_supply displaced toward the source side (cooling: down, heating: up)
+                 OR T_supply / T_return ≥ 0.5 K toward the source side (cooling: down,
+                    heating: up) from that probe's extreme AWAY from the source since
+                    the last signature (heating: running min, cooling: running max)
+armed          = window just opened (cmd crossed the threshold)
+                 OR, since the last signature, a probe moved ≥ 0.5 K away from the
+                    source, or a through-flow signature (ΔT ≥ ε) fell back below ε
 circulation_evident = any OTHER loop shows a healthy ΔT
                       OR entity_global_supply reads source-side          # else HOLD (no accrual)
-loop_no_flow    : cmd ≥ flow_open_threshold_pct for ≥ flow_response_window_min,
-                  circulation_evident, and NOT flow_signature            → freeze integrator
+loop_no_flow    : cmd ≥ flow_open_threshold_pct, armed and circulation_evident
+                  for ≥ flow_response_window_min with NO flow_signature  → freeze integrator
 ```
+
+A signature disarms the window: a short, high-flow loop at a steady source temperature
+legitimately shows neither ΔT ≥ ε nor displacement for hours, so steady time after proven
+flow is not suspicion (2026-10-12, v0.22.2, DECISIONS §33).
 
 (The former stuck-open reverse detection — a closed COOLING valve suspected of
 leaking because the room stayed below setpoint — was removed 2026-07-13; its room-air witness
@@ -828,3 +837,4 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 | 2026-09-04 | Manual hold for the fast source (DECISIONS §28, v0.20.0): a settled physical divergence of the split (on/off or refrigerant direction vs the previously emitted command — the existing S4/K4 condition) is USER INTENT — `FastSourceMachine.sync` adopts the physical state and starts a hold of the new `fast_manual_hold_minutes` knob (default 60, restarted on every new divergence); the controller MIRRORS the state (`FastSourceMachine.mirror`) on every fast-source path, flags `fast_source_manual` (panel tier `info`), the adapter writes nothing and forgets the entity's S3 cache; the hold counts down in `tick()`, `force_on`/`force_off` end it, the normal logic resumes from the adopted state (a reversal still passes OFF + min-OFF). Knob 0 = legacy `fast_source_mismatch` + 45-min re-assert. |
 | 2026-09-10 | Blind commands (DECISIONS §28 note, v0.20.1): `FastSourceMachine` records a command as the S4 reconciliation reference — and restarts the settle counter — only in a cycle whose `sync` saw the unit, and any cycle without feedback un-syncs it, so the first visible feedback after a restart or any gap is adopted as the truth (first-sync rule, now also replacing a blind running direction when the unit reports one, keeping the machine's direction on an ambiguous report and the dry band for a unit found drying; the "late first feedback" guard is retired). A force in a cycle that did not see the unit no longer ends a manual hold. Adapter: nothing is written or cached (farewell included) to a missing / `unavailable` climate entity (`unknown` is still written). Fixes a split the controller had started itself being put under a manual hold after an HA restart; a feedback blip no longer ends a manual hold. |
 | 2026-09-25 | S3 in COOLING (DECISIONS §30, v0.21.13): the frost rule no longer opens the floor when the loops carry chilled water — valve 0, split HEATING (air side only, like S4); before, a freezing COOLING room (even one opted out of cooling) got 100 % chilled water unless S2 had humidity to close it. Also dead code removed: the `dew_factor >= 1.0` disjunct of `saturated`, the overwritten engaged-branch direction texts in TRANSITIONAL. |
+| 2026-10-12 | S6 short-loop false alarm (DECISIONS §33, v0.22.2): displacement references ratchet to the probe's extreme away from the source since the last signature (a re-heat after a compressor pause is evidence even below the pre-pause peak), and a signature disarms the window until the loop departs from it by ≥ 0.5 K or loses its through-flow ΔT. No knob, contract or migration change. |

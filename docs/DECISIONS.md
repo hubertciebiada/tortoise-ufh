@@ -1909,3 +1909,48 @@ owner's acceptance criteria (zero stuck-open flags on a uniformly cold closed ma
 the incident (5 flowing loops at ΔT 0.8–1.8 K, one closed loop with a conduction-cold return
 and a 3.3 K ΔT, `flow_epsilon_k` 0.3…5.0) now pins it. Hard verification that a closed valve
 stops flow stays deferred to a dedicated actuation-level mechanism (§17).
+
+## 33. S6 on a short, high-flow loop — ratcheting references and an armed window (2026-10-12, v0.22.2)
+
+> **Status: behaviour fix inside `core/flow_watchdog.py`.** No `RoomInputs` / `RoomReport` /
+> `ControllerConfig` change, no knob, no config migration. `ActuationSelfTest` unchanged.
+
+**The incident (owner's HA, 2026-10-11/12, v0.22.1).** The Toilet's loop is short: with the
+heat pump delivering 25–26 °C water, its supply−return difference is only 0.5–0.6 K (other
+west loops 1.5–2.4 K), and its two probes carry ~1 K of opposite still-water offset (closed
+valve reads 1.0 K, flowing 0.5 K). The room also kept a `flow_epsilon_k` = 1.0 K override,
+a leftover of the removed stuck-open detector (§16/§17), where a higher ε meant fewer alarms;
+in `loop_no_flow` it means more. S6 latched `loop_no_flow` on the healthy loop three times
+during steady compressor runs and the last latch held all night and through the next
+morning's re-heat (+3 K on both probes), freezing the room's integrator while the room sat
+1 K below setpoint. Two defects: (1) during a steady run nothing could count as evidence —
+ΔT < ε and the water rose < 0.5 K per window — so steady time alone tripped the flag;
+(2) the displacement references were only refreshed on evidence, so after the night pause
+they stayed at the pre-pause PEAK, and re-heating to the same level never cleared them.
+Replaying the owner's history reproduces the first latch at 22:40 (observed 22:45).
+
+**Fix.**
+- **Ratcheting references.** Between two evidence samples each probe's reference follows its
+  extreme away from the source (heating: running minimum; cooling: maximum). A live loop
+  re-warming ≥ 0.5 K from the trough after a compressor pause is evidence.
+- **Armed window.** Opening the window (command crossing the open threshold) arms it;
+  evidence disarms it. While disarmed the window does not accumulate: a loop that proved
+  flow and then sits steady is not suspicious. It re-arms when, versus the last evidence
+  sample, either probe moves ≥ 0.5 K (`_ARM_DEPARTURE_K`) away from the source (a stagnant
+  loop drifting toward the screed), or — when that sample was a through-flow witness
+  (ΔT ≥ ε) — ΔT falls back below ε (the classic loss of flow, unchanged for long loops).
+- Accumulation still requires the circulation gate; the latch and the integrator freeze are
+  unchanged.
+
+**Rejected ideas.** Subtracting the probe-health `baseline_k` offsets from ΔT: the offsets
+are not constant across water temperatures (corrected ΔT is ~0 closed, −0.5 K flowing at
+25 °C, −0.7 K flowing near room temperature), so the corrected ΔT is still no witness here.
+A return-vs-room ratio `(T_ret − T_room)/(T_sup − T_room)`: a dead post-valve loop has both
+probes at the same stagnant temperature, i.e. a ratio near 1 — the same as a short live loop,
+and the denominator collapses at the 3 K headroom of a low-temperature heating curve.
+
+**Trade-off.** A loop whose actuator dies mid-run while the source temperature is perfectly
+steady is flagged one window (of proven circulation) after its probes drift 0.5 K away
+from the source or lose their through-flow ΔT — not one window after the last evidence; a
+dead loop whose probes do not move at all after it proved flow is not flagged. The twin's frozen cooling actuator still latches within
+the existing acceptance window.
