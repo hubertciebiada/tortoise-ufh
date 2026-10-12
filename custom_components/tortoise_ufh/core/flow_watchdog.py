@@ -188,7 +188,7 @@ class LoopFlowMonitor:
         self._ref_supply_c: float | None = None
         self._ref_return_c: float | None = None
         self._anchor: tuple[float, float] | None = None
-        self._armed: bool = False
+        self._armed: bool = True
         self._no_flow_active: bool = False
         self._status: str = "inactive"
 
@@ -296,7 +296,7 @@ class LoopFlowMonitor:
         self._ref_supply_c = None
         self._ref_return_c = None
         self._anchor = None
-        self._armed = False
+        self._armed = True  # a (re)opened window starts armed
         self._no_flow_active = False
 
     def _update_no_flow(
@@ -335,7 +335,6 @@ class LoopFlowMonitor:
         if self._ref_supply_c is None or self._ref_return_c is None:
             self._ref_supply_c = supply_c
             self._ref_return_c = return_c
-            self._armed = True
         evidence = _flow_evidence(
             mode=mode,
             supply_c=supply_c,
@@ -399,7 +398,9 @@ class LoopFlowMonitor:
         Returns:
             ``True`` when either probe moved away from the source by
             :data:`_ARM_DEPARTURE_K`, or the anchor was a through-flow
-            witness and ``|supply - return|`` is now below ``epsilon_k``.
+            witness (``|supply - return| >= epsilon_k``). Only called on a
+            cycle WITHOUT evidence, so the current difference is already
+            below ``epsilon_k`` — the through-flow witness was lost.
         """
         anchor_supply_c, anchor_return_c = anchor
         sign = 1.0 if heating else -1.0
@@ -408,10 +409,7 @@ class LoopFlowMonitor:
             or sign * (anchor_return_c - return_c) >= _ARM_DEPARTURE_K
         ):
             return True
-        return (
-            abs(anchor_supply_c - anchor_return_c) >= epsilon_k
-            and abs(supply_c - return_c) < epsilon_k
-        )
+        return abs(anchor_supply_c - anchor_return_c) >= epsilon_k
 
 
 class FlowWatchdog:

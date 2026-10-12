@@ -330,3 +330,16 @@ class TestArming:
             _step(monitor, s - sign * 0.5, r - sign * 0.5, mode=mode, epsilon_k=3.0)
             _step(monitor, s - sign * 0.5, r - sign * 0.5, mode=mode, epsilon_k=3.0)
             assert monitor.no_flow_active is False, probe
+
+
+@pytest.mark.unit
+def test_partial_recovery_does_not_disarm() -> None:
+    """Once armed, creeping back toward the anchor WITHOUT a 0.5 K rise
+    from the trough keeps the window armed (only evidence disarms)."""
+    monitor = LoopFlowMonitor()
+    _step(monitor, 25.5, 25.5)
+    _step(monitor, 26.0, 26.0)  # evidence, anchor 26.0 / 26.0
+    _step(monitor, 25.4, 25.4)  # departed 0.6 K: armed (300 s)
+    _step(monitor, 25.8, 25.8)  # +0.4 K from the trough: no evidence
+    _step(monitor, 25.8, 25.8)
+    assert monitor.no_flow_active is True
