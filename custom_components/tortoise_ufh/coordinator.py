@@ -90,6 +90,7 @@ from .core.fast_source import window_allows
 from .core.hp_link import (
     CoolingDemand,
     FlickerDecision,
+    HeatingCompressorKick,
     HeatingSetpointGate,
     SetpointFlicker,
     cooling_demand,
@@ -307,7 +308,10 @@ class HeatPumpRuntime:
             what the pump holds, ``gate`` the
             :meth:`~tortoise_ufh.hp_link.HeatingGateDecision.to_dict` view plus
             ``enabled``, ``compressor_freq_hz``, ``restart_band_entity_id``,
-            ``restart_band_entity_k`` and ``hysteresis_k`` — issue #33).
+            ``restart_band_entity_k`` and ``hysteresis_k`` — issue #33;
+            ``kick`` the :meth:`~tortoise_ufh.hp_link.HeatingKickDecision.
+            to_dict` view plus its knobs, or ``None`` while the opt-in kick is
+            disabled — issue #34).
         hp_active: The "pump serves the UFH" reading, or ``None`` (unknown /
             unconfigured).
         hp_active_configured: Whether an hp-active entity is configured.
@@ -603,6 +607,11 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # as the flicker — rebuilt on a reload (knob change), its hysteresis
         # memory and hold timer persist across cycles.
         self._heating_gate: HeatingSetpointGate = HeatingSetpointGate(
+            self._global_config
+        )
+        # Opt-in heating compressor kick (issue #34, 2026-10-22): feeds the
+        # gate's offset_k; rebuilt on a reload like the gate and the flicker.
+        self._heating_kick: HeatingCompressorKick = HeatingCompressorKick(
             self._global_config
         )
 
@@ -1676,6 +1685,13 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         Both paths write with ``confirm=True``: a cached write the entity
         state does not show after the settle time is written again.
 
+        Opt-in compressor kick (issue #34): with ``heat_kick_enabled`` the
+        :class:`~tortoise_ufh.hp_link.HeatingCompressorKick` is ticked and
+        stepped first; its ``offset_k`` (non-zero only while a kick is in
+        force) raises the gate's target, so the kick and its restore go
+        through the same gate rules. Disabled, nothing of it runs and the gate
+        sees ``offset_k = 0`` exactly as before.
+
         Args:
             heat_entity: The heating-setpoint ``number`` entity id.
             writes_enabled: Whether the link may write this cycle.
@@ -1700,17 +1716,59 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         if pump_c is None:
             pump_c = self._writer.last_written_hp_setpoint(heat_entity)
         entity_min_c, entity_max_c = self._writer.hp_setpoint_limits(heat_entity)
+        step_c = self._writer.hp_setpoint_step(heat_entity)
+
+        # Issue #34: the opt-in kick sizes the gate's offset_k. Skipped
+        # entirely while disabled (the default), so the gate call is unchanged.
+        offset_k = 0.0
+        kick: dict[str, Any] | None = None
+        if self._global_config.heat_kick_enabled:
+            self._heating_kick.tick(dt_seconds)
+            kick_decision = self._heating_kick.step(
+                heating_active=writes_enabled and curve_c is not None,
+                compressor_freq_hz=freq_hz,
+                outlet_c=outlet_c,
+                pump_setpoint_c=pump_c,
+                base_target_c=self._heating_gate.preview_target_c(
+                    curve_c=curve_c,
+                    step_c=step_c,
+                    entity_min_c=entity_min_c,
+                    entity_max_c=entity_max_c,
+                ),
+                step_c=step_c,
+                restart_band_k=band_value_k,
+                entity_max_c=entity_max_c,
+            )
+            offset_k = kick_decision.offset_k
+            if kick_decision.reason in ("fired", "started", "timeout", "cancelled"):
+                _LOGGER.info(
+                    "Heating compressor kick %s: target %s, pump %s, outlet %s",
+                    kick_decision.reason,
+                    kick_decision.kick_target_c,
+                    pump_c,
+                    outlet_c,
+                )
+            kick = kick_decision.to_dict()
+            kick.update(
+                {
+                    "enabled": True,
+                    "idle_minutes": self._global_config.kick_idle_minutes,
+                    "deficit_threshold_k": self._global_config.kick_deficit_k,
+                    "timeout_minutes": (self._global_config.kick_start_timeout_minutes),
+                }
+            )
 
         self._heating_gate.tick(dt_seconds)
         decision = self._heating_gate.step(
             curve_c=curve_c,
-            step_c=self._writer.hp_setpoint_step(heat_entity),
+            step_c=step_c,
             pump_setpoint_c=pump_c,
             compressor_freq_hz=freq_hz,
             outlet_c=outlet_c,
             restart_band_k=band_value_k,
             entity_min_c=entity_min_c,
             entity_max_c=entity_max_c,
+            offset_k=offset_k,
         )
         if writes_enabled and decision.write_c is not None:
             await self._writer.write_hp_setpoint(
@@ -1750,6 +1808,8 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             "curve": heating_curve_preview(self._global_config),
             # Issue #33: the write gate's cycle view.
             "gate": gate,
+            # Issue #34: the opt-in compressor kick (None while disabled).
+            "kick": kick,
         }
 
     @staticmethod

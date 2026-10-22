@@ -183,7 +183,8 @@ Zakładki:
 - **Pompa ciepła** — stan opcjonalnego sprzężenia z pompą (§11): tryb Tortoise vs
   tryb pompy (zgodny/rozjazd), przełącznik flagi CWU, nastawy wody ze składnikami,
   **bramka nastawy grzania** (nastawa docelowa vs nastawa w pompie i powód wstrzymania —
-  issue #33) i sygnał „pompa dostępna dla podłogówki". Bez konfiguracji pokazuje instrukcję,
+  issue #33), opcjonalne **kopnięcie sprężarki grzania** (issue #34) i sygnał „pompa dostępna
+  dla podłogówki". Bez konfiguracji pokazuje instrukcję,
   gdzie ją włączyć.
 - **Rozdzielacze** (od v0.21.0) — jedna karta na rozdzielacz: nagłówek (nazwa,
   „KAN-therm InoxFlow UFST · n obwodów", temperatura głównego zasilania i powrotu
@@ -225,9 +226,11 @@ Encje globalne (urządzenie „UFH controller"):
   `input_select`? Zrób automatyzację wołającą `select.select_option`),
 - `sensor.*_global_safe_dew_point` — globalny bezpieczny punkt rosy (§9),
 - `sensor.*_algorithm_status`, `sensor.*_last_update`, `sensor.*_watchdog_status`,
-- `sensor.*_hp_flicker_state` (stan wymuszania startu chłodzenia) i
+- `sensor.*_hp_flicker_state` (stan wymuszania startu chłodzenia),
   `sensor.*_hp_heating_gate` (decyzja bramki nastawy grzania, np. `hold_increase_idle` —
-  issue #33; §11).
+  issue #33; §11) oraz `sensor.*_hp_heating_kick` (stan kopnięcia sprężarki grzania: `off` /
+  `ready` / `waiting` / `kick` / `done`) i `sensor.*_hp_heating_kick_last` (wynik ostatniego
+  kopnięcia: `started` / `timeout` / `cancelled`) — issue #34; §11.
 
 Encje per pokój (każdy pokój jest urządzeniem, można przypisać do obszaru HA):
 
@@ -380,6 +383,10 @@ podłączysz encję nastawy grzania. Przykład: pompa daje 25 °C przy +15 °C i
 | **Czekaj na bezpieczny stan sprężarki** (`heating_gate_enabled`) | — | wł. | Bramka nastawy grzania (§11, issue #33): przy podłączonych encjach częstotliwości sprężarki i temperatury wylotu nowa nastawa jest pisana tylko wtedy, gdy nie zablokuje ponownego startu sprężarki (Panasonic); w przeciwnym razie pompa zostaje na poprzedniej nastawie. Wyłącz dla pompy, która tego nie potrzebuje — wtedy każda nastawa idzie od razu. |
 | **Pasmo ponownego startu pompy** (`heating_restart_band_k`) | K | 3 | „ΔT dla załączenia grzania" pompy: sprężarka rusza, gdy wylot spadnie o tyle poniżej nastawy. Przy postoju podwyżka jest pisana tylko, gdy wylot jest niżej niż nowa nastawa minus to pasmo. Encja pasma pompy (opcje → Pompa ciepła) ma pierwszeństwo, jeśli podaje 1–10 K. |
 | **Próg zatrzymania pompy** (`heating_stop_offset_k`) | K | 2 | Pracująca sprężarka staje, gdy wylot przekroczy nastawę o tyle. Obniżka przy pracy jest pisana dopiero, gdy wylot jest niżej niż nowa nastawa plus ten próg — inaczej zapis od razu zakończyłby pracę. |
+| **Kopnięcie sprężarki grzania** (`heat_kick_enabled`) | — | wył. | Opcjonalne, dla Panasonica (§11, issue #34): gdy sprężarka stoi mimo wylotu wyraźnie poniżej nastawy (zablokowany ponowny start, np. po CWU), Tortoise podnosi nastawę grzania o 1 K przez bramkę nastawy grzania, a po starcie przywraca normalną. Wymaga bramki i jej encji. |
+| **Postój sprężarki przed kopnięciem** (`kick_idle_minutes`) | min | 15 | Jak długo sprężarka musi stać (5–120 min), zanim nastąpi kopnięcie. |
+| **Wylot poniżej nastawy pompy** (`kick_deficit_k`) | K | 3,5 | O ile wylot musi być niżej niż nastawa pompy (1–10 K). Wyklucza też cykl CWU — wylot jest wtedy gorący. |
+| **Czas na start sprężarki** (`kick_start_timeout_minutes`) | min | 5 | Ile czekać na start po kopnięciu (1–60 min); bez startu kopnięcie jest zdejmowane i do następnej pracy sprężarki nie jest ponawiane. |
 
 **Woda chłodzenia — pompa ciepła (tylko globalnie; działa wyłącznie ze skonfigurowanym
 sprzężeniem — §11)**
@@ -623,6 +630,37 @@ grzania"** (`hp_heating_gate`) i w pobieranej diagnostyce. Jeśli pompa nie przy
 (stan encji dalej pokazuje starą wartość), Tortoise ponawia go po 2 minutach zamiast po
 45.
 
+**Kopnięcie sprężarki grzania (issue #34, opcjonalne):** grzewczy odpowiednik wymuszania
+startu chłodzenia. Panasonic opisuje drugi warunek ponownego startu grzania: sprężarka staje,
+gdy wylot przekroczy nastawę o 2 °C, i rusza dopiero, gdy wylot spadnie 3 K poniżej
+temperatury **wlotu zapamiętanej w chwili zatrzymania**. Po CWU zapamiętany wlot to
+wychłodzony powrót z podłogi, więc start potrafi się opóźnić o godziny. Jedyne, co w danych
+zawsze zwalniało blokadę, to krok nastawy, po którym wylot był ponad 3 K poniżej nowej
+nastawy — sprężarka ruszała w tej samej minucie. Po włączeniu parametru „Kopnięcie sprężarki
+grzania":
+
+- gdy sprężarka stoi co najmniej **15 min** (`kick_idle_minutes`, liczone od pierwszego
+  odczytu postoju), a wylot jest co najmniej **3,5 K** (`kick_deficit_k`) poniżej nastawy,
+  którą pompa ma, Tortoise podnosi nastawę grzania o **1 K** (o jeden krok encji, jeśli jest
+  większy). Podwyżka idzie przez bramkę nastawy grzania i tylko w kształcie, który bramka
+  zapisuje od razu: wylot musi być niżej niż nowa nastawa − pasmo startu, a nowa nastawa nie
+  może przekroczyć maksimum encji ani „Maksymalnej temperatury wody grzania". W czasie CWU
+  wylot jest gorący, więc kopnięcia nie ma;
+- gdy sprężarka ruszy, offset znika i bramka przywraca normalną nastawę zwykłą obniżką przy
+  pracy (gdy wylot < nastawa + 2 K) — Tortoise nigdy sam nie cofa nastawy w czasie postoju;
+- jeśli sprężarka nie ruszy w ciągu **5 min** (`kick_start_timeout_minutes`), kopnięcie jest
+  zdejmowane i w tym postoju już się nie powtórzy. Niższą nastawę bramka zapisze dopiero, gdy
+  będzie to bezpieczne (zwykle po starcie sprężarki) — do tego czasu pompa zostaje o 1 K
+  wyżej;
+- najwyżej **jedno kopnięcie na postój**; następne dopiero po kolejnej pracy sprężarki.
+
+Domyślnie **wyłączone**; nie było jeszcze testowane na żywej pompie, a bramka z issue #33
+usuwa blokady wywołane przez samego Tortoise, więc może zadziałać rzadko. Karta **„Kopnięcie
+sprężarki grzania"** w zakładce Pompa ciepła (obok karty bramki, tylko gdy włączone) pokazuje
+stan, decyzję, czas postoju, wylot poniżej nastawy, nastawę kopnięcia, czas na start, liczbę
+kopnięć w ostatnich 24 godz. (z historii sensora `hp_heating_kick`) i wynik ostatniego
+kopnięcia (`hp_heating_kick_last`).
+
 **Przełącznik CWU (zakładka Pompa ciepła):** dokłada/zdejmuje człon „+DHW" w encji
 trybu (np. „Heat only" ↔ „Heat+DHW") — to ręczna prośba „dogrzej wodę teraz /
 przestań", nie blokada. **Zewnętrzna automatyka CWU jest właścicielem tej flagi
@@ -754,6 +792,15 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **Następne wydanie (issue #34)** — **opcjonalne kopnięcie sprężarki grzania** (Panasonic):
+  gdy sprężarka stoi co najmniej 15 min, a wylot jest co najmniej 3,5 K poniżej nastawy pompy
+  (zablokowany ponowny start, np. po CWU), nastawa grzania rośnie o 1 K przez bramkę nastawy
+  grzania; po starcie sprężarki bramka przywraca normalną nastawę, bez startu w 5 min
+  kopnięcie jest zdejmowane. Najwyżej jedno kopnięcie na postój. Nowe parametry w grupie „Woda
+  grzania": „Kopnięcie sprężarki grzania" (domyślnie wył.), postój przed kopnięciem, wylot
+  poniżej nastawy pompy i czas na start. Karta „Kopnięcie sprężarki grzania" w zakładce Pompa
+  ciepła, sensory `hp_heating_kick` i `hp_heating_kick_last`. Wyłączone — zachowanie bez
+  zmian. Bez migracji.
 - **Następne wydanie (issue #33)** — **bramka nastawy wody grzania na stan sprężarki**
   (Panasonic): krok nastawy przy stojącej sprężarce potrafił zablokować jej ponowny start.
   Teraz, przy podłączonych czujnikach częstotliwości sprężarki i wylotu, nowa nastawa jest

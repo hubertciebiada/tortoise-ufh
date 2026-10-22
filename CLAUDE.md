@@ -136,7 +136,11 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
   DECISIONS §38): hysteresis on the raw curve value, then a heating-target step is written only
   in a compressor state where it cannot block the Panasonic restart (reads compressor frequency
   + outlet; held otherwise; no idle re-assert; ungated fallback without inputs), ON by default,
-  4 global knobs + an optional restart-band entity; `offset_k` is the hook for #34's kick.
+  4 global knobs + an optional restart-band entity; and the opt-in **heating compressor kick**
+  (`HeatingCompressorKick` in `hp_link.py`, issue #34, DECISIONS §39): compressor idle ≥ 15 min
+  with the outlet ≥ 3.5 K below the pump's setpoint ⇒ +1 K through the gate's `offset_k`
+  (only in a shape the gate writes at once), restored by the gate after the start; timeout ⇒
+  offset removed, gate decides; one kick per idle period; 4 global knobs, OFF by default.
 
 ---
 

@@ -505,6 +505,15 @@ pompy (§8.10 w mocy). Sprzężenie jest w całości **opt-in** — bez skonfigu
   lub opcjonalna encja pasma pompy), obniżka gdy wylot ≥ nowa; inaczej trzymana poprzednia
   nastawa. Bez wejść (lub z wyłączonym `heating_gate_enabled`) zapis jak dotąd. Powód: na
   Panasonic Aquarea krok nastawy przy stojącej sprężarce potrafi zablokować jej ponowny start.
+  Od 2026-10-22 (issue #34, DECISIONS §39) opcjonalne **kopnięcie sprężarki grzania**
+  (`HeatingCompressorKick`, `heat_kick_enabled`, domyślnie WYŁ.) — grzewczy odpowiednik
+  wymuszania startu chłodzenia: gdy sprężarka stoi ≥ `kick_idle_minutes` (15 min), a wylot jest
+  ≥ `kick_deficit_k` (3,5 K) poniżej nastawy pompy, nastawa rośnie o +1 K (lub jeden krok
+  encji) przez `offset_k` bramki — tylko w kształcie, który bramka zapisuje od razu (wylot <
+  nowa − pasmo, w granicach maksimum). Po starcie normalna nastawa wraca obniżką przy pracy;
+  bez startu w `kick_start_timeout_minutes` (5 min) offset znika, a bramka decyduje, kiedy
+  wolno zapisać niższą nastawę. Najwyżej jedno kopnięcie na postój; wyłączone = zachowanie
+  bez zmian.
 - **Ręczny przełącznik CWU** (panel, WS `set_hp_dhw`): dokłada/zdejmuje człon `+DHW`;
   zdjęcie flagi z `DHW only` jest odmawiane (brak kierunku bazowego). Automatyka CWU może
   przełącznik w każdej chwili nadpisać — to jej prawo (ostrzeżenie na stałe w UI).

@@ -317,6 +317,23 @@ re-evaluated every cycle. An unchanged setpoint is never re-asserted while the g
 `CommandWriter.write_hp_setpoint`: a cached write the entity state does not show after 120 s
 is written again. Cooling path (incl. flicker) unchanged.
 
+**Amendment 2026-10-22 (heating compressor kick, DECISIONS §39, issue #34):** ADDITIVE, opt-in
+(`heat_kick_enabled`, default OFF) — **no change to the three-output contract, no `RoomReport`
+field, no config migration.** The pure-core `HeatingCompressorKick` (`core/hp_link.py`, frozen
+`HeatingKickDecision`, vocabularies `HEATING_KICK_STATES` / `HEATING_KICK_REASONS` /
+`HEATING_KICK_RESULTS`; helpers `kick_step_k`, `resolve_restart_band`) produces the gate's
+`offset_k`; `HeatingSetpointGate.preview_target_c(...)` gives it the normal target `q` without
+touching the hysteresis memory. Coordinator order per cycle: `kick.tick(dt)` → `kick.step(...)`
+→ `gate.tick(dt)` → `gate.step(..., offset_k=decision.offset_k)`; disabled ⇒ the kick is not
+run and the gate sees `offset_k = 0`. Fires once per idle period when the link may write in
+HEATING, gate + inputs present, frequency 0 for `kick_idle_minutes` since the first idle
+sample, `c − outlet ≥ kick_deficit_k`, with `K = max(c, q) + kick_step_k(step)` satisfying
+`outlet < K − band` and `K ≤ min(entity max, heating_supply_max_c)` (else no kick); ends on a
+start (`started`), after `kick_start_timeout_minutes` (`timeout`) or on lost conditions
+(`cancelled`) — each removes the offset and leaves the restore to the gate's rules.
+`get_live.heat_pump.heating.kick` (or `null`), global diagnostic sensors `hp_heating_kick`
+(state) and `hp_heating_kick_last` (last result), `get_config.hp_heating_kick_entity_id`.
+
 **Report must be JSON-serializable** (provide `to_dict()` helpers on `RoomOutputs`/`RoomReport`/
 `BuildingOutputs` returning plain dict/list/str/float/bool; enums -> their `.value`). The HA websocket
 and the panel consume these dicts.
@@ -643,6 +660,10 @@ class ControllerConfig:
     heating_curve_hysteresis_k: float = 0.5  # ADDITIVE (#33): play on the raw curve value before quantization, GLOBAL-only, [0,2]
     heating_restart_band_k: float = 3.0  # ADDITIVE (#33): pump's restart band ("ΔT for heating ON"), fallback of entity_hp_restart_band, GLOBAL-only, [1,10]
     heating_stop_offset_k: float = 2.0   # ADDITIVE (#33): pump's stop offset above target (decrease-while-running rule), GLOBAL-only, [0.5,5]
+    heat_kick_enabled: bool = False      # ADDITIVE (2026-10-22, #34, DECISIONS §39): opt-in heating compressor kick, GLOBAL-only
+    kick_idle_minutes: float = 15.0      # ADDITIVE (#34): compressor idle time before a kick, GLOBAL-only, [5,120]
+    kick_deficit_k: float = 3.5          # ADDITIVE (#34): pump setpoint − outlet needed for a kick, GLOBAL-only, [1,10]
+    kick_start_timeout_minutes: float = 5.0  # ADDITIVE (#34): wait for the start before giving up for the idle period, GLOBAL-only, [1,60]
     hp_flicker_band_k: float = 2.5       # ADDITIVE (2026-07-15, #7): flicker target cooling deadband, GLOBAL-only, [0.5,3.0]; #32: 1.5 -> 2.5
     hp_flicker_stuck_minutes: float = 30.0   # ADDITIVE (2026-07-15, #7): stuck&armed time before a pulse, GLOBAL-only, [5,120]; #32: 10 -> 30
     hp_flicker_min_off_minutes: float = 60.0  # ADDITIVE (2026-07-15, #7): forced-start cooldown, GLOBAL-only, [5,120]; #32: 20 -> 60
@@ -662,6 +683,7 @@ class ControllerConfig:
     # heating_supply_max_c in [25,40], heating_supply_min_c < heating_supply_max_c,
     # heating_supply_min_c <= heating_supply_base_c <= heating_supply_max_c (#35),
     # heating_curve_hysteresis_k in [0,2], heating_restart_band_k in [1,10], heating_stop_offset_k in [0.5,5] (#33),
+    # kick_idle_minutes in [5,120], kick_deficit_k in [1,10], kick_start_timeout_minutes in [1,60] (#34),
     # hp_flicker_band_k in [0.5,3.0], hp_flicker_stuck_minutes in [5,120], hp_flicker_min_off_minutes in [5,120], hp_flicker_max_starts_per_h in [1,6]
 
 # ADDITIVE (2026-10-22, issue #31, DECISIONS §35): sparse tuning persistence helpers.
@@ -1055,7 +1077,8 @@ Must render:
   `heating_curve_neutral_c`, `heating_supply_base_c`, `heating_supply_slope`,
   `heating_supply_min_c`, `heating_supply_max_c`, then the issue #33 write gate:
   `heating_curve_hysteresis_k`, `heating_gate_enabled`, `heating_restart_band_k`,
-  `heating_stop_offset_k`; issue #34 adds the compressor kick there); under the latter a curve
+  `heating_stop_offset_k`, then the issue #34 compressor kick: `heat_kick_enabled`,
+  `kick_idle_minutes`, `kick_deficit_k`, `kick_start_timeout_minutes`); under the latter a curve
   preview table (outdoor → water, 1 decimal) is refreshed from `preview_heating_curve` with the
   unsaved draft, and the Heat-pump tab shows the live `heating.curve` next to the heating
   setpoint. Issue #33: the Heat-pump tab has a "Heating setpoint gate" card from
@@ -1063,7 +1086,11 @@ Must render:
   vs pump setpoint, raw curve, compressor, outlet, restart band + source, stop offset, held
   for); `heating` also carries `curve_c`, `pump_setpoint_c`, `held`, and `target_c` is the
   quantized target. A global diagnostic sensor `hp_heating_gate` publishes the reason, and the
-  diagnostics download includes the whole `heat_pump` view.
+  diagnostics download includes the whole `heat_pump` view. Issue #34: next to it a "Heating
+  compressor kick" card from `heating.kick` (shown only while the kick is enabled: state badge,
+  reason as `hp_kick_r_<reason>`, idle time / threshold, deficit / threshold, kick setpoint,
+  start wait left, kicks in the last 24 h — rising edges into `kick` in the recorder history
+  of `hp_heating_kick`, via `get_config.hp_heating_kick_entity_id` — and the last result).
 - Poll `get_live` every ~5 s (or subscribe if you add an event).
 - Light/dark aware via `hass.themes`; degrade gracefully if a WS command errors (show message, never
   throw). Keep it dependency-free and defensive.

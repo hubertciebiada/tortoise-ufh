@@ -36,6 +36,13 @@ Global (``EntityCategory.DIAGNOSTIC``):
       cycle (``in_sync``, ``hold_increase_idle``, ``write_decrease_running``,
       ``ungated_no_input``, ...; issue #33), ``None`` without a heating
       setpoint entity. Its history shows when and why a target was held.
+    * ``hp_heating_kick`` — the opt-in heating compressor kick's state
+      (``off`` / ``ready`` / ``waiting`` / ``kick`` / ``done``; issue #34),
+      ``off`` while the kick is disabled; its recorder history is the durable
+      source the panel counts kicks over the last 24 h from.
+    * ``hp_heating_kick_last`` — how the most recent kick ended (``started`` /
+      ``timeout`` / ``cancelled``), ``None`` before the first one since the
+      last reload.
 
 Units: temperatures in degrees Celsius, valve position in percent, trend in
 kelvin per hour.
@@ -187,6 +194,34 @@ def _global_hp_heating_gate(data: CoordinatorData, _room: str | None) -> str | N
     return str(gate.get("reason", "no_target"))
 
 
+def _hp_heating_kick(data: CoordinatorData) -> dict[str, object] | None:
+    """The heating compressor-kick payload (issue #34), or ``None``."""
+    hp = data.heat_pump
+    if hp is None or hp.heating is None:
+        return None
+    kick = hp.heating.get("kick")
+    return kick if isinstance(kick, dict) else None
+
+
+def _global_hp_heating_kick(data: CoordinatorData, _room: str | None) -> str:
+    """Return the heating compressor kick's state (#34); ``off`` when absent."""
+    kick = _hp_heating_kick(data)
+    if kick is None:
+        return "off"
+    return str(kick.get("state", "off"))
+
+
+def _global_hp_heating_kick_last(
+    data: CoordinatorData, _room: str | None
+) -> str | None:
+    """Return how the most recent heating kick ended (#34), or ``None``."""
+    kick = _hp_heating_kick(data)
+    if kick is None:
+        return None
+    result = kick.get("last_result")
+    return None if result is None else str(result)
+
+
 # ---------------------------------------------------------------------------
 # Sensor descriptions
 # ---------------------------------------------------------------------------
@@ -327,6 +362,18 @@ GLOBAL_SENSORS: tuple[TortoiseUfhSensorEntityDescription, ...] = (
         translation_key="hp_heating_gate",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_global_hp_heating_gate,
+    ),
+    TortoiseUfhSensorEntityDescription(
+        key="hp_heating_kick",
+        translation_key="hp_heating_kick",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_global_hp_heating_kick,
+    ),
+    TortoiseUfhSensorEntityDescription(
+        key="hp_heating_kick_last",
+        translation_key="hp_heating_kick_last",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_global_hp_heating_kick_last,
     ),
 )
 

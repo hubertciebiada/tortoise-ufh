@@ -367,6 +367,11 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     ("heating_curve_hysteresis_k", 0.0, 2.0, 0.1),
     ("heating_restart_band_k", 1.0, 10.0, 0.5),
     ("heating_stop_offset_k", 0.5, 5.0, 0.5),
+    # Heating compressor kick (issue #34, 2026-10-22): opt-in timing of the
+    # +1 K kick that releases a locked-out Panasonic restart.
+    ("kick_idle_minutes", 5.0, 120.0, 1.0),
+    ("kick_deficit_k", 1.0, 10.0, 0.1),
+    ("kick_start_timeout_minutes", 1.0, 60.0, 1.0),
     # Cooling setpoint-flicker timing (issue #7, 2026-07-15): global-only knobs
     # read by the opt-in SetpointFlicker; see HP_GLOBAL_ONLY_KNOBS below.
     ("hp_flicker_band_k", 0.5, 3.0, 0.1),
@@ -398,12 +403,14 @@ CONTROLLER_BOOL_KNOBS: tuple[str, ...] = (
     "dry_enabled",
     "hp_flicker_enabled",
     "heating_gate_enabled",
+    "heat_kick_enabled",
 )
 """Boolean :class:`~tortoise_ufh.config.ControllerConfig` knobs, exposed
 alongside :data:`CONTROLLER_NUMBER_KNOBS`: the outdoor-temperature feedforward
 switch, the opt-in dry assist (humidity-triggered split DRY; 2026-07-16, §24),
 the opt-in cooling setpoint-flicker master switch (issue #7, 2026-07-15) and
-the heating-setpoint write gate switch (issue #33, default ON) — each on/off
+the heating-setpoint write gate switch (issue #33, default ON) and the
+opt-in heating compressor kick (issue #34, default OFF) — each on/off
 is a tuning knob so it renders as a toggle in its panel group and the
 options-flow settings step."""
 
@@ -435,6 +442,10 @@ CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "heating_curve_hysteresis_k": "K",
     "heating_restart_band_k": "K",
     "heating_stop_offset_k": "K",
+    "heat_kick_enabled": "",
+    "kick_idle_minutes": "min",
+    "kick_deficit_k": "K",
+    "kick_start_timeout_minutes": "min",
     "hp_flicker_band_k": "K",
     "hp_flicker_min_open_pct": "%",
     "hp_flicker_stuck_minutes": "min",
@@ -458,6 +469,10 @@ HP_GLOBAL_ONLY_KNOBS: frozenset[str] = frozenset(
         "heating_curve_hysteresis_k",
         "heating_restart_band_k",
         "heating_stop_offset_k",
+        "heat_kick_enabled",
+        "kick_idle_minutes",
+        "kick_deficit_k",
+        "kick_start_timeout_minutes",
         "hp_flicker_enabled",
         "hp_flicker_band_k",
         "hp_flicker_min_open_pct",
@@ -468,8 +483,8 @@ HP_GLOBAL_ONLY_KNOBS: frozenset[str] = frozenset(
 )
 """Knobs that exist ONLY in the global tuning scope (B2, 2026-07-12; extended
 with the flicker timing, issue #7 2026-07-15, and the heating-curve neutral
-point and clamps, issue #35 2026-10-22, and the heating-setpoint write gate,
-issue #33 2026-10-22).
+point and clamps, issue #35 2026-10-22, the heating-setpoint write gate,
+issue #33 2026-10-22, and the heating compressor kick, issue #34 2026-10-22).
 
 The heat-pump water setpoints and the setpoint-flicker timing are
 building-level physics — a per-room override could be set but would have zero

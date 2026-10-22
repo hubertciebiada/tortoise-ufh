@@ -70,6 +70,10 @@
           "heating_curve_hysteresis_k": "Heating curve hysteresis (K, global)",
           "heating_restart_band_k": "Heat pump restart band, ΔT for heating ON (K, global)",
           "heating_stop_offset_k": "Heat pump stop offset above target (K, global)",
+          "heat_kick_enabled": "Heating compressor kick: restart a locked-out compressor (Panasonic Aquarea, global)",
+          "kick_idle_minutes": "Heating kick: compressor idle before a kick (min, global)",
+          "kick_deficit_k": "Heating kick: outlet below the pump target (K, global)",
+          "kick_start_timeout_minutes": "Heating kick: wait for the compressor start (min, global)",
           "hp_flicker_enabled": "Force cooling start (Panasonic Aquarea)",
           "hp_flicker_band_k": "Force cooling start: target deadband (K, global)",
           "hp_flicker_min_open_pct": "Force cooling start: min total loop opening to force (%, global)",
@@ -149,6 +153,10 @@
           "heating_curve_hysteresis_k": "Heating curve hysteresis (K, global)",
           "heating_restart_band_k": "Heat pump restart band, ΔT for heating ON (K, global)",
           "heating_stop_offset_k": "Heat pump stop offset above target (K, global)",
+          "heat_kick_enabled": "Heating compressor kick: restart a locked-out compressor (Panasonic Aquarea, global)",
+          "kick_idle_minutes": "Heating kick: compressor idle before a kick (min, global)",
+          "kick_deficit_k": "Heating kick: outlet below the pump target (K, global)",
+          "kick_start_timeout_minutes": "Heating kick: wait for the compressor start (min, global)",
           "hp_flicker_enabled": "Force cooling start (Panasonic Aquarea)",
           "hp_flicker_band_k": "Force cooling start: target deadband (K, global)",
           "hp_flicker_min_open_pct": "Force cooling start: min total loop opening to force (%, global)",
@@ -446,6 +454,12 @@
       },
       "hp_heating_gate": {
         "name": "Heating setpoint gate"
+      },
+      "hp_heating_kick": {
+        "name": "Heating compressor kick state"
+      },
+      "hp_heating_kick_last": {
+        "name": "Heating compressor kick: last result"
       }
     },
     "binary_sensor": {

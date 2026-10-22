@@ -70,6 +70,10 @@
           "heating_curve_hysteresis_k": "Histereza krzywej wody grzania (K, globalne)",
           "heating_restart_band_k": "Pasmo ponownego startu pompy, ΔT załączenia grzania (K, globalne)",
           "heating_stop_offset_k": "Próg zatrzymania pompy ponad nastawę (K, globalne)",
+          "heat_kick_enabled": "Kopnięcie sprężarki grzania: odblokuj ponowny start (Panasonic Aquarea, globalne)",
+          "kick_idle_minutes": "Kopnięcie: postój sprężarki przed kopnięciem (min, globalne)",
+          "kick_deficit_k": "Kopnięcie: wylot poniżej nastawy pompy (K, globalne)",
+          "kick_start_timeout_minutes": "Kopnięcie: czas na start sprężarki (min, globalne)",
           "hp_flicker_enabled": "Wymuszanie startu chłodzenia (Panasonic Aquarea)",
           "hp_flicker_band_k": "Wymuszanie startu chłodzenia: docelowa histereza (K, globalne)",
           "hp_flicker_min_open_pct": "Wymuszanie startu chłodzenia: min. suma otwarcia pętli (%, globalne)",
@@ -149,6 +153,10 @@
           "heating_curve_hysteresis_k": "Histereza krzywej wody grzania (K, globalne)",
           "heating_restart_band_k": "Pasmo ponownego startu pompy, ΔT załączenia grzania (K, globalne)",
           "heating_stop_offset_k": "Próg zatrzymania pompy ponad nastawę (K, globalne)",
+          "heat_kick_enabled": "Kopnięcie sprężarki grzania: odblokuj ponowny start (Panasonic Aquarea, globalne)",
+          "kick_idle_minutes": "Kopnięcie: postój sprężarki przed kopnięciem (min, globalne)",
+          "kick_deficit_k": "Kopnięcie: wylot poniżej nastawy pompy (K, globalne)",
+          "kick_start_timeout_minutes": "Kopnięcie: czas na start sprężarki (min, globalne)",
           "hp_flicker_enabled": "Wymuszanie startu chłodzenia (Panasonic Aquarea)",
           "hp_flicker_band_k": "Wymuszanie startu chłodzenia: docelowa histereza (K, globalne)",
           "hp_flicker_min_open_pct": "Wymuszanie startu chłodzenia: min. suma otwarcia pętli (%, globalne)",
@@ -446,6 +454,12 @@
       },
       "hp_heating_gate": {
         "name": "Bramka nastawy grzania"
+      },
+      "hp_heating_kick": {
+        "name": "Stan kopnięcia sprężarki grzania"
+      },
+      "hp_heating_kick_last": {
+        "name": "Kopnięcie sprężarki grzania: ostatni wynik"
       }
     },
     "binary_sensor": {

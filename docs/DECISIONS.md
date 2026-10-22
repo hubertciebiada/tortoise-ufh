@@ -2244,3 +2244,93 @@ compressor stops with the outlet at the new target. The hysteresis delays a genu
 by up to `heating_curve_hysteresis_k / slope` of outdoor change (1 K outdoor at 0.5 K/K).
 The rules encode one install's evidence on one pump family; other pumps can switch the gate
 off.
+
+## 39. Opt-in heating compressor kick for a locked-out restart (2026-10-22, issue #34)
+
+**Context.** The heating counterpart of the cooling setpoint-flicker (§21, issue #7). Same
+install as §38 (Panasonic Aquarea K via HeishaMon, 11 days, 4 lockouts). §38 removes the
+lockouts caused by Tortoise's own idle target steps, so this may rarely fire, and it is
+untested on a live pump. It is still worth having because Panasonic documents a second
+heating restart condition (Service Information K-series, PAPAMY2306062CE p.159): thermo OFF
+once outlet − internal target > 2 °C for 3 min; restart after 3 min once outlet − (inlet
+captured at thermo OFF) < −3 °C. After a DHW cycle the captured inlet is the cooled floor
+return, which can delay the restart for hours (the data matched this in 8 waits and
+contradicted it in ~7). The one release seen every time: a target step leaving the outlet
+more than 3 K below the new target — the compressor started in the same minute, 10/10.
+
+**Decision.** A pure-core state machine `HeatingCompressorKick` (`core/hp_link.py`; frozen
+`HeatingKickDecision`, closed vocabularies `HEATING_KICK_STATES` / `_REASONS` / `_RESULTS`;
+`tick(dt)` once per cycle, then `step(...)`, like `SetpointFlicker`) that feeds the `offset_k`
+hook of `HeatingSetpointGate` (§38, item 7). It never writes by itself: the kick and its
+restore are ordinary gate decisions.
+
+1. **Trigger** (all in one cycle), `c` = the pump's current setpoint (entity state, else the
+   last write), `q` = the gate's normal target (`HeatingSetpointGate.preview_target_c`, the
+   same hysteresis → quantize → clamp without touching the play memory), `o` = outlet:
+   - `heat_kick_enabled` AND `heating_gate_enabled`; the link may write (a LIVE room) in
+     HEATING with a curve target; compressor frequency, outlet and `c` all readable;
+   - frequency 0 for at least `kick_idle_minutes` (15), counted from the FIRST idle sample of
+     the idle period (time before it is not counted; a missing reading or leaving HEATING
+     ends the tracked period);
+   - `c − o ≥ kick_deficit_k` (3.5 K). This also excludes a DHW cycle without a 3-way-valve
+     entity: the outlet is hot then and the deficit negative;
+   - no kick yet in this idle period.
+2. **Action.** The raised target `K = max(c, q) + kick_step_k(step)`: +1 K, or the smallest
+   grid multiple of at least 1 K (one step on a coarser grid, 1.2 K on a 0.3 K grid — never
+   off the grid). It is measured from the pump's setpoint, because the compressor compares
+   against what the pump holds: with a held decrease (`q < c`, outlet below `q`), `q + 1`
+   could equal `c` and change nothing. `offset_k = K − q` makes the gate's target exactly `K`.
+3. **Consistency with the gate.** The kick fires only in a shape the gate writes at once, so
+   it can never violate §38:
+   - `o < K − band` (the gate's idle-increase rule, `band` resolved exactly like the gate —
+     `resolve_restart_band`: pump entity in [1, 10] K, else `heating_restart_band_k`). With
+     the defaults it always holds (`K − o ≥ 4.5 > 3`). If a larger band is configured
+     (entity or knob) and the step would leave the outlet inside it, there is NO kick
+     (`blocked_band`): an increase that leaves the outlet within the band is exactly the
+     lockout step shape §38 holds. It is re-evaluated each cycle, so it fires once the
+     outlet has fallen far enough;
+   - `K ≤ min(entity max, heating_supply_max_c)` (`blocked_limit`): the kick never lifts the
+     water above the user's ceiling;
+   - a pending normal increase the gate writes by itself this cycle (`q − c ≥` half a step and
+     `o < q − band`) is already a release-shaped step: no kick (`gate_increase`).
+   The fired cycle is therefore always the gate's `write_increase_idle` (verified end to end
+   in `tests/unit/test_heating_kick.py`).
+4. **Restore.** Frequency > 0 → result `started`, the offset goes to 0 and the gate writes `q`
+   under its decrease-while-running rule (`o < q + heating_stop_offset_k`; usually the same
+   cycle, since the outlet is cold at the start; held while hot). Writing the normal target
+   back while idle would be a new idle-period step — the kick never does that itself.
+5. **Timeout ("restore and stop").** No start within `kick_start_timeout_minutes` (5) of the
+   fired cycle → result `timeout`, offset 0, state `done` for the rest of the idle period.
+   Removing the offset IS an idle decrease, so the gate decides when the lower target is
+   written: idle only if `o ≥ q` (the shape observed never to lock out), otherwise held at
+   `K` until the compressor runs (then an ordinary running decrease). We chose this honest
+   path over forcing the lower target: forcing it would be precisely the idle step §38
+   forbids, and holding +1 K above the curve costs nothing while the compressor is off.
+6. **One kick per idle period.** After a kick (any result) no second one until a cycle sees
+   the compressor running. Lost conditions mid-kick (writes stopped, mode left HEATING, an
+   input missing) → `cancelled`, offset 0 — and still no second kick in that period. The
+   memory is in-process: after an HA restart mid-period a fresh machine may kick once more
+   (from the then-current pump setpoint, i.e. at most +2 K over the curve before the start
+   restores it). Accepted: rare, bounded, and the restore still goes through the gate.
+7. **Invisible when disabled.** With `heat_kick_enabled` off (default) the coordinator does not
+   tick or step the kick, the gate gets `offset_k = 0` exactly as before; only the payload
+   gains `heating.kick = null`. Cooling path, flicker and the `+DHW` preservation untouched.
+8. **Diagnostics** (same shape as the flicker): `get_live.heat_pump.heating.kick` (the
+   decision's `to_dict()` + `enabled`, `idle_minutes`, `deficit_threshold_k`,
+   `timeout_minutes`); global diagnostic sensors `hp_heating_kick` (state:
+   off/ready/waiting/kick/done — its recorder history is the durable 24 h kick count, rising
+   edges into `kick`, exactly like the flicker's forced starts) and `hp_heating_kick_last`
+   (`started`/`timeout`/`cancelled`); `get_config.hp_heating_kick_entity_id`; a "Heating
+   compressor kick" card in the Heat pump tab next to the gate card (state badge, reason,
+   idle time / threshold, deficit / threshold, kick setpoint, start wait left, kicks in 24 h,
+   last kick result + setpoint + deficit). Fired / started / timeout / cancelled are logged at
+   INFO.
+
+**Knobs.** Four global-only knobs in the "Heating water" group (`HP_GLOBAL_ONLY_KNOBS`):
+`heat_kick_enabled` (bool, off), `kick_idle_minutes` (15, [5, 120]), `kick_deficit_k` (3.5,
+[1, 10]), `kick_start_timeout_minutes` (5, [1, 60]). Fixed, not knobs: one kick per idle
+period, the +1 K raise (or one coarser grid step). No migration (overrides scheme, §35).
+
+**Trade-off.** Evidence is one install, one pump family, and the kick has never run live —
+hence opt-in and Panasonic-specific. Worst case a kick that does not start the compressor
+leaves the pump 1 K above the curve until the next run, which the floor's mass absorbs.

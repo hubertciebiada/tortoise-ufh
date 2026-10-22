@@ -200,7 +200,8 @@ Reiter:
 - **Wärmepumpe** — Status der optionalen Anbindung an die Pumpe (§11): Tortoise-Modus
   vs. Pumpenmodus (synchron/abweichend), Schalter des WW-Flags, Wasser-Sollwerte mit
   ihren Bestandteilen, die **Heizsollwert-Sperre** (Zielsollwert vs. Sollwert in der Pumpe
-  und Grund des Zurückhaltens — Issue #33) und das Signal „Pumpe für Fußbodenheizung verfügbar“. Ohne
+  und Grund des Zurückhaltens — Issue #33), den optionalen **Verdichter-Anstoß Heizen**
+  (Issue #34) und das Signal „Pumpe für Fußbodenheizung verfügbar“. Ohne
   Konfiguration wird eine Anleitung angezeigt, wo man sie aktiviert.
 - **Verteiler** (seit v0.21.0) — eine Karte je Verteiler: Kopfzeile (Name, „KAN-therm
   InoxFlow UFST · n Heizkreise“, Temperatur von Hauptvorlauf und -rücklauf aus den
@@ -246,9 +247,12 @@ Globale Entitäten (Gerät „UFH controller“):
   Automatisierung mit `select.select_option` anlegen),
 - `sensor.*_global_safe_dew_point` — globaler sicherer Taupunkt (§9),
 - `sensor.*_algorithm_status`, `sensor.*_last_update`, `sensor.*_watchdog_status`,
-- `sensor.*_hp_flicker_state` (Zustand von „Kühlstart erzwingen“) und
+- `sensor.*_hp_flicker_state` (Zustand von „Kühlstart erzwingen“),
   `sensor.*_hp_heating_gate` (Entscheidung der Heizsollwert-Sperre, z. B.
-  `hold_increase_idle` — Issue #33; §11).
+  `hold_increase_idle` — Issue #33; §11) sowie `sensor.*_hp_heating_kick` (Zustand des
+  Verdichter-Anstoßes Heizen: `off` / `ready` / `waiting` / `kick` / `done`) und
+  `sensor.*_hp_heating_kick_last` (Ergebnis des letzten Anstoßes: `started` / `timeout` /
+  `cancelled`) — Issue #34; §11.
 
 Entitäten je Raum (jeder Raum ist ein Gerät, kann einem HA-Bereich zugewiesen
 werden):
@@ -409,6 +413,10 @@ Pumpe, bevor Sie die Heiz-Sollwert-Entität verbinden. Beispiel: Die Pumpe liefe
 | **Auf sicheren Verdichterzustand warten** (`heating_gate_enabled`) | — | ein | Heizsollwert-Sperre (§11, Issue #33): Mit verbundenen Entitäten für Verdichterfrequenz und Vorlauftemperatur wird ein neuer Sollwert nur geschrieben, wenn er den Wiederanlauf des Verdichters nicht blockieren kann (Panasonic); sonst behält die Pumpe den bisherigen Sollwert. Für eine Pumpe, die das nicht braucht, ausschalten — dann geht jeder Sollwert sofort hinaus. |
 | **Wiederanlaufband der Pumpe** (`heating_restart_band_k`) | K | 3 | „ΔT für Heizen EIN“ der Pumpe: Der Verdichter startet, sobald der Vorlauf so weit unter den Sollwert fällt. Bei stehendem Verdichter wird eine Erhöhung nur geschrieben, wenn der Vorlauf unter dem neuen Sollwert minus diesem Band liegt. Eine Band-Entität der Pumpe (Optionen → Wärmepumpe) hat Vorrang, wenn sie 1–10 K liefert. |
 | **Abschaltschwelle der Pumpe** (`heating_stop_offset_k`) | K | 2 | Ein laufender Verdichter stoppt, sobald der Vorlauf den Sollwert um so viel überschreitet. Eine Absenkung bei laufendem Verdichter wird erst geschrieben, wenn der Vorlauf unter dem neuen Sollwert plus dieser Schwelle liegt — sonst würde der Schreibvorgang den Lauf sofort beenden. |
+| **Verdichter-Anstoß Heizen** (`heat_kick_enabled`) | — | aus | Optional, für Panasonic (§11, Issue #34): Steht der Verdichter, obwohl der Vorlauf deutlich unter dem Sollwert liegt (blockierter Wiederanlauf, z. B. nach WW), hebt Tortoise den Heizsollwert über die Heizsollwert-Sperre um 1 K an und stellt nach dem Start den normalen wieder her. Benötigt die Sperre und ihre Entitäten. |
+| **Verdichter-Stillstand vor dem Anstoß** (`kick_idle_minutes`) | min | 15 | Wie lange der Verdichter stehen muss (5–120 min), bevor angestoßen wird. |
+| **Vorlauf unter dem Pumpensollwert** (`kick_deficit_k`) | K | 3,5 | Wie weit der Vorlauf unter dem Sollwert der Pumpe liegen muss (1–10 K). Hält den Anstoß auch aus einem WW-Zyklus heraus — der Vorlauf ist dann heiß. |
+| **Wartezeit auf den Verdichterstart** (`kick_start_timeout_minutes`) | min | 5 | Wie lange nach einem Anstoß auf den Start gewartet wird (1–60 min); ohne Start wird der Anstoß zurückgenommen und bis zum nächsten Verdichterlauf nicht wiederholt. |
 
 **Kühlwasser — Wärmepumpe (nur global; wirkt ausschließlich mit konfigurierter Anbindung —
 §11)**
@@ -673,6 +681,42 @@ dieselbe Entscheidung steht im globalen Diagnosesensor **„Heizsollwert-Sperre�
 Schreibvorgang nicht (der Zustand der Entität zeigt weiter den alten Wert), wiederholt
 Tortoise ihn nach 2 Minuten statt nach 45.
 
+**Verdichter-Anstoß Heizen (Issue #34, optional):** das Gegenstück zu „Kühlstart erzwingen“
+für das Heizen. Panasonic beschreibt eine zweite Wiederanlaufbedingung beim Heizen: Der
+Verdichter stoppt, wenn der Vorlauf den Sollwert um 2 °C überschreitet, und startet erst
+wieder, wenn der Vorlauf 3 K unter die **beim Stopp gemerkte Rücklauftemperatur** fällt. Nach
+WW ist der gemerkte Rücklauf der ausgekühlte Fußbodenrücklauf, sodass sich der Start um
+Stunden verzögern kann. Gelöst wurde die Blockade in den Daten jedes Mal durch einen
+Sollwertschritt, nach dem der Vorlauf mehr als 3 K unter dem neuen Sollwert lag — der
+Verdichter startete in derselben Minute. Mit eingeschaltetem Parameter „Verdichter-Anstoß
+Heizen“:
+
+- steht der Verdichter mindestens **15 min** (`kick_idle_minutes`, ab dem ersten
+  Stillstandswert gezählt) und liegt der Vorlauf mindestens **3,5 K** (`kick_deficit_k`)
+  unter dem Sollwert der Pumpe, hebt Tortoise den Heizsollwert um **1 K** an (um einen
+  Entitätsschritt, falls größer). Die Erhöhung läuft über die Heizsollwert-Sperre und nur in
+  der Form, die die Sperre sofort schreibt: Der Vorlauf muss unter neuem Sollwert −
+  Wiederanlaufband liegen, und der neue Sollwert darf weder das Maximum der Entität noch die
+  „Maximale Heizwassertemperatur“ überschreiten. Während WW ist der Vorlauf heiß, also gibt es
+  keinen Anstoß;
+- startet der Verdichter, fällt der Offset weg, und die Sperre stellt den normalen Sollwert
+  mit einer gewöhnlichen Absenkung im Lauf wieder her (wenn Vorlauf < Sollwert + 2 K) —
+  Tortoise nimmt den Sollwert nie selbst im Stillstand zurück;
+- startet der Verdichter nicht innerhalb von **5 min** (`kick_start_timeout_minutes`), wird
+  der Anstoß zurückgenommen und in diesem Stillstand nicht wiederholt. Den niedrigeren
+  Sollwert schreibt die Sperre erst, wenn es sicher ist (meist nach dem Verdichterstart) — bis
+  dahin bleibt die Pumpe 1 K höher;
+- höchstens **ein Anstoß pro Stillstand**; der nächste erst nach einem weiteren
+  Verdichterlauf.
+
+Standardmäßig **deaktiviert**; an einer laufenden Pumpe noch nicht getestet, und die Sperre aus
+Issue #33 beseitigt die von Tortoise selbst verursachten Blockaden, sodass er selten greifen
+dürfte. Die Karte **„Verdichter-Anstoß Heizen“** im Reiter Wärmepumpe (neben der Sperren-Karte,
+nur wenn eingeschaltet) zeigt Zustand, Entscheidung, Stillstandsdauer, Vorlauf unter dem
+Sollwert, Anstoß-Sollwert, verbleibende Wartezeit, die Zahl der Anstöße der letzten 24 h (aus
+dem Verlauf des Sensors `hp_heating_kick`) und das Ergebnis des letzten Anstoßes
+(`hp_heating_kick_last`).
+
 **WW-Schalter (Reiter Wärmepumpe):** fügt den Teil „+DHW“ der Modus-Entität hinzu oder
 entfernt ihn (z. B. „Heat only“ ↔ „Heat+DHW“) — das ist eine manuelle Anforderung
 „Wasser jetzt aufheizen / stopp“, keine Sperre. **Die externe WW-Automatik ist
@@ -814,6 +858,16 @@ für das ganze Haus.
 
 **Versionsverlauf / Migrationen**
 
+- **Nächste Version (Issue #34)** — **optionaler Verdichter-Anstoß Heizen** (Panasonic): Steht
+  der Verdichter mindestens 15 min, während der Vorlauf mindestens 3,5 K unter dem Sollwert der
+  Pumpe liegt (blockierter Wiederanlauf, z. B. nach WW), wird der Heizsollwert über die
+  Heizsollwert-Sperre um 1 K angehoben; nach dem Verdichterstart stellt die Sperre den
+  normalen Sollwert wieder her, ohne Start innerhalb von 5 min wird der Anstoß zurückgenommen.
+  Höchstens ein Anstoß pro Stillstand. Neue Parameter in der Gruppe „Heizwasser“:
+  „Verdichter-Anstoß Heizen“ (standardmäßig aus), Stillstand vor dem Anstoß, Vorlauf unter dem
+  Pumpensollwert und Wartezeit auf den Start. Karte „Verdichter-Anstoß Heizen“ im Reiter
+  Wärmepumpe, Sensoren `hp_heating_kick` und `hp_heating_kick_last`. Ausgeschaltet — Verhalten
+  unverändert. Keine Migration.
 - **Nächste Version (Issue #33)** — **Heizwasser-Sollwert wartet auf den Verdichterzustand**
   (Panasonic): Ein Sollwertschritt bei stehendem Verdichter konnte dessen Wiederanlauf
   blockieren. Mit verbundenen Sensoren für Verdichterfrequenz und Vorlauf wird ein neuer
