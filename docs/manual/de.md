@@ -858,7 +858,7 @@ für das ganze Haus.
 
 **Versionsverlauf / Migrationen**
 
-- **Nächste Version (Issue #34)** — **optionaler Verdichter-Anstoß Heizen** (Panasonic): Steht
+- **0.23.0 (2026-10-23, #34)** — **optionaler Verdichter-Anstoß Heizen** (Panasonic): Steht
   der Verdichter mindestens 15 min, während der Vorlauf mindestens 3,5 K unter dem Sollwert der
   Pumpe liegt (blockierter Wiederanlauf, z. B. nach WW), wird der Heizsollwert über die
   Heizsollwert-Sperre um 1 K angehoben; nach dem Verdichterstart stellt die Sperre den
@@ -868,7 +868,7 @@ für das ganze Haus.
   Pumpensollwert und Wartezeit auf den Start. Karte „Verdichter-Anstoß Heizen“ im Reiter
   Wärmepumpe, Sensoren `hp_heating_kick` und `hp_heating_kick_last`. Ausgeschaltet — Verhalten
   unverändert. Keine Migration.
-- **Nächste Version (Issue #33)** — **Heizwasser-Sollwert wartet auf den Verdichterzustand**
+- **0.23.0 (2026-10-23, #33)** — **Heizwasser-Sollwert wartet auf den Verdichterzustand**
   (Panasonic): Ein Sollwertschritt bei stehendem Verdichter konnte dessen Wiederanlauf
   blockieren. Mit verbundenen Sensoren für Verdichterfrequenz und Vorlauf wird ein neuer
   Sollwert jetzt nur in einem sicheren Zustand geschrieben (läuft: Erhöhung sofort, Absenkung
@@ -882,7 +882,7 @@ für das ganze Haus.
   Schrittweite gerundeten Wert. Der Sollwert wird auf den Bereich der Entität begrenzt, und ein
   vom Entitätszustand nicht bestätigter Schreibvorgang wird nach 2 min wiederholt. Ohne
   Sensoren — Schreiben wie bisher. Keine Migration.
-- **Nächste Version (Issue #35)** — **Heizwasserkurve mit eigenen Parametern und
+- **0.23.0 (2026-10-23, #35)** — **Heizwasserkurve mit eigenen Parametern und
   Vorschau**: Die Kurvensteigung hat die Schrittweite **0,01 K/K** (vorher 0,1 — z. B.
   0,23 K/K für eine Pumpe mit 25 °C bei +15 °C / 32 °C bei −15 °C). Die Kurve hat eine
   eigene **neutrale Temperatur** (`heating_curve_neutral_c`, Standard 15 °C) — bisher nutzte
@@ -895,7 +895,7 @@ für das ganze Haus.
   Eine neue Installation verhält sich wie bisher. Die Migration **v5 → v6** (dieselbe wie für
   Issue #31) übernimmt eine gespeicherte globale neutrale Temperatur der Vorsteuerung in den
   neuen Kurvenparameter, sodass sich die Kurve keiner Installation verschiebt.
-- **Nächste Version (Issue #32)** — **neue Standardwerte für Zusatzquelle, Taupunkt
+- **0.23.0 (2026-10-23, #32)** — **neue Standardwerte für Zusatzquelle, Taupunkt
   und Kühlstart-Erzwingung**, erprobt an einem Haus über eine ganze Kühlsaison und den
   Beginn der Heizsaison: Zuschaltschwelle 1,0 → **1,5 K**, Mindestlauf-/-stillstandszeit
   der Zusatzquelle 10 / 10 → **30 / 31 min**, Sollwert-Überhöhung des Splits 1 → **0 K**
@@ -911,7 +911,7 @@ für das ganze Haus.
   Werte; wer genau den alten Wert bewusst gesetzt hat (z. B. Schwelle 1,0 K), muss ihn
   erneut setzen (Eintrag im Log). Das Panel markiert solche Werte als **„alter
   Standard“**.
-- **Nächste Version (Issue #31)** — **globale Abstimmung als Übersteuerungen gespeichert**:
+- **0.23.0 (2026-10-23, #31)** — **globale Abstimmung als Übersteuerungen gespeichert**:
   Bisher speicherten der Assistent und jedes Speichern der Abstimmung eine vollständige
   Kopie aller Einstellungen, sodass verbesserte Standardwerte bestehende Installationen nie
   erreichten (z. B. `kp 8 / ki 0,02 / kt 6` statt `14 / 0,0015 / 12` und eine
