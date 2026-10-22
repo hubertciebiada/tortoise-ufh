@@ -167,6 +167,30 @@ class ControllerConfig:
             ``HEATING_SUPPLY_MAX_C``). A floor-heating install may want a
             lower ceiling; 40 stays the hard upper bound (screed). GLOBAL
             knob.
+        heating_gate_enabled: Master on/off of the heating-setpoint write gate
+            (default ``True``; issue #33, 2026-10-22). With the compressor
+            frequency and outlet temperature entities wired, a new heating
+            water target is written only when the compressor state makes the
+            step safe (Panasonic restart lockout) — see
+            :class:`~tortoise_ufh.hp_link.HeatingSetpointGate`. ``False``
+            writes every target at once, as before #33 (the hysteresis still
+            applies). GLOBAL boolean knob.
+        heating_curve_hysteresis_k: Play (backlash) on the RAW heating-curve
+            value before it is quantized to the pump's step [K] (in [0, 2];
+            default 0.5; issue #33). The quantized target moves only once the
+            curve has moved this far past a rounding boundary, so a 0.1 K
+            outdoor flicker cannot toggle a 1 K target. ``0`` disables it.
+            GLOBAL knob.
+        heating_restart_band_k: The pump's own restart band [K] — the
+            compressor restarts once the outlet falls this far below the
+            heating target (Panasonic "ΔT for heating ON"; in [1, 10]; default
+            3; issue #33). An optional entity can feed the live value; this
+            knob is the fallback. GLOBAL knob.
+        heating_stop_offset_k: The pump's own stop offset [K] — a running
+            compressor stops once the outlet exceeds the target by this much
+            (in [0.5, 5]; default 2; issue #33). A lower target is written
+            while running only once the outlet is below the new target plus
+            this offset, so the write cannot end the run at once. GLOBAL knob.
         hp_flicker_enabled: Master on/off for the opt-in, Panasonic-specific
             cooling setpoint-flicker (default ``False``; issue #7, 2026-07-15).
             A GLOBAL boolean knob read only by the adapter — it gates whether
@@ -255,6 +279,14 @@ class ControllerConfig:
     heating_curve_neutral_c: float = 15.0
     heating_supply_min_c: float = 20.0
     heating_supply_max_c: float = 40.0
+    # Heating-setpoint write gate (issue #33, 2026-10-22): hold a new heating
+    # water target while the compressor state makes the step unsafe
+    # (Panasonic restart lockout), plus hysteresis on the raw curve value
+    # before quantization. Global-only; read by HeatingSetpointGate.
+    heating_gate_enabled: bool = True
+    heating_curve_hysteresis_k: float = 0.5
+    heating_restart_band_k: float = 3.0
+    heating_stop_offset_k: float = 2.0
     # Cooling setpoint-flicker knobs (2026-07-15, issue #7): global-only timing
     # of the opt-in, Panasonic-specific flicker that trips the cooling
     # compressor out of its fixed 3 K return-water deadband; read only by the
@@ -292,7 +324,10 @@ class ControllerConfig:
                 [20, 35], ``heating_supply_max_c`` [25, 40]), the heating
                 clamps are not ordered (``heating_supply_min_c`` <
                 ``heating_supply_max_c``) or ``heating_supply_base_c`` lies
-                outside them, a flicker knob is
+                outside them, a heating write-gate knob is out of range
+                (``heating_curve_hysteresis_k`` [0, 2],
+                ``heating_restart_band_k`` [1, 10], ``heating_stop_offset_k``
+                [0.5, 5]), a flicker knob is
                 out of range (``hp_flicker_band_k`` [0.5, 3.0],
                 ``hp_flicker_stuck_minutes`` [5, 120],
                 ``hp_flicker_min_off_minutes`` [5, 120],
@@ -380,6 +415,7 @@ class ControllerConfig:
             )
             raise ValueError(msg)
         self._validate_heating_curve()
+        self._validate_heating_gate()
         if not 0.5 <= self.hp_flicker_band_k <= 3.0:
             msg = (
                 f"hp_flicker_band_k must be in [0.5, 3.0], got {self.hp_flicker_band_k}"
@@ -416,6 +452,33 @@ class ControllerConfig:
             msg = (
                 f"valve_write_threshold_pct must be >= 0, "
                 f"got {self.valve_write_threshold_pct}"
+            )
+            raise ValueError(msg)
+
+    def _validate_heating_gate(self) -> None:
+        """Validate the heating-setpoint write-gate knobs (issue #33).
+
+        Raises:
+            ValueError: If ``heating_curve_hysteresis_k``,
+                ``heating_restart_band_k`` or ``heating_stop_offset_k`` is
+                outside its range.
+        """
+        if not 0.0 <= self.heating_curve_hysteresis_k <= 2.0:
+            msg = (
+                "heating_curve_hysteresis_k must be in [0, 2], got "
+                f"{self.heating_curve_hysteresis_k}"
+            )
+            raise ValueError(msg)
+        if not 1.0 <= self.heating_restart_band_k <= 10.0:
+            msg = (
+                "heating_restart_band_k must be in [1, 10], got "
+                f"{self.heating_restart_band_k}"
+            )
+            raise ValueError(msg)
+        if not 0.5 <= self.heating_stop_offset_k <= 5.0:
+            msg = (
+                "heating_stop_offset_k must be in [0.5, 5], got "
+                f"{self.heating_stop_offset_k}"
             )
             raise ValueError(msg)
 

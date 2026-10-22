@@ -323,6 +323,10 @@ const STR = {
     tune_heating_curve_neutral_c: "Temperatura neutralna krzywej wody grzania",
     tune_heating_supply_min_c: "Minimalna temperatura wody grzania",
     tune_heating_supply_max_c: "Maksymalna temperatura wody grzania",
+    tune_heating_gate_enabled: "Czekaj na bezpieczny stan sprężarki",
+    tune_heating_curve_hysteresis_k: "Histereza krzywej wody grzania",
+    tune_heating_restart_band_k: "Pasmo ponownego startu pompy",
+    tune_heating_stop_offset_k: "Próg zatrzymania pompy",
     val_th_command: "Komenda",
     val_th_raw: "Surowy",
     val_th_floor: "Podłoga",
@@ -496,6 +500,37 @@ const STR = {
       "Górne ograniczenie krzywej wody grzania: nastawa nigdy nie przekroczy " +
       "tej wartości. Dla samej podłogówki często warto zejść poniżej 40 °C " +
       "(wylewka). Parametr globalny. Domyślnie 40 °C.",
+    tip_knob_heating_gate_enabled:
+      "Panasonic: zmiana nastawy wody grzania, gdy sprężarka stoi, potrafi " +
+      "zablokować jej ponowny start. Z podłączonymi encjami częstotliwości " +
+      "sprężarki i temperatury wylotu Tortoise pisze nową nastawę tylko " +
+      "wtedy, gdy to bezpieczne: przy pracującej sprężarce podwyżkę od " +
+      "razu, a obniżkę dopiero, gdy wylot jest niżej niż nowa nastawa + " +
+      "próg zatrzymania; przy postoju podwyżkę tylko, gdy wylot jest niżej " +
+      "niż nowa nastawa − pasmo startu (sprężarka rusza od razu), a obniżkę " +
+      "tylko, gdy wylot jest co najmniej na nowej nastawie. W pozostałych " +
+      "przypadkach pompa zostaje na poprzedniej nastawie, a decyzja jest " +
+      "sprawdzana co cykl. Niezmieniona nastawa nie jest ponawiana. " +
+      "Wyłączone = każda nastawa pisana od razu (jak przed issue #33). " +
+      "Parametr globalny. Domyślnie włączone.",
+    tip_knob_heating_curve_hysteresis_k:
+      "Luz na surowej wartości krzywej, zanim zostanie zaokrąglona do kroku " +
+      "encji pompy [K]. Nastawa zmienia się dopiero, gdy krzywa przesunie " +
+      "się o tyle za granicę zaokrąglenia — wahanie temperatury zewnętrznej " +
+      "o 0,1 K nie przełącza nastawy co cykl. 0 wyłącza. Działa także przy " +
+      "wyłączonej bramce. Parametr globalny. Domyślnie 0,5 K.",
+    tip_knob_heating_restart_band_k:
+      "Własne pasmo pompy „ΔT dla załączenia grzania” [K]: sprężarka rusza, " +
+      "gdy wylot spadnie o tyle poniżej nastawy. Podwyżka przy postoju jest " +
+      "pisana tylko, gdy wylot jest niżej niż nowa nastawa minus to pasmo. " +
+      "Jeśli w opcjach (Pompa ciepła) wskazano encję pasma pompy i podaje " +
+      "ona 1–10 K, ma ona pierwszeństwo. Parametr globalny. Domyślnie 3 K.",
+    tip_knob_heating_stop_offset_k:
+      "Własny próg wyłączenia pompy [K]: pracująca sprężarka staje, gdy " +
+      "wylot przekroczy nastawę o tyle. Obniżka przy pracy jest pisana " +
+      "dopiero, gdy wylot jest niżej niż nowa nastawa plus ten próg — " +
+      "inaczej zapis od razu zakończyłby pracę. Parametr globalny. " +
+      "Domyślnie 2 K.",
     // Tooltipy szczegółów pokoju (tip_dec_*) i nagłówków tabel (tip_val_* /
     // tip_ast_* / tip_th_*) — treść wspólna z docs/manual/pl.md: zmieniaj razem.
     tip_th_assist:
@@ -651,7 +686,8 @@ const STR = {
       "Opcjonalne: w trybie grzania Tortoise pisze nastawę wody z prostej " +
       "krzywej pogodowej (baza + nachylenie × niedobór względem temperatury " +
       "neutralnej krzywej, obcięte do minimum i maksimum — domyślnie " +
-      "20–40 °C). Jeśli encji nie skonfigurujesz, pompa jedzie na własnej krzywej — to domyślne i w pełni wspierane.",
+      "20–40 °C). Jeśli encji nie skonfigurujesz, pompa jedzie na własnej krzywej — to domyślne i w pełni wspierane. " +
+      "Zapis przechodzi przez bramkę nastawy grzania (karta niżej).",
     hp_active_cap: "Pompa dostępna dla podłogówki",
     hp_active_unknown: "nieznane",
     tip_hp_active:
@@ -714,6 +750,52 @@ const STR = {
     hp_flicker_return: "Powrót / wlot",
     hp_flicker_outlet: "Wylot / zasilanie",
     hp_flicker_freq: "Sprężarka",
+    hp_sec_heat_gate: "Bramka nastawy grzania",
+    tip_hp_heat_gate:
+      "Panasonic: krok nastawy wody grzania przy stojącej sprężarce potrafi " +
+      "zablokować jej ponowny start. Bramka porównuje nową nastawę z tą, " +
+      "którą ma pompa, i z temperaturą wylotu: bezpieczne kroki pisze od " +
+      "razu, pozostałe wstrzymuje i sprawdza co cykl. Bez encji " +
+      "częstotliwości sprężarki lub wylotu bramka jest nieaktywna i nastawa " +
+      "jest pisana od razu.",
+    hp_gate_active: "aktywna",
+    hp_gate_inactive: "nieaktywna",
+    hp_gate_held_badge: "wstrzymana",
+    hp_gate_reason: "Decyzja",
+    hp_gate_target: "Nastawa docelowa",
+    hp_gate_pump: "Nastawa w pompie",
+    hp_gate_curve: "Krzywa (surowa)",
+    hp_gate_compressor: "Sprężarka",
+    hp_gate_running: "pracuje",
+    hp_gate_idle: "stoi",
+    hp_gate_outlet: "Wylot",
+    hp_gate_band: "Pasmo startu",
+    hp_gate_band_entity: "z pompy",
+    hp_gate_band_knob: "parametr",
+    hp_gate_stop: "Próg zatrzymania",
+    hp_gate_held_for: "Wstrzymana od",
+    hp_gate_r_no_target: "brak nastawy w tym trybie",
+    hp_gate_r_in_sync: "pompa ma już tę nastawę",
+    hp_gate_r_ungated_disabled: "bramka wyłączona — pisane od razu",
+    hp_gate_r_ungated_no_input:
+      "bramka nieaktywna: brak odczytu sprężarki/wylotu — pisane od razu",
+    hp_gate_r_write_increase_running: "podwyżka zapisana (sprężarka pracuje)",
+    hp_gate_r_write_decrease_running:
+      "obniżka zapisana (wylot poniżej nastawy + próg zatrzymania)",
+    hp_gate_r_write_increase_idle:
+      "podwyżka zapisana (wylot poniżej pasma startu — sprężarka rusza)",
+    hp_gate_r_write_decrease_idle: "obniżka zapisana (wylot na lub ponad nową nastawą)",
+    hp_gate_r_write_unknown_running:
+      "zapisana (nastawa pompy nieznana, sprężarka pracuje)",
+    hp_gate_r_write_unknown_idle:
+      "zapisana (nastawa pompy nieznana, wylot poniżej pasma startu)",
+    hp_gate_r_hold_decrease_running: "obniżka wstrzymana: zakończyłaby pracę sprężarki",
+    hp_gate_r_hold_increase_idle:
+      "podwyżka wstrzymana: sprężarka stoi, wylot w paśmie startu",
+    hp_gate_r_hold_decrease_idle:
+      "obniżka wstrzymana: sprężarka stoi, wylot poniżej nowej nastawy",
+    hp_gate_r_hold_unknown_running: "wstrzymana: nastawa pompy nieznana, wylot za wysoki",
+    hp_gate_r_hold_unknown_idle: "wstrzymana: nastawa pompy nieznana, sprężarka stoi",
     // Zakładka Rozdzielacze (v0.21.0) — rysunek KAN-therm InoxFlow UFST.
     mf_empty:
       "Brak skonfigurowanych rozdzielaczy. Dodaj je w opcjach integracji: " +
@@ -916,6 +998,10 @@ const STR = {
     tune_heating_curve_neutral_c: "Heating curve neutral outdoor temperature",
     tune_heating_supply_min_c: "Heating water minimum temperature",
     tune_heating_supply_max_c: "Heating water maximum temperature",
+    tune_heating_gate_enabled: "Wait for a safe compressor state",
+    tune_heating_curve_hysteresis_k: "Heating curve hysteresis",
+    tune_heating_restart_band_k: "Heat pump restart band",
+    tune_heating_stop_offset_k: "Heat pump stop offset",
     val_th_command: "Command",
     val_th_raw: "Raw",
     val_th_floor: "Floor",
@@ -1086,6 +1172,37 @@ const STR = {
       "Upper clamp of the heating-water curve: the setpoint never exceeds it. " +
       "A floor-only install often wants less than 40 °C (screed). Global " +
       "parameter. Default 40 °C.",
+    tip_knob_heating_gate_enabled:
+      "Panasonic: changing the heating water setpoint while the compressor " +
+      "is idle can block its restart. With the compressor-frequency and " +
+      "outlet-temperature entities wired, Tortoise writes a new setpoint " +
+      "only when it is safe: while running, an increase at once and a " +
+      "decrease only once the outlet is below the new setpoint + the stop " +
+      "offset; while idle, an increase only when the outlet is below the " +
+      "new setpoint − the restart band (the compressor starts at once), and " +
+      "a decrease only when the outlet is at or above the new setpoint. " +
+      "Otherwise the pump keeps its previous setpoint and the decision is " +
+      "re-checked every cycle. An unchanged setpoint is not re-sent. Off = " +
+      "every setpoint is written at once (as before issue #33). Global " +
+      "parameter. Default on.",
+    tip_knob_heating_curve_hysteresis_k:
+      "Play on the raw curve value before it is rounded to the pump " +
+      "entity’s step [K]. The setpoint changes only once the curve has " +
+      "moved this far past a rounding boundary — a 0.1 K outdoor wobble no " +
+      "longer toggles the setpoint every cycle. 0 disables it. Also applies " +
+      "with the gate off. Global parameter. Default 0.5 K.",
+    tip_knob_heating_restart_band_k:
+      "The pump’s own “ΔT for heating ON” [K]: the compressor restarts once " +
+      "the outlet falls this far below the setpoint. An increase while idle " +
+      "is written only when the outlet is below the new setpoint minus this " +
+      "band. If a restart-band entity is set in the options (Heat pump) and " +
+      "reads 1–10 K, it takes precedence. Global parameter. Default 3 K.",
+    tip_knob_heating_stop_offset_k:
+      "The pump’s own stop offset [K]: a running compressor stops once the " +
+      "outlet exceeds the setpoint by this much. A decrease while running " +
+      "is written only once the outlet is below the new setpoint plus this " +
+      "offset — otherwise the write would end the run at once. Global " +
+      "parameter. Default 2 K.",
     // Room-detail tooltips (tip_dec_*) and table-header tooltips (tip_val_* /
     // tip_ast_* / tip_th_*) — content shared with docs/manual/pl.md: change
     // together.
@@ -1244,7 +1361,8 @@ const STR = {
       "temperature of the curve, clamped to its minimum and maximum — " +
       "20–40 °C by default). If you leave the entity " +
       "unconfigured, the pump follows its own curve — the default and fully " +
-      "supported.",
+      "supported. " +
+      "The write goes through the heating setpoint gate (card below).",
     hp_active_cap: "Pump available for UFH",
     hp_active_unknown: "unknown",
     tip_hp_active:
@@ -1308,6 +1426,52 @@ const STR = {
     hp_flicker_return: "Return / inlet",
     hp_flicker_outlet: "Outlet / supply",
     hp_flicker_freq: "Compressor",
+    hp_sec_heat_gate: "Heating setpoint gate",
+    tip_hp_heat_gate:
+      "Panasonic: a heating water setpoint step while the compressor is " +
+      "idle can block its restart. The gate compares the new setpoint with " +
+      "the one the pump holds and with the outlet temperature: safe steps " +
+      "are written at once, the others are held and re-checked every cycle. " +
+      "Without the compressor-frequency or outlet entity the gate is " +
+      "inactive and the setpoint is written at once.",
+    hp_gate_active: "active",
+    hp_gate_inactive: "inactive",
+    hp_gate_held_badge: "held",
+    hp_gate_reason: "Decision",
+    hp_gate_target: "Desired target",
+    hp_gate_pump: "Pump setpoint",
+    hp_gate_curve: "Curve (raw)",
+    hp_gate_compressor: "Compressor",
+    hp_gate_running: "running",
+    hp_gate_idle: "idle",
+    hp_gate_outlet: "Outlet",
+    hp_gate_band: "Restart band",
+    hp_gate_band_entity: "from pump",
+    hp_gate_band_knob: "knob",
+    hp_gate_stop: "Stop offset",
+    hp_gate_held_for: "Held for",
+    hp_gate_r_no_target: "no target in this mode",
+    hp_gate_r_in_sync: "pump already holds the target",
+    hp_gate_r_ungated_disabled: "gate off — written at once",
+    hp_gate_r_ungated_no_input:
+      "gate inactive: no compressor/outlet input — written at once",
+    hp_gate_r_write_increase_running: "increase written (compressor running)",
+    hp_gate_r_write_decrease_running:
+      "decrease written (outlet below target + stop offset)",
+    hp_gate_r_write_increase_idle:
+      "increase written (outlet below the restart band — compressor starts)",
+    hp_gate_r_write_decrease_idle: "decrease written (outlet at or above the new target)",
+    hp_gate_r_write_unknown_running:
+      "written (pump setpoint unknown, compressor running)",
+    hp_gate_r_write_unknown_idle:
+      "written (pump setpoint unknown, outlet below the restart band)",
+    hp_gate_r_hold_decrease_running: "decrease held: it would end the compressor run",
+    hp_gate_r_hold_increase_idle:
+      "increase held: compressor idle, outlet inside the restart band",
+    hp_gate_r_hold_decrease_idle:
+      "decrease held: compressor idle, outlet below the new target",
+    hp_gate_r_hold_unknown_running: "held: pump setpoint unknown, outlet too high",
+    hp_gate_r_hold_unknown_idle: "held: pump setpoint unknown, compressor idle",
     test_running_min: "~{m} min",
     // Manifolds tab (v0.21.0) — the KAN-therm InoxFlow UFST drawing.
     mf_empty:
@@ -1512,6 +1676,10 @@ const STR = {
     tune_heating_curve_neutral_c: "Neutrale Außentemperatur der Heizkurve",
     tune_heating_supply_min_c: "Minimale Heizwassertemperatur",
     tune_heating_supply_max_c: "Maximale Heizwassertemperatur",
+    tune_heating_gate_enabled: "Auf sicheren Verdichterzustand warten",
+    tune_heating_curve_hysteresis_k: "Hysterese der Heizwasserkurve",
+    tune_heating_restart_band_k: "Wiederanlaufband der Pumpe",
+    tune_heating_stop_offset_k: "Abschaltschwelle der Pumpe",
     val_th_command: "Befehl",
     val_th_raw: "Rohwert",
     val_th_floor: "Minimum",
@@ -1687,6 +1855,43 @@ const STR = {
       "Obere Grenze der Heizwasserkurve: Der Sollwert überschreitet sie nie. Eine " +
       "reine Fußbodenheizung will oft weniger als 40 °C (Estrich). Globaler " +
       "Parameter. Standard 40 °C.",
+    tip_knob_heating_gate_enabled:
+      "Panasonic: Eine Änderung des Heizwasser-Sollwerts bei stehendem " +
+      "Verdichter kann dessen Wiederanlauf blockieren. Mit verbundenen " +
+      "Entitäten für Verdichterfrequenz und Vorlauftemperatur schreibt " +
+      "Tortoise einen neuen Sollwert nur, wenn es sicher ist: bei laufendem " +
+      "Verdichter eine Erhöhung sofort und eine Absenkung erst, wenn der " +
+      "Vorlauf unter dem neuen Sollwert + Abschaltschwelle liegt; bei " +
+      "stehendem Verdichter eine Erhöhung nur, wenn der Vorlauf unter dem " +
+      "neuen Sollwert − Wiederanlaufband liegt (der Verdichter startet " +
+      "sofort), und eine Absenkung nur, wenn der Vorlauf auf oder über dem " +
+      "neuen Sollwert liegt. Sonst behält die Pumpe ihren bisherigen " +
+      "Sollwert, und die Entscheidung wird jeden Zyklus neu geprüft. Ein " +
+      "unveränderter Sollwert wird nicht erneut gesendet. Aus = jeder " +
+      "Sollwert wird sofort geschrieben (wie vor Issue #33). Globaler " +
+      "Parameter. Standard ein.",
+    tip_knob_heating_curve_hysteresis_k:
+      "Spiel auf dem rohen Kurvenwert, bevor er auf die Schrittweite der " +
+      "Pumpen-Entität gerundet wird [K]. Der Sollwert ändert sich erst, " +
+      "wenn die Kurve so weit über eine Rundungsgrenze gewandert ist — ein " +
+      "Schwanken der Außentemperatur um 0,1 K schaltet den Sollwert nicht " +
+      "mehr jeden Zyklus um. 0 schaltet es ab. Gilt auch bei " +
+      "ausgeschalteter Sperre. Globaler Parameter. Standard 0,5 K.",
+    tip_knob_heating_restart_band_k:
+      "Das eigene „ΔT für Heizen EIN“ der Pumpe [K]: Der Verdichter startet " +
+      "wieder, sobald der Vorlauf so weit unter den Sollwert fällt. Eine " +
+      "Erhöhung bei stehendem Verdichter wird nur geschrieben, wenn der " +
+      "Vorlauf unter dem neuen Sollwert minus diesem Band liegt. Ist in den " +
+      "Optionen (Wärmepumpe) eine Entität für das Wiederanlaufband gesetzt " +
+      "und liefert sie 1–10 K, hat sie Vorrang. Globaler Parameter. " +
+      "Standard 3 K.",
+    tip_knob_heating_stop_offset_k:
+      "Die eigene Abschaltschwelle der Pumpe [K]: Ein laufender Verdichter " +
+      "stoppt, sobald der Vorlauf den Sollwert um so viel überschreitet. " +
+      "Eine Absenkung bei laufendem Verdichter wird erst geschrieben, wenn " +
+      "der Vorlauf unter dem neuen Sollwert plus dieser Schwelle liegt — " +
+      "sonst würde der Schreibvorgang den Lauf sofort beenden. Globaler " +
+      "Parameter. Standard 2 K.",
     // Tooltips der Raumdetails (tip_dec_*) und der Tabellenköpfe (tip_val_* /
     // tip_ast_* / tip_th_*) — Inhalt gemeinsam mit docs/manual/de.md: zusammen
     // ändern.
@@ -1849,7 +2054,8 @@ const STR = {
       "Temperatur der Kurve, begrenzt auf ihr Minimum und Maximum — standardmäßig " +
       "20–40 °C). Wenn Sie die Entität unkonfiguriert " +
       "lassen, folgt die Pumpe ihrer eigenen Kurve — der Standard und vollständig " +
-      "unterstützt.",
+      "unterstützt. " +
+      "Der Schreibvorgang läuft über die Heizsollwert-Sperre (Karte unten).",
     hp_active_cap: "Pumpe für Fußbodenheizung verfügbar",
     hp_active_unknown: "unbekannt",
     tip_hp_active:
@@ -1916,6 +2122,61 @@ const STR = {
     hp_flicker_return: "Rücklauf / Eintritt",
     hp_flicker_outlet: "Vorlauf / Austritt",
     hp_flicker_freq: "Verdichter",
+    hp_sec_heat_gate: "Heizsollwert-Sperre",
+    tip_hp_heat_gate:
+      "Panasonic: Ein Schritt des Heizwasser-Sollwerts bei stehendem " +
+      "Verdichter kann dessen Wiederanlauf blockieren. Die Sperre " +
+      "vergleicht den neuen Sollwert mit dem der Pumpe und mit der " +
+      "Vorlauftemperatur: sichere Schritte werden sofort geschrieben, die " +
+      "anderen zurückgehalten und jeden Zyklus neu geprüft. Ohne Entität " +
+      "für Verdichterfrequenz oder Vorlauf ist die Sperre inaktiv, und der " +
+      "Sollwert wird sofort geschrieben.",
+    hp_gate_active: "aktiv",
+    hp_gate_inactive: "inaktiv",
+    hp_gate_held_badge: "zurückgehalten",
+    hp_gate_reason: "Entscheidung",
+    hp_gate_target: "Zielsollwert",
+    hp_gate_pump: "Sollwert in der Pumpe",
+    hp_gate_curve: "Kurve (roh)",
+    hp_gate_compressor: "Verdichter",
+    hp_gate_running: "läuft",
+    hp_gate_idle: "steht",
+    hp_gate_outlet: "Vorlauf",
+    hp_gate_band: "Wiederanlaufband",
+    hp_gate_band_entity: "von der Pumpe",
+    hp_gate_band_knob: "Parameter",
+    hp_gate_stop: "Abschaltschwelle",
+    hp_gate_held_for: "Zurückgehalten seit",
+    hp_gate_r_no_target: "kein Sollwert in diesem Modus",
+    hp_gate_r_in_sync: "Pumpe hat den Sollwert bereits",
+    hp_gate_r_ungated_disabled: "Sperre aus — sofort geschrieben",
+    hp_gate_r_ungated_no_input:
+      "Sperre inaktiv: kein Verdichter-/Vorlaufwert — sofort geschrieben",
+    hp_gate_r_write_increase_running: "Erhöhung geschrieben (Verdichter läuft)",
+    hp_gate_r_write_decrease_running:
+      "Absenkung geschrieben (Vorlauf unter Sollwert + Abschaltschwelle)",
+    hp_gate_r_write_increase_idle:
+      "Erhöhung geschrieben (Vorlauf unter dem Wiederanlaufband — " +
+      "Verdichter startet)",
+    hp_gate_r_write_decrease_idle:
+      "Absenkung geschrieben (Vorlauf auf oder über dem neuen Sollwert)",
+    hp_gate_r_write_unknown_running:
+      "geschrieben (Pumpensollwert unbekannt, Verdichter läuft)",
+    hp_gate_r_write_unknown_idle:
+      "geschrieben (Pumpensollwert unbekannt, Vorlauf unter dem " +
+      "Wiederanlaufband)",
+    hp_gate_r_hold_decrease_running:
+      "Absenkung zurückgehalten: würde den Verdichterlauf beenden",
+    hp_gate_r_hold_increase_idle:
+      "Erhöhung zurückgehalten: Verdichter steht, Vorlauf im " +
+      "Wiederanlaufband",
+    hp_gate_r_hold_decrease_idle:
+      "Absenkung zurückgehalten: Verdichter steht, Vorlauf unter dem neuen " +
+      "Sollwert",
+    hp_gate_r_hold_unknown_running:
+      "zurückgehalten: Pumpensollwert unbekannt, Vorlauf zu hoch",
+    hp_gate_r_hold_unknown_idle:
+      "zurückgehalten: Pumpensollwert unbekannt, Verdichter steht",
     test_running_min: "~{m} min",
     // Reiter Verteiler (v0.21.0) — die Zeichnung des KAN-therm InoxFlow UFST.
     mf_empty:
@@ -2378,8 +2639,9 @@ const SEV_RANK = { ok: 0, info: 1, warn: 2, problem: 3, alarm: 4 };
  * `globalOnly` groups render only in the Global scope (the heat-pump water
  * setpoints are building-level physics; the backend rejects per-room
  * overrides too). Issue #35 split the old mixed "hp" group: "Cooling water"
- * (the base + the setpoint-flicker) and "Heating water" (the curve; later
- * issues add the write gate and the compressor kick here). A `curvePreview`
+ * (the base + the setpoint-flicker) and "Heating water" (the curve, plus the
+ * issue #33 write gate: hysteresis, gate switch, restart band, stop offset;
+ * issue #34 adds the compressor kick here). A `curvePreview`
  * group gets the heating-curve preview table under its knobs.
  */
 const KNOB_GROUPS = [
@@ -2426,6 +2688,10 @@ const KNOB_GROUPS = [
       "heating_supply_slope",
       "heating_supply_min_c",
       "heating_supply_max_c",
+      "heating_curve_hysteresis_k",
+      "heating_gate_enabled",
+      "heating_restart_band_k",
+      "heating_stop_offset_k",
     ],
     globalOnly: true,
     curvePreview: true,
@@ -6636,6 +6902,42 @@ class TortoiseUfhPanel extends HTMLElement {
       P.heatCurve,
     ]);
 
+    // Card: heating-setpoint write gate (issue #33). Hidden unless the link
+    // exposes heating.gate (a heating setpoint entity is configured).
+    P.gateBadge = h("span", { class: "chip", style: "display:none" });
+    P.gateReason = h("span", { class: "kv-val" });
+    P.gateTarget = h("span", { class: "kv-val" });
+    P.gatePump = h("span", { class: "kv-val" });
+    P.gateCurve = h("span", { class: "kv-val" });
+    P.gateCompressor = h("span", { class: "kv-val" });
+    P.gateOutlet = h("span", { class: "kv-val" });
+    P.gateBand = h("span", { class: "kv-val" });
+    P.gateStop = h("span", { class: "kv-val" });
+    P.gateHeldFor = h("span", { class: "kv-val" });
+    const gateKv = (labelKey, valEl) =>
+      h("div", { class: "kv" }, [
+        h("span", { class: "kv-cap", text: this._t(labelKey) }),
+        valEl,
+      ]);
+    P.gateCard = h("div", { class: "hp-card", style: "display:none" }, [
+      h("div", { class: "hp-card-cap" }, [
+        this._t("hp_sec_heat_gate"),
+        this._infoIcon("tip_hp_heat_gate"),
+        P.gateBadge,
+      ]),
+      h("div", { class: "kv-grid hp-grid" }, [
+        gateKv("hp_gate_reason", P.gateReason),
+        gateKv("hp_gate_target", P.gateTarget),
+        gateKv("hp_gate_pump", P.gatePump),
+        gateKv("hp_gate_curve", P.gateCurve),
+        gateKv("hp_gate_compressor", P.gateCompressor),
+        gateKv("hp_gate_outlet", P.gateOutlet),
+        gateKv("hp_gate_band", P.gateBand),
+        gateKv("hp_gate_stop", P.gateStop),
+        gateKv("hp_gate_held_for", P.gateHeldFor),
+      ]),
+    ]);
+
     // Card: cooling setpoint-flicker diagnostics (issue #7). Hidden unless the
     // link exposes a flicker payload (enabled, or its diagnostic sensors set).
     P.flickerBadge = h("span", { class: "chip", style: "display:none" });
@@ -6700,6 +7002,7 @@ class TortoiseUfhPanel extends HTMLElement {
       P.modeCard,
       P.dhwCard,
       P.setpointsCard,
+      P.gateCard,
       P.flickerCard,
       P.activeCard,
     ]);
@@ -6787,6 +7090,10 @@ class TortoiseUfhPanel extends HTMLElement {
     }));
     this._fillCurveTable(P.heatCurve, (hp.heating && hp.heating.curve) || []);
 
+    // Heating-setpoint write gate (issue #33): the desired vs the pump's
+    // setpoint and why a step is held.
+    this._renderHeatGate((hp.heating && hp.heating.gate) || null);
+
     // "Pump available for UFH" — only with a configured entity.
     P.activeCard.style.display = hp.hp_active_configured ? "" : "none";
     if (hp.hp_active_configured) {
@@ -6863,6 +7170,53 @@ class TortoiseUfhPanel extends HTMLElement {
       P.flickerLastPulse.textContent = fmt(fl.last_pulse_target_c, 1, " °C");
       this._refreshFlickerPulses24h();
     }
+  }
+
+  /** Fill the heating-setpoint write-gate card (issue #33) from `gate`. */
+  _renderHeatGate(gate) {
+    const P = this._hpEls;
+    if (!P || !P.gateCard) {
+      return;
+    }
+    P.gateCard.style.display = gate ? "" : "none";
+    if (!gate) {
+      return;
+    }
+    P.gateBadge.style.display = "";
+    if (gate.held) {
+      P.gateBadge.className = "chip chip-warn";
+      P.gateBadge.textContent = this._t("hp_gate_held_badge");
+    } else {
+      P.gateBadge.className = "chip " + (gate.gate_active ? "chip-ok" : "");
+      P.gateBadge.textContent = this._t(
+        gate.gate_active ? "hp_gate_active" : "hp_gate_inactive",
+      );
+    }
+    const reason = String(gate.reason || "no_target");
+    const reasonKey = "hp_gate_r_" + reason;
+    const label = this._t(reasonKey);
+    P.gateReason.textContent = label === reasonKey ? reason : label;
+    P.gateReason.classList.toggle("warn", !!gate.held);
+    P.gateTarget.textContent = fmt(gate.target_c, 1, " °C");
+    P.gatePump.textContent = fmt(gate.pump_setpoint_c, 1, " °C");
+    P.gateCurve.textContent = fmt(gate.curve_c, 1, " °C");
+    const freq = num(gate.compressor_freq_hz);
+    P.gateCompressor.textContent =
+      freq === null
+        ? "—"
+        : `${this._t(freq > 0 ? "hp_gate_running" : "hp_gate_idle")} · ${fmt(freq, 0, " Hz")}`;
+    P.gateOutlet.textContent = fmt(gate.outlet_c, 1, " °C");
+    const src = this._t(
+      gate.restart_band_source === "entity" ? "hp_gate_band_entity" : "hp_gate_band_knob",
+    );
+    P.gateBand.textContent = `${fmt(gate.restart_band_k, 1, " K")} (${src})`;
+    P.gateStop.textContent = fmt(gate.stop_offset_k, 1, " K");
+    P.gateHeldFor.textContent =
+      num(gate.held_for_s) === null
+        ? "—"
+        : fmtStr(this._t("test_running_min"), {
+            m: Math.max(0, Math.round(num(gate.held_for_s) / 60)),
+          });
   }
 
   /**

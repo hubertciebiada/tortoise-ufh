@@ -223,7 +223,7 @@ def test_every_knob_has_label_and_tooltip_in_both_languages() -> None:
     """Each exposed knob has tune_<name> and tip_knob_<name> in pl AND en."""
     sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
     knobs = _knob_names()
-    assert len(knobs) == 30, f"expected 30 exposed knobs, parsed {knobs}"
+    assert len(knobs) == 34, f"expected 34 exposed knobs, parsed {knobs}"
     missing: list[str] = []
     for knob in knobs:
         for key in (f"tune_{knob}", f"tip_knob_{knob}"):
@@ -490,7 +490,11 @@ def test_issue35_surfaces_have_their_str_keys() -> None:
 
 @pytest.mark.unit
 def test_issue35_water_groups_split_cooling_from_heating() -> None:
-    """Heating water = the curve only; cooling water = base + flicker (#35)."""
+    """Heating water = curve + write gate; cooling water = base + flicker.
+
+    Issue #35 split the groups; issue #33 appended the write-gate knobs to
+    "Heating water".
+    """
     source = _PANEL_JS.read_text(encoding="utf-8")
     groups = dict(_knob_groups(source))
     assert groups["tune_grp_heating_water"] == [
@@ -499,6 +503,10 @@ def test_issue35_water_groups_split_cooling_from_heating() -> None:
         "heating_supply_slope",
         "heating_supply_min_c",
         "heating_supply_max_c",
+        "heating_curve_hysteresis_k",
+        "heating_gate_enabled",
+        "heating_restart_band_k",
+        "heating_stop_offset_k",
     ]
     cooling = groups["tune_grp_cooling_water"]
     assert cooling[0] == "cooling_supply_base_c"
@@ -508,6 +516,50 @@ def test_issue35_water_groups_split_cooling_from_heating() -> None:
     # The preview asks the core for the curve (one source of truth).
     assert '"tortoise_ufh/preview_heating_curve"' in source
     assert "curvePreview: true" in source
+
+
+_REQUIRED_ISSUE33_KEYS: tuple[str, ...] = (
+    "hp_sec_heat_gate",
+    "tip_hp_heat_gate",
+    "hp_gate_active",
+    "hp_gate_inactive",
+    "hp_gate_held_badge",
+    "hp_gate_reason",
+    "hp_gate_target",
+    "hp_gate_pump",
+    "hp_gate_curve",
+    "hp_gate_compressor",
+    "hp_gate_running",
+    "hp_gate_idle",
+    "hp_gate_outlet",
+    "hp_gate_band",
+    "hp_gate_band_entity",
+    "hp_gate_band_knob",
+    "hp_gate_stop",
+    "hp_gate_held_for",
+)
+
+
+@pytest.mark.unit
+def test_issue33_gate_card_has_its_str_keys_and_every_reason() -> None:
+    """The write-gate card keys + one label per core reason exist (#33)."""
+    from custom_components.tortoise_ufh.core.hp_link import HEATING_GATE_REASONS
+
+    source = _PANEL_JS.read_text(encoding="utf-8")
+    sections = _str_language_keys(source)
+    keys = list(_REQUIRED_ISSUE33_KEYS) + [
+        f"hp_gate_r_{reason}" for reason in sorted(HEATING_GATE_REASONS)
+    ]
+    missing = [
+        f"{lang}:{key}"
+        for key in keys
+        for lang in ("pl", "en", "de")
+        if key not in sections[lang]
+    ]
+    assert not missing, f"missing STR keys: {missing}"
+    # The Heat-pump render reads the payload's gate view.
+    assert "hp.heating.gate" in source
+    assert '"hp_gate_r_" + reason' in source
 
 
 _REQUIRED_TUNING_RESET_KEYS: tuple[str, ...] = (

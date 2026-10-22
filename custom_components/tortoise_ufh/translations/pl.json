@@ -66,6 +66,10 @@
           "heating_curve_neutral_c": "Temperatura neutralna krzywej wody grzania (°C, globalne)",
           "heating_supply_min_c": "Minimalna temperatura wody grzania (°C, globalne)",
           "heating_supply_max_c": "Maksymalna temperatura wody grzania (°C, globalne)",
+          "heating_gate_enabled": "Nastawa grzania: czekaj na bezpieczny stan sprężarki (globalne)",
+          "heating_curve_hysteresis_k": "Histereza krzywej wody grzania (K, globalne)",
+          "heating_restart_band_k": "Pasmo ponownego startu pompy, ΔT załączenia grzania (K, globalne)",
+          "heating_stop_offset_k": "Próg zatrzymania pompy ponad nastawę (K, globalne)",
           "hp_flicker_enabled": "Wymuszanie startu chłodzenia (Panasonic Aquarea)",
           "hp_flicker_band_k": "Wymuszanie startu chłodzenia: docelowa histereza (K, globalne)",
           "hp_flicker_min_open_pct": "Wymuszanie startu chłodzenia: min. suma otwarcia pętli (%, globalne)",
@@ -141,6 +145,10 @@
           "heating_curve_neutral_c": "Temperatura neutralna krzywej wody grzania (°C, globalne)",
           "heating_supply_min_c": "Minimalna temperatura wody grzania (°C, globalne)",
           "heating_supply_max_c": "Maksymalna temperatura wody grzania (°C, globalne)",
+          "heating_gate_enabled": "Nastawa grzania: czekaj na bezpieczny stan sprężarki (globalne)",
+          "heating_curve_hysteresis_k": "Histereza krzywej wody grzania (K, globalne)",
+          "heating_restart_band_k": "Pasmo ponownego startu pompy, ΔT załączenia grzania (K, globalne)",
+          "heating_stop_offset_k": "Próg zatrzymania pompy ponad nastawę (K, globalne)",
           "hp_flicker_enabled": "Wymuszanie startu chłodzenia (Panasonic Aquarea)",
           "hp_flicker_band_k": "Wymuszanie startu chłodzenia: docelowa histereza (K, globalne)",
           "hp_flicker_min_open_pct": "Wymuszanie startu chłodzenia: min. suma otwarcia pętli (%, globalne)",
@@ -229,15 +237,17 @@
           "entity_hp_cooling_setpoint": "Encja nastawy wody chłodzenia (number, opcjonalna)",
           "entity_hp_active": "Encja „pompa dostępna dla podłogówki” (opcjonalna)",
           "entity_hp_return_temp": "Czujnik temperatury wody powrotu/wlotu (opcjonalny, do wymuszania startu chłodzenia)",
-          "entity_hp_outlet_temp": "Czujnik temperatury wody wylotu/zasilania (opcjonalny, diagnostyczny)",
-          "entity_hp_compressor_freq": "Czujnik częstotliwości sprężarki (opcjonalny, do wymuszania startu chłodzenia)"
+          "entity_hp_outlet_temp": "Czujnik temperatury wody wylotu/zasilania (opcjonalny, do bramki nastawy grzania)",
+          "entity_hp_compressor_freq": "Czujnik częstotliwości sprężarki (opcjonalny, do wymuszania startu chłodzenia i bramki nastawy grzania)",
+          "entity_hp_restart_band": "Encja pasma ponownego startu, „ΔT załączenia grzania” (opcjonalna, K)"
         },
         "data_description": {
           "entity_hp_mode": "Select w stylu HeishaMon z opcjami typu „Heat only” / „Cool only” / „Heat+DHW”. Tortoise pisze tylko kierunek i nigdy nie zdejmuje flagi CWU.",
           "entity_hp_active": "Wyłączona, gdy pompa robi CWU/odszranianie — regulatory pokojów zamrażają wtedy całkę.",
           "entity_hp_return_temp": "Sonda wody powrotu/wlotu pompy. Główny sygnał wymuszania startu chłodzenia: w długich postojach powrót zatrzymuje się przy nastawie chłodzenia + 3 K. Przykład Panasonic: sensor.panasonic_heat_pump_main_main_inlet_temp.",
-          "entity_hp_outlet_temp": "Sonda wody wylotu/zasilania pompy. W tej wersji tylko diagnostyka — pokazywana w zakładce Pompa ciepła; żadna logika jej jeszcze nie używa (zarezerwowana pod przyszłą ochronę przeciwrosową po stronie zasilania).",
-          "entity_hp_compressor_freq": "Częstotliwość sprężarki w Hz (0 = wyłączona). Służy do wykrycia postoju pompy w martwej strefie. Przykład Panasonic: sensor.panasonic_heat_pump_main_compressor_freq."
+          "entity_hp_outlet_temp": "Sonda wody wylotu/zasilania pompy. Razem z częstotliwością sprężarki pozwala wstrzymać zmianę nastawy grzania, gdy sprężarka stoi, a zmiana mogłaby zablokować jej ponowny start (Panasonic). Pokazywana też w zakładce Pompa ciepła. Przykład Panasonic: sensor.panasonic_heat_pump_main_main_outlet_temp.",
+          "entity_hp_compressor_freq": "Częstotliwość sprężarki w Hz (0 = wyłączona). Służy do wykrycia postoju pompy — przy wymuszaniu startu chłodzenia i w bramce nastawy grzania. Przykład Panasonic: sensor.panasonic_heat_pump_main_compressor_freq.",
+          "entity_hp_restart_band": "Własne pasmo ponownego startu pompy w K: sprężarka rusza, gdy wylot spadnie o tyle poniżej nastawy grzania. Jeśli encja jest ustawiona i podaje 1–10 K, zastępuje parametr „Pasmo ponownego startu pompy”."
         }
       },
       "manifolds": {
@@ -433,6 +443,9 @@
       },
       "hp_flicker_state": {
         "name": "Stan wymuszania startu chłodzenia"
+      },
+      "hp_heating_gate": {
+        "name": "Bramka nastawy grzania"
       }
     },
     "binary_sensor": {

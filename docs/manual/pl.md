@@ -181,8 +181,9 @@ Zakładki:
   komenda, stan rzeczywisty encji `climate`, timer dwell, **dozwolone godziny**
   (okno cichych godzin albo „zawsze" — §10), flagi, link do encji i skrót „dostrój".
 - **Pompa ciepła** — stan opcjonalnego sprzężenia z pompą (§11): tryb Tortoise vs
-  tryb pompy (zgodny/rozjazd), przełącznik flagi CWU, nastawy wody ze składnikami
-  i sygnał „pompa dostępna dla podłogówki". Bez konfiguracji pokazuje instrukcję,
+  tryb pompy (zgodny/rozjazd), przełącznik flagi CWU, nastawy wody ze składnikami,
+  **bramka nastawy grzania** (nastawa docelowa vs nastawa w pompie i powód wstrzymania —
+  issue #33) i sygnał „pompa dostępna dla podłogówki". Bez konfiguracji pokazuje instrukcję,
   gdzie ją włączyć.
 - **Rozdzielacze** (od v0.21.0) — jedna karta na rozdzielacz: nagłówek (nazwa,
   „KAN-therm InoxFlow UFST · n obwodów", temperatura głównego zasilania i powrotu
@@ -223,7 +224,10 @@ Encje globalne (urządzenie „UFH controller"):
   `set_mode` i ta encja zapisują to samo pole. Chcesz sterować trybem z własnego
   `input_select`? Zrób automatyzację wołającą `select.select_option`),
 - `sensor.*_global_safe_dew_point` — globalny bezpieczny punkt rosy (§9),
-- `sensor.*_algorithm_status`, `sensor.*_last_update`, `sensor.*_watchdog_status`.
+- `sensor.*_algorithm_status`, `sensor.*_last_update`, `sensor.*_watchdog_status`,
+- `sensor.*_hp_flicker_state` (stan wymuszania startu chłodzenia) i
+  `sensor.*_hp_heating_gate` (decyzja bramki nastawy grzania, np. `hold_increase_idle` —
+  issue #33; §11).
 
 Encje per pokój (każdy pokój jest urządzeniem, można przypisać do obszaru HA):
 
@@ -372,6 +376,10 @@ podłączysz encję nastawy grzania. Przykład: pompa daje 25 °C przy +15 °C i
 | **Nachylenie krzywej wody grzania** (`heating_supply_slope`) | K/K | 0,5 | O ile kelwinów rośnie nastawa wody grzania na każdy 1 K temperatury zewnętrznej poniżej temperatury neutralnej krzywej. Krok **0,01** (od issue #35, wcześniej 0,1). Domyślnie 0,5 K/K; typowo 0,2–0,8 dla dobrze ocieplonego domu z podłogówką. |
 | **Minimalna temperatura wody grzania** (`heating_supply_min_c`) | °C | 20 | Dolne ograniczenie krzywej (20–35 °C). Musi być niższe od maksimum. Domyślnie 20 °C. |
 | **Maksymalna temperatura wody grzania** (`heating_supply_max_c`) | °C | 40 | Górne ograniczenie krzywej (25–40 °C). Dla samej podłogówki często warto zejść niżej (wylewka). Domyślnie 40 °C. |
+| **Histereza krzywej wody grzania** (`heating_curve_hysteresis_k`) | K | 0,5 | Luz na surowej wartości krzywej, zanim zostanie zaokrąglona do kroku encji pompy: nastawa zmienia się dopiero, gdy krzywa przesunie się o tyle za granicę zaokrąglenia — wahanie temperatury zewnętrznej o 0,1 K nie przełącza nastawy 30 ↔ 31 °C co cykl. 0 wyłącza. Działa zawsze (także bez bramki). Od issue #33. |
+| **Czekaj na bezpieczny stan sprężarki** (`heating_gate_enabled`) | — | wł. | Bramka nastawy grzania (§11, issue #33): przy podłączonych encjach częstotliwości sprężarki i temperatury wylotu nowa nastawa jest pisana tylko wtedy, gdy nie zablokuje ponownego startu sprężarki (Panasonic); w przeciwnym razie pompa zostaje na poprzedniej nastawie. Wyłącz dla pompy, która tego nie potrzebuje — wtedy każda nastawa idzie od razu. |
+| **Pasmo ponownego startu pompy** (`heating_restart_band_k`) | K | 3 | „ΔT dla załączenia grzania" pompy: sprężarka rusza, gdy wylot spadnie o tyle poniżej nastawy. Przy postoju podwyżka jest pisana tylko, gdy wylot jest niżej niż nowa nastawa minus to pasmo. Encja pasma pompy (opcje → Pompa ciepła) ma pierwszeństwo, jeśli podaje 1–10 K. |
+| **Próg zatrzymania pompy** (`heating_stop_offset_k`) | K | 2 | Pracująca sprężarka staje, gdy wylot przekroczy nastawę o tyle. Obniżka przy pracy jest pisana dopiero, gdy wylot jest niżej niż nowa nastawa plus ten próg — inaczej zapis od razu zakończyłby pracę. |
 
 **Woda chłodzenia — pompa ciepła (tylko globalnie; działa wyłącznie ze skonfigurowanym
 sprzężeniem — §11)**
@@ -552,7 +560,11 @@ trybu i podaje ograniczone nastawy wody.
   własnej krzywej),
 - **encja nastawy wody chłodzenia** (`number`, np. `number.z1_cool_request_temp`),
 - **encja „pompa dostępna dla podłogówki"** — gdy wyłączona (CWU/odszranianie),
-  regulatory pokojów zamrażają człon całkujący.
+  regulatory pokojów zamrażają człon całkujący,
+- czujniki **temperatury powrotu**, **temperatury wylotu** i **częstotliwości sprężarki**
+  (wymuszanie startu chłodzenia; wylot i częstotliwość zasilają też bramkę nastawy
+  grzania) oraz encja **pasma ponownego startu** pompy („ΔT dla załączenia grzania", K —
+  opcjonalna, issue #33).
 
 **Synchronizacja kierunku trybu:** tryb Tortoise „grzanie" → wariant „Heat",
 „chłodzenie" → wariant „Cool", zawsze **z zachowaniem członu „+DHW"** — flaga CWU
@@ -583,6 +595,34 @@ wskażesz encję grzania, porównaj krzywą Tortoise z krzywą własnej pompy �
 w zakładce **Strojenie** pod grupą „Woda grzania", a przy skonfigurowanej encji także w
 zakładce **Pompa ciepła** obok nastawy wody grzania.
 
+**Bramka nastawy grzania (issue #33):** na Panasonic Aquarea zmiana nastawy wody grzania
+w czasie postoju sprężarki potrafi **zablokować jej ponowny start** — sprężarka stoi, choć
+wylot jest kilka kelwinów poniżej nastawy (na jednej instalacji 4 razy w 11 dni, zawsze po
+kroku nastawy w postoju, który zostawił wylot 1,5–3 K poniżej nowej nastawy). Dlatego:
+
+- surowa wartość krzywej ma **histerezę** (domyślnie 0,5 K) przed zaokrągleniem do kroku
+  encji, a nastawa jest przycinana do jej minimum/maksimum;
+- przy podłączonych czujnikach **częstotliwości sprężarki** i **wylotu** Tortoise porównuje
+  nową nastawę z tą, którą **pompa faktycznie ma** (stan encji): przy **pracy** podwyżkę
+  pisze od razu, a obniżkę dopiero, gdy wylot < nowa nastawa + 2 K (inaczej pompa od razu
+  by stanęła); przy **postoju** podwyżkę tylko, gdy wylot < nowa nastawa − 3 K (sprężarka
+  rusza od razu), a obniżkę tylko, gdy wylot ≥ nowa nastawa. W pozostałych przypadkach
+  pompa zostaje na poprzedniej nastawie, a decyzja jest sprawdzana co cykl;
+- niezmieniona nastawa **nie jest ponawiana** (bez 45-minutowego re-assertu przy aktywnej
+  bramce);
+- bez czujnika częstotliwości lub wylotu (albo z wyłączonym parametrem „Czekaj na
+  bezpieczny stan sprężarki") bramka jest nieaktywna i nastawa jest pisana od razu, jak
+  dotąd — panel pokazuje wtedy „bramka nieaktywna".
+
+Pasmo 3 K i próg 2 K to parametry w grupie „Woda grzania" (§8); pasmo może też podawać
+encja pompy. Karta **„Bramka nastawy grzania"** w zakładce Pompa ciepła pokazuje decyzję
+(np. „podwyżka wstrzymana: sprężarka stoi, wylot w paśmie startu"), nastawę docelową,
+nastawę w pompie, surową krzywą, sprężarkę, wylot, pasmo (z pompy lub parametr), próg i czas
+wstrzymania; ta sama decyzja jest w globalnym sensorze diagnostycznym **„Bramka nastawy
+grzania"** (`hp_heating_gate`) i w pobieranej diagnostyce. Jeśli pompa nie przyjmie zapisu
+(stan encji dalej pokazuje starą wartość), Tortoise ponawia go po 2 minutach zamiast po
+45.
+
 **Przełącznik CWU (zakładka Pompa ciepła):** dokłada/zdejmuje człon „+DHW" w encji
 trybu (np. „Heat only" ↔ „Heat+DHW") — to ręczna prośba „dogrzej wodę teraz /
 przestań", nie blokada. **Zewnętrzna automatyka CWU jest właścicielem tej flagi
@@ -608,7 +648,8 @@ pokrywa zimna woda z bufora i startu nie wymuszamy: wymuszenie zbiłoby tylko te
 bufora o 1–2 K i skróciło cykl sprężarki. Bieżącą sumę obok progu widać w zakładce Pompa
 ciepła (wiersz „Odbiór"), także przy wyłączonym wymuszaniu — łatwo dobrać próg przed
 włączeniem. Wcześniej wskaż encje **temperatury powrotu** i **częstotliwości
-sprężarki** w opcjach → **Pompa ciepła** (encja **wylotu** jest tam tylko diagnostyczna). Domyślnie
+sprężarki** w opcjach → **Pompa ciepła** (encja **wylotu** jest dla wymuszania tylko
+diagnostyczna; od issue #33 używa jej bramka nastawy grzania). Domyślnie
 **wyłączone**; rozwiązanie specyficzne dla Panasonica. Stan (impuls / czuwanie / przerwa, próg,
 odczyty) widać w zakładce Pompa ciepła. Obok ulotnego licznika „Wymuszone starty (ost. godz.)"
 jest tam też trwały **„Wymuszone starty (ost. 24 godz.)"** — liczony z historii recordera
@@ -713,6 +754,19 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **Następne wydanie (issue #33)** — **bramka nastawy wody grzania na stan sprężarki**
+  (Panasonic): krok nastawy przy stojącej sprężarce potrafił zablokować jej ponowny start.
+  Teraz, przy podłączonych czujnikach częstotliwości sprężarki i wylotu, nowa nastawa jest
+  pisana tylko w bezpiecznym stanie (praca: podwyżka od razu, obniżka gdy wylot < nowa + 2 K;
+  postój: podwyżka gdy wylot < nowa − 3 K, obniżka gdy wylot ≥ nowa), inaczej wstrzymana;
+  niezmieniona nastawa nie jest ponawiana. Histereza 0,5 K przed zaokrągleniem do kroku encji
+  to koniec z przełączaniem 30 ↔ 31 °C przy wahaniu temperatury zewnętrznej. Nowe parametry w
+  grupie „Woda grzania": histereza, „Czekaj na bezpieczny stan sprężarki" (wł.), pasmo
+  ponownego startu (3 K; opcjonalnie z encji pompy) i próg zatrzymania (2 K). Karta „Bramka
+  nastawy grzania" w zakładce Pompa ciepła, sensor `hp_heating_gate`, a pole „Nastawa wody
+  grzania" pokazuje teraz wartość po zaokrągleniu do kroku encji. Nastawa jest przycinana do
+  zakresu encji, a zapis niepotwierdzony przez stan encji jest ponawiany po 2 min. Bez
+  czujników — zapis jak dotąd. Bez migracji.
 - **Następne wydanie (issue #35)** — **krzywa wody grzania z własnymi parametrami i
   podglądem**: nachylenie krzywej ma krok **0,01 K/K** (wcześniej 0,1 — np. 0,23 K/K dla
   pompy 25 °C przy +15 °C / 32 °C przy −15 °C). Krzywa ma własną **temperaturę neutralną**

@@ -1091,7 +1091,8 @@ async def test_heat_pump_heating_curve_uses_its_own_knobs(
     """Issue #35: the heating water follows heating_curve_neutral_c + clamps.
 
     ``ff_neutral_c`` is set far away on purpose: the curve must not read it.
-    Outdoor is 5 degC, so 26 + 0.23 * (10 - 5) = 27.15 degC is written; the
+    Outdoor is 5 degC, so 26 + 0.23 * (10 - 5) = 27.15 degC (27 on the pump's
+    1 K grid) is written; the
     payload carries the clamps and the preview points (+15 / +5 / -5 / -15),
     the coldest one clamped to the 30 degC maximum.
     """
@@ -1134,7 +1135,10 @@ async def test_heat_pump_heating_curve_uses_its_own_knobs(
     hp = coordinator.data.heat_pump
     assert hp is not None and hp.heating is not None
     heating = hp.heating
-    assert heating["target_c"] == pytest.approx(27.15)
+    # Issue #33: target_c is the target on the pump's 1 K grid; the raw
+    # curve value is curve_c.
+    assert heating["curve_c"] == pytest.approx(27.15)
+    assert heating["target_c"] == pytest.approx(27.0)
     assert heating["neutral_c"] == pytest.approx(10.0)
     assert heating["slope"] == pytest.approx(0.23)
     assert heating["min_c"] == pytest.approx(20.0)

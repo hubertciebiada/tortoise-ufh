@@ -881,6 +881,35 @@ async def test_options_flow_heat_pump_saves_and_clears_entities(
     assert CONF_HEAT_PUMP not in entry.options
 
 
+async def test_options_flow_heat_pump_saves_restart_band_entity(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """Issue #33: the optional restart-band entity is a heat-pump picker."""
+    from custom_components.tortoise_ufh.const import (
+        CONF_ENTITY_HP_COMPRESSOR_FREQ,
+        CONF_ENTITY_HP_HEATING_SETPOINT,
+        CONF_ENTITY_HP_OUTLET_TEMP,
+        CONF_ENTITY_HP_RESTART_BAND,
+        CONF_HEAT_PUMP,
+    )
+
+    entry = setup_integration
+    result = await _open_menu_leaf(hass, entry, "heat_pump")
+    schema_keys = {str(key) for key in result["data_schema"].schema}
+    assert CONF_ENTITY_HP_RESTART_BAND in schema_keys
+
+    picks = {
+        CONF_ENTITY_HP_HEATING_SETPOINT: "number.z1_heat_request_temp",
+        CONF_ENTITY_HP_COMPRESSOR_FREQ: "sensor.compressor_freq",
+        CONF_ENTITY_HP_OUTLET_TEMP: "sensor.outlet_temp",
+        CONF_ENTITY_HP_RESTART_BAND: "number.heat_on_delta",
+    }
+    result = await hass.config_entries.options.async_configure(result["flow_id"], picks)
+    await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_HEAT_PUMP] == picks
+
+
 async def test_add_room_quiet_window_pair_validated(
     hass: HomeAssistant, setup_integration: MockConfigEntry
 ) -> None:

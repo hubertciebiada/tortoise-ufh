@@ -63,6 +63,7 @@ from .const import (
     CONF_ENTITY_HP_HEATING_SETPOINT,
     CONF_ENTITY_HP_MODE,
     CONF_ENTITY_HP_OUTLET_TEMP,
+    CONF_ENTITY_HP_RESTART_BAND,
     CONF_ENTITY_HP_RETURN_TEMP,
     CONF_ENTITY_HUMIDITY,
     CONF_ENTITY_RETURN,
@@ -1185,9 +1186,13 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
         heating / cooling water-setpoint numbers, the "pump serves the UFH"
         status entity, and — for the cooling setpoint-flicker (issue #7) — the
         return / outlet water temperature sensors and the compressor-frequency
-        sensor. The flicker's on/off switch and its timing live with the other
-        tuning knobs (the ``settings`` step / the panel Tuning tab), not here.
-        An entirely empty form removes the section — the pre-0.8.0 behaviour
+        sensor. The outlet and compressor-frequency sensors also feed the
+        heating-setpoint write gate (issue #33), together with the optional
+        restart-band entity (the pump's own "ΔT for heating ON"; the
+        ``heating_restart_band_k`` knob is its fallback). The flicker's on/off
+        switch and its timing live with the other tuning knobs (the
+        ``settings`` step / the panel Tuning tab), not here. An entirely empty
+        form removes the section — the pre-0.8.0 behaviour
         (Tortoise never touches the pump). Saving writes
         ``entry.options[CONF_HEAT_PUMP]`` and reloads the entry.
         """
@@ -1204,6 +1209,7 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 CONF_ENTITY_HP_RETURN_TEMP,
                 CONF_ENTITY_HP_OUTLET_TEMP,
                 CONF_ENTITY_HP_COMPRESSOR_FREQ,
+                CONF_ENTITY_HP_RESTART_BAND,
             ):
                 value = str(user_input.get(key, "") or "").strip()
                 if value:
@@ -1256,6 +1262,9 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 ),
                 marker(CONF_ENTITY_HP_COMPRESSOR_FREQ): EntitySelector(
                     EntitySelectorConfig(domain=["sensor"])
+                ),
+                marker(CONF_ENTITY_HP_RESTART_BAND): EntitySelector(
+                    EntitySelectorConfig(domain=["number", "input_number", "sensor"])
                 ),
             }
         )

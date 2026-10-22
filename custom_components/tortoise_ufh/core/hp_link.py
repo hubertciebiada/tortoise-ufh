@@ -8,7 +8,8 @@ global Tortoise :class:`~tortoise_ufh.models.Mode` onto a HeishaMon-style
 ``+DHW`` flag, toggling that flag for the manual DHW switch, and computing the
 two bounded water setpoints (cooling = ``max(base, safe dew point)``; heating
 = a simple weather curve reusing :class:`~tortoise_ufh.weather_comp.
-WeatherCompCurve`).
+WeatherCompCurve`), the opt-in cooling setpoint-flicker (issue #7) and the
+heating-setpoint write gate (issue #33, :class:`HeatingSetpointGate`).
 
 The HeishaMon mode vocabulary (public HeishaMon firmware standard) is::
 
@@ -53,9 +54,15 @@ __all__ = [
     "FLICKER_DEW_RESERVE_K",
     "FLICKER_START_OFFSET_K",
     "HEATING_CURVE_PREVIEW_OUTDOOR_C",
+    "HEATING_GATE_BAND_SOURCES",
+    "HEATING_GATE_REASONS",
+    "HEATING_RESTART_BAND_MAX_K",
+    "HEATING_RESTART_BAND_MIN_K",
     "HEISHAMON_MODE_OPTIONS",
     "CoolingDemand",
     "FlickerDecision",
+    "HeatingGateDecision",
+    "HeatingSetpointGate",
     "SetpointFlicker",
     "cooling_demand",
     "cooling_setpoint_c",
@@ -706,4 +713,371 @@ class SetpointFlicker:
             cooldown_remaining_s=cooldown_remaining_s,
             pulses_last_hour=len(self._pulse_times_s),
             last_pulse_target_c=self._last_pulse_target_c,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Heating-setpoint write gate (issue #33, 2026-10-22) — pure decision logic
+# ---------------------------------------------------------------------------
+#
+# On a Panasonic Aquarea (HeishaMon) a step of the heating water target made
+# while the compressor is IDLE can lock out the restart: the compressor then
+# stays off with the outlet several kelvin below the target for a long time.
+# One install, 11 days: all 4 lockouts followed an idle-period step that left
+# the outlet 1.5-3.0 K below the new target. A step that left the outlet more
+# than the pump's restart band (3 K) below the new target started the
+# compressor in the same minute (10/10); a step that left the outlet at or
+# above the new target never locked out; ~30 idle periods WITHOUT a step
+# restarted normally. The mechanism is undocumented, so the gate only allows
+# the step shapes that were observed to be safe and holds the others.
+#
+# The gate also owns item 3 of the issue: a play (backlash) operator on the
+# RAW curve value before it is quantized to the pump's grid, so a 0.1 K
+# outdoor flicker at a rounding boundary cannot toggle a 1 K target.
+
+HEATING_GATE_REASONS: frozenset[str] = frozenset(
+    {
+        "no_target",
+        "in_sync",
+        "ungated_disabled",
+        "ungated_no_input",
+        "write_increase_running",
+        "write_decrease_running",
+        "write_increase_idle",
+        "write_decrease_idle",
+        "write_unknown_running",
+        "write_unknown_idle",
+        "hold_decrease_running",
+        "hold_increase_idle",
+        "hold_decrease_idle",
+        "hold_unknown_running",
+        "hold_unknown_idle",
+    }
+)
+"""The ``reason`` vocabulary of a :class:`HeatingGateDecision` (issue #33).
+
+* ``no_target`` — nothing to write (not HEATING, or no outdoor reading).
+* ``in_sync`` — the pump already holds the target; nothing is written (and
+  an unchanged setpoint is never re-asserted while the gate is active).
+* ``ungated_disabled`` / ``ungated_no_input`` — the gate is switched off, or
+  the compressor-frequency / outlet reading is missing: the target is written
+  as before #33 (hysteresis still applies).
+* ``write_*`` — the step is written this cycle; ``hold_*`` — it is held and
+  re-evaluated next cycle. ``*_unknown_*`` — the pump's current setpoint is
+  unreadable, so the direction of the step is unknown and only a write that
+  is safe either way is allowed.
+"""
+
+HEATING_GATE_BAND_SOURCES: frozenset[str] = frozenset({"entity", "knob"})
+"""Where the restart band of a decision came from."""
+
+HEATING_RESTART_BAND_MIN_K: float = 1.0
+"""Lowest plausible restart band read from the pump entity [K]."""
+
+HEATING_RESTART_BAND_MAX_K: float = 10.0
+"""Highest plausible restart band read from the pump entity [K]."""
+
+_SYNC_TOLERANCE_MIN_K: float = 0.05
+"""Smallest "same setpoint" tolerance, used when the pump has no grid [K]."""
+
+
+@dataclass(frozen=True)
+class HeatingGateDecision:
+    """One cycle's heating-setpoint write-gate verdict (issue #33).
+
+    JSON-friendly (primitives or ``None``): the adapter maps it straight into
+    the heat-pump runtime payload, the panel and the diagnostics sensor.
+
+    Attributes:
+        reason: What the gate decided and why (see
+            :data:`HEATING_GATE_REASONS`).
+        target_c: The desired target on the pump's grid [degC] (curve ->
+            hysteresis -> quantization -> optional offset -> entity limits),
+            or ``None`` when there is no target.
+        write_c: The value to write THIS cycle [degC], or ``None`` (hold, in
+            sync, or no target). While ungated it equals ``target_c`` and the
+            adapter's write threshold / re-assert applies as before #33.
+        pump_setpoint_c: The pump's current setpoint used as the reference
+            [degC] (the entity state, else the last written value), or
+            ``None`` when unknown.
+        curve_c: The raw curve value before hysteresis [degC], or ``None``.
+        hysteresis_c: The curve value after the play operator, before
+            quantization [degC], or ``None``.
+        gate_active: Whether the compressor-state rules decided this cycle
+            (enabled and both the compressor and outlet readings present).
+        held: Whether a different target is being held back this cycle.
+        compressor_running: ``True`` / ``False`` from the compressor
+            frequency, ``None`` when unreadable.
+        outlet_c: The pump outlet water temperature [degC], or ``None``.
+        restart_band_k: The restart band used [K].
+        restart_band_source: ``"entity"`` (live pump value) or ``"knob"``.
+        stop_offset_k: The stop offset used [K].
+        held_for_s: How long the current hold has lasted [s], or ``None``
+            when nothing is held.
+
+    Raises:
+        ValueError: If ``reason`` or ``restart_band_source`` is outside its
+            vocabulary, or ``held`` disagrees with ``reason``.
+    """
+
+    reason: str
+    target_c: float | None
+    write_c: float | None
+    pump_setpoint_c: float | None
+    curve_c: float | None
+    hysteresis_c: float | None
+    gate_active: bool
+    held: bool
+    compressor_running: bool | None
+    outlet_c: float | None
+    restart_band_k: float
+    restart_band_source: str
+    stop_offset_k: float
+    held_for_s: float | None = None
+
+    def __post_init__(self) -> None:
+        """Validate the vocabularies and the hold flag."""
+        if self.reason not in HEATING_GATE_REASONS:
+            msg = (
+                f"reason must be one of {sorted(HEATING_GATE_REASONS)}, "
+                f"got {self.reason!r}"
+            )
+            raise ValueError(msg)
+        if self.restart_band_source not in HEATING_GATE_BAND_SOURCES:
+            msg = (
+                "restart_band_source must be one of "
+                f"{sorted(HEATING_GATE_BAND_SOURCES)}, "
+                f"got {self.restart_band_source!r}"
+            )
+            raise ValueError(msg)
+        if self.held != self.reason.startswith("hold_"):
+            msg = f"held={self.held} disagrees with reason {self.reason!r}"
+            raise ValueError(msg)
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-serializable dict for the runtime / panel."""
+        return {
+            "reason": self.reason,
+            "target_c": self.target_c,
+            "write_c": self.write_c,
+            "pump_setpoint_c": self.pump_setpoint_c,
+            "curve_c": self.curve_c,
+            "hysteresis_c": self.hysteresis_c,
+            "gate_active": self.gate_active,
+            "held": self.held,
+            "compressor_running": self.compressor_running,
+            "outlet_c": self.outlet_c,
+            "restart_band_k": self.restart_band_k,
+            "restart_band_source": self.restart_band_source,
+            "stop_offset_k": self.stop_offset_k,
+            "held_for_s": self.held_for_s,
+        }
+
+
+def _valid_restart_band(value_k: float | None) -> bool:
+    """Whether a restart band read from the pump is plausible."""
+    return (
+        value_k is not None
+        and math.isfinite(value_k)
+        and HEATING_RESTART_BAND_MIN_K <= value_k <= HEATING_RESTART_BAND_MAX_K
+    )
+
+
+class HeatingSetpointGate:
+    """Stateful heating-setpoint write gate (issue #33, 2026-10-22).
+
+    Pure: no wall clock. Like :class:`SetpointFlicker`, time advances only via
+    :meth:`tick`, exactly once per control step::
+
+        gate.tick(dt_seconds)      # advance the hold timer ONCE
+        decision = gate.step(...)  # hysteresis + quantize + decide
+
+    The rules (owner's proposal, issue #33), with ``q`` the new target, ``c``
+    the pump's current setpoint and ``o`` the outlet temperature:
+
+    * compressor RUNNING: an increase (``q > c``) is written at once; a
+      decrease only once ``o < q + stop_offset_k`` — otherwise the pump's own
+      stop rule (outlet more than the offset above the target) would end the
+      run at once;
+    * compressor IDLE: an increase only if ``o < q - restart_band_k`` (that
+      starts the compressor at once); a decrease only if ``o >= q``;
+      otherwise the pump keeps ``c`` and the step is re-evaluated next cycle;
+    * ``q`` equal to ``c`` (within half a grid step): nothing is written —
+      in particular an unchanged setpoint is never re-asserted while idle;
+    * ``c`` unknown: only a step safe in either direction is written
+      (running: ``o < q + stop_offset_k``; idle: ``o < q - restart_band_k``).
+
+    Without a compressor-frequency or outlet reading, or with
+    ``heating_gate_enabled`` off, the gate is inactive and the target is
+    written as before #33. The hysteresis applies in every case.
+
+    Issue #34 hook: ``offset_k`` is added to the quantized target (after the
+    hysteresis), so a temporary kick (e.g. +1 K) goes through the same rules
+    — its restore is an ordinary decrease and obeys the decrease rule.
+    """
+
+    def __init__(self, config: ControllerConfig) -> None:
+        """Read the gate knobs off the global config.
+
+        Args:
+            config: The GLOBAL controller tuning (the gate knobs are
+                global-only).
+        """
+        self._enabled: bool = config.heating_gate_enabled
+        self._hysteresis_k: float = config.heating_curve_hysteresis_k
+        self._restart_band_k: float = config.heating_restart_band_k
+        self._stop_offset_k: float = config.heating_stop_offset_k
+        self._play_c: float | None = None
+        self._holding: bool = False
+        self._held_s: float = 0.0
+
+    def tick(self, dt_seconds: float) -> None:
+        """Advance the hold timer by ``dt_seconds`` — once per step.
+
+        Args:
+            dt_seconds: Elapsed time since the previous control step [s].
+        """
+        if self._holding:
+            self._held_s += dt_seconds
+
+    def _hysteresis(self, curve_c: float) -> float:
+        """Play operator: follow the curve with a backlash of the hysteresis.
+
+        Args:
+            curve_c: The raw curve value this cycle [degC].
+
+        Returns:
+            The curve value after the play operator [degC].
+        """
+        if self._play_c is None:
+            self._play_c = curve_c
+        else:
+            self._play_c = min(
+                max(self._play_c, curve_c - self._hysteresis_k),
+                curve_c + self._hysteresis_k,
+            )
+        return self._play_c
+
+    def step(
+        self,
+        *,
+        curve_c: float | None,
+        step_c: float,
+        pump_setpoint_c: float | None,
+        compressor_freq_hz: float | None,
+        outlet_c: float | None,
+        restart_band_k: float | None = None,
+        entity_min_c: float | None = None,
+        entity_max_c: float | None = None,
+        offset_k: float = 0.0,
+    ) -> HeatingGateDecision:
+        """Decide this cycle's heating-setpoint write.
+
+        Args:
+            curve_c: The raw heating-curve value [degC], or ``None`` when
+                there is nothing to write (not HEATING / no outdoor reading);
+                ``None`` also resets the hysteresis memory.
+            step_c: The setpoint entity's grid step [degC / K] (``<= 0`` =
+                no grid).
+            pump_setpoint_c: The pump's current setpoint [degC] (entity
+                state, else the last written value), or ``None``.
+            compressor_freq_hz: Compressor frequency [Hz] (``0`` = idle), or
+                ``None`` when not configured / unreadable.
+            outlet_c: Pump outlet water temperature [degC], or ``None``.
+            restart_band_k: The restart band read from the pump [K], or
+                ``None``; an implausible value (outside
+                [:data:`HEATING_RESTART_BAND_MIN_K`,
+                :data:`HEATING_RESTART_BAND_MAX_K`]) falls back to the knob.
+            entity_min_c: The setpoint entity's ``min`` [degC], or ``None``.
+            entity_max_c: The setpoint entity's ``max`` [degC], or ``None``.
+            offset_k: A temporary offset added after quantization [K]
+                (issue #34 hook; ``0`` today).
+
+        Returns:
+            The :class:`HeatingGateDecision` for this cycle.
+        """
+        if _valid_restart_band(restart_band_k):
+            assert restart_band_k is not None  # narrowed by the check
+            band_k, band_source = restart_band_k, "entity"
+        else:
+            band_k, band_source = self._restart_band_k, "knob"
+        running = None if compressor_freq_hz is None else compressor_freq_hz > 0.0
+
+        def decide(
+            reason: str,
+            *,
+            target_c: float | None = None,
+            write_c: float | None = None,
+            hysteresis_c: float | None = None,
+            gate_active: bool = False,
+        ) -> HeatingGateDecision:
+            held = reason.startswith("hold_")
+            if not held:
+                self._held_s = 0.0
+            self._holding = held
+            return HeatingGateDecision(
+                reason=reason,
+                target_c=target_c,
+                write_c=write_c,
+                pump_setpoint_c=pump_setpoint_c,
+                curve_c=curve_c,
+                hysteresis_c=hysteresis_c,
+                gate_active=gate_active,
+                held=held,
+                compressor_running=running,
+                outlet_c=outlet_c,
+                restart_band_k=band_k,
+                restart_band_source=band_source,
+                stop_offset_k=self._stop_offset_k,
+                held_for_s=self._held_s if held else None,
+            )
+
+        if curve_c is None:
+            self._play_c = None
+            return decide("no_target")
+
+        play_c = self._hysteresis(curve_c)
+        target = round_to_step_c(play_c, step_c) + offset_k
+        if entity_max_c is not None:
+            target = min(target, entity_max_c)
+        if entity_min_c is not None:
+            target = max(target, entity_min_c)
+
+        if not self._enabled or running is None or outlet_c is None:
+            return decide(
+                "ungated_disabled" if not self._enabled else "ungated_no_input",
+                target_c=target,
+                write_c=target,
+                hysteresis_c=play_c,
+            )
+
+        stop_ok = outlet_c < target + self._stop_offset_k
+        starts = outlet_c < target - band_k
+        tolerance = max(step_c / 2.0, _SYNC_TOLERANCE_MIN_K)
+
+        if pump_setpoint_c is None:
+            if running:
+                reason = "write_unknown_running" if stop_ok else "hold_unknown_running"
+            else:
+                reason = "write_unknown_idle" if starts else "hold_unknown_idle"
+        elif abs(target - pump_setpoint_c) < tolerance:
+            reason = "in_sync"
+        elif target > pump_setpoint_c:
+            if running:
+                reason = "write_increase_running"
+            else:
+                reason = "write_increase_idle" if starts else "hold_increase_idle"
+        elif running:
+            reason = "write_decrease_running" if stop_ok else "hold_decrease_running"
+        else:
+            reason = (
+                "write_decrease_idle" if outlet_c >= target else "hold_decrease_idle"
+            )
+        write_c = target if reason.startswith("write_") else None
+        return decide(
+            reason,
+            target_c=target,
+            write_c=write_c,
+            hysteresis_c=play_c,
+            gate_active=True,
         )

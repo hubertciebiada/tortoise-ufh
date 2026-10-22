@@ -66,6 +66,10 @@
           "heating_curve_neutral_c": "Heating curve neutral outdoor temperature (°C, global)",
           "heating_supply_min_c": "Heating water minimum temperature (°C, global)",
           "heating_supply_max_c": "Heating water maximum temperature (°C, global)",
+          "heating_gate_enabled": "Heating setpoint: wait for a safe compressor state (global)",
+          "heating_curve_hysteresis_k": "Heating curve hysteresis (K, global)",
+          "heating_restart_band_k": "Heat pump restart band, ΔT for heating ON (K, global)",
+          "heating_stop_offset_k": "Heat pump stop offset above target (K, global)",
           "hp_flicker_enabled": "Force cooling start (Panasonic Aquarea)",
           "hp_flicker_band_k": "Force cooling start: target deadband (K, global)",
           "hp_flicker_min_open_pct": "Force cooling start: min total loop opening to force (%, global)",
@@ -141,6 +145,10 @@
           "heating_curve_neutral_c": "Heating curve neutral outdoor temperature (°C, global)",
           "heating_supply_min_c": "Heating water minimum temperature (°C, global)",
           "heating_supply_max_c": "Heating water maximum temperature (°C, global)",
+          "heating_gate_enabled": "Heating setpoint: wait for a safe compressor state (global)",
+          "heating_curve_hysteresis_k": "Heating curve hysteresis (K, global)",
+          "heating_restart_band_k": "Heat pump restart band, ΔT for heating ON (K, global)",
+          "heating_stop_offset_k": "Heat pump stop offset above target (K, global)",
           "hp_flicker_enabled": "Force cooling start (Panasonic Aquarea)",
           "hp_flicker_band_k": "Force cooling start: target deadband (K, global)",
           "hp_flicker_min_open_pct": "Force cooling start: min total loop opening to force (%, global)",
@@ -229,15 +237,17 @@
           "entity_hp_cooling_setpoint": "Cooling water setpoint entity (number, optional)",
           "entity_hp_active": "“Pump available for UFH” entity (optional)",
           "entity_hp_return_temp": "Return/inlet water temperature sensor (optional, for forced cooling starts)",
-          "entity_hp_outlet_temp": "Outlet/supply water temperature sensor (optional, diagnostic)",
-          "entity_hp_compressor_freq": "Compressor frequency sensor (optional, for forced cooling starts)"
+          "entity_hp_outlet_temp": "Outlet/supply water temperature sensor (optional, for the heating setpoint gate)",
+          "entity_hp_compressor_freq": "Compressor frequency sensor (optional, for forced cooling starts and the heating setpoint gate)",
+          "entity_hp_restart_band": "Restart band entity, “ΔT for heating ON” (optional, K)"
         },
         "data_description": {
           "entity_hp_mode": "HeishaMon-style select with options like “Heat only” / “Cool only” / “Heat+DHW”. Tortoise writes only the direction and never removes the DHW flag.",
           "entity_hp_active": "Off while the pump does DHW/defrost — the room controllers then freeze their integrators.",
           "entity_hp_return_temp": "The pump inlet/return water probe. Main force-cooling-start signal: the return parks near cooling setpoint + 3 K through long idles. Panasonic example: sensor.panasonic_heat_pump_main_main_inlet_temp.",
-          "entity_hp_outlet_temp": "The pump outlet/supply water probe. Diagnostic only in this version — shown on the Heat pump tab; no logic uses it yet (reserved for a future supply-side condensation guard).",
-          "entity_hp_compressor_freq": "Compressor frequency in Hz (0 = off). Used to detect the pump idling in its deadband. Panasonic example: sensor.panasonic_heat_pump_main_compressor_freq."
+          "entity_hp_outlet_temp": "The pump outlet/supply water probe. With the compressor frequency it lets Tortoise hold a heating setpoint change while the compressor is idle and the change could block its restart (Panasonic). Also shown on the Heat pump tab. Panasonic example: sensor.panasonic_heat_pump_main_main_outlet_temp.",
+          "entity_hp_compressor_freq": "Compressor frequency in Hz (0 = off). Used to detect the pump idling — for forced cooling starts and for the heating setpoint gate. Panasonic example: sensor.panasonic_heat_pump_main_compressor_freq.",
+          "entity_hp_restart_band": "The pump’s own restart band in K: the compressor restarts once the outlet falls this far below the heating target. When set and between 1 and 10 K it replaces the “Heat pump restart band” knob."
         }
       },
       "manifolds": {
@@ -433,6 +443,9 @@
       },
       "hp_flicker_state": {
         "name": "Force cooling start state"
+      },
+      "hp_heating_gate": {
+        "name": "Heating setpoint gate"
       }
     },
     "binary_sensor": {
