@@ -838,6 +838,130 @@ class TestHeatPumpWaterKnobs:
         assert getattr(cfg, field_name) == pytest.approx(value)
 
 
+class TestHeatingCurveKnobs:
+    """Issue #35: the heating curve's own neutral point and min/max clamps."""
+
+    @pytest.mark.unit
+    def test_defaults_keep_the_old_curve(self) -> None:
+        """15 degC neutral (= the ff_neutral_c default) and the old 20/40 clamps."""
+        cfg = ControllerConfig()
+        assert cfg.heating_curve_neutral_c == pytest.approx(cfg.ff_neutral_c)
+        assert cfg.heating_curve_neutral_c == pytest.approx(15.0)
+        assert cfg.heating_supply_min_c == pytest.approx(20.0)
+        assert cfg.heating_supply_max_c == pytest.approx(40.0)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("field_name", "value"),
+        [
+            ("heating_curve_neutral_c", -30.0),
+            ("heating_curve_neutral_c", 40.0),
+            ("heating_supply_min_c", 20.0),
+            ("heating_supply_max_c", 40.0),
+            ("heating_supply_max_c", 26.0),
+        ],
+    )
+    def test_boundaries_allowed(self, field_name: str, value: float) -> None:
+        """Inclusive range boundaries construct cleanly (base 26 inside)."""
+        cfg = ControllerConfig(**{field_name: value})
+        assert getattr(cfg, field_name) == pytest.approx(value)
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("field_name", "value", "message"),
+        [
+            (
+                "heating_curve_neutral_c",
+                -30.5,
+                "heating_curve_neutral_c must be in [-30, 40], got -30.5",
+            ),
+            (
+                "heating_curve_neutral_c",
+                40.5,
+                "heating_curve_neutral_c must be in [-30, 40], got 40.5",
+            ),
+            (
+                "heating_supply_min_c",
+                19.5,
+                "heating_supply_min_c must be in [20, 35], got 19.5",
+            ),
+            (
+                "heating_supply_min_c",
+                35.5,
+                "heating_supply_min_c must be in [20, 35], got 35.5",
+            ),
+            (
+                "heating_supply_max_c",
+                24.5,
+                "heating_supply_max_c must be in [25, 40], got 24.5",
+            ),
+            (
+                "heating_supply_max_c",
+                40.5,
+                "heating_supply_max_c must be in [25, 40], got 40.5",
+            ),
+        ],
+    )
+    def test_out_of_range_exact_message(
+        self, field_name: str, value: float, message: str
+    ) -> None:
+        """Each knob outside its range raises with the exact message."""
+        with pytest.raises(ValueError) as exc_info:
+            ControllerConfig(**{field_name: value})
+        assert str(exc_info.value) == message
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(("low", "high"), [(30.0, 30.0), (32.0, 30.0)])
+    def test_min_must_be_below_max(self, low: float, high: float) -> None:
+        """min >= max is rejected (min < max strictly)."""
+        with pytest.raises(ValueError) as exc_info:
+            ControllerConfig(
+                heating_supply_base_c=30.0,
+                heating_supply_min_c=low,
+                heating_supply_max_c=high,
+            )
+        assert str(exc_info.value) == (
+            "heating_supply_min_c must be < heating_supply_max_c, got "
+            f"heating_supply_min_c={low} >= heating_supply_max_c={high}"
+        )
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("base", "low", "high"),
+        [(26.0, 20.0, 25.0), (21.0, 22.0, 40.0)],
+    )
+    def test_base_must_lie_inside_the_clamps(
+        self, base: float, low: float, high: float
+    ) -> None:
+        """The base outside [min, max] is rejected with the exact message."""
+        with pytest.raises(ValueError) as exc_info:
+            ControllerConfig(
+                heating_supply_base_c=base,
+                heating_supply_min_c=low,
+                heating_supply_max_c=high,
+            )
+        assert str(exc_info.value) == (
+            "heating_supply_base_c must lie between heating_supply_min_c and "
+            f"heating_supply_max_c, got {base} outside [{low}, {high}]"
+        )
+
+    @pytest.mark.unit
+    def test_base_on_the_clamps_allowed(self) -> None:
+        """base == min and base == max are inclusive-valid."""
+        on_min = ControllerConfig(
+            heating_supply_base_c=24.0,
+            heating_supply_min_c=24.0,
+            heating_supply_max_c=30.0,
+        )
+        on_max = ControllerConfig(
+            heating_supply_base_c=30.0,
+            heating_supply_min_c=24.0,
+            heating_supply_max_c=30.0,
+        )
+        assert on_min.heating_supply_base_c == pytest.approx(24.0)
+        assert on_max.heating_supply_base_c == pytest.approx(30.0)
+
+
 # ---------------------------------------------------------------------------
 # Mutation-survivor pins (group g3): inclusive boundaries + exact messages
 #

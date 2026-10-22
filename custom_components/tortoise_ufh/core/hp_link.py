@@ -52,8 +52,7 @@ __all__ = [
     "FLICKER_DEMAND_THROTTLE_MIN",
     "FLICKER_DEW_RESERVE_K",
     "FLICKER_START_OFFSET_K",
-    "HEATING_SUPPLY_MAX_C",
-    "HEATING_SUPPLY_MIN_C",
+    "HEATING_CURVE_PREVIEW_OUTDOOR_C",
     "HEISHAMON_MODE_OPTIONS",
     "CoolingDemand",
     "FlickerDecision",
@@ -63,6 +62,7 @@ __all__ = [
     "dhw_option",
     "direction_option",
     "heating_curve",
+    "heating_curve_points",
     "round_to_step_c",
 ]
 
@@ -77,18 +77,13 @@ HEISHAMON_MODE_OPTIONS: tuple[str, ...] = (
 )
 """Canonical HeishaMon pump-mode option strings (public firmware standard)."""
 
-HEATING_SUPPLY_MIN_C: float = 20.0
-"""Lower clamp of the optional heating-water curve [degC].
+HEATING_CURVE_PREVIEW_OUTDOOR_C: tuple[float, ...] = (15.0, 5.0, -5.0, -15.0)
+"""Outdoor temperatures [degC] at which the panel previews the heating curve.
 
-A fixed firmware/floor limit, deliberately NOT a tuning knob: below ~20 degC a
-"heating" setpoint is meaningless for a UFH slab.
-"""
-
-HEATING_SUPPLY_MAX_C: float = 40.0
-"""Upper clamp of the optional heating-water curve [degC].
-
-A fixed firmware/floor limit, deliberately NOT a tuning knob: hotter supply
-water risks the screed and exceeds sane A2W heat-pump territory.
+Issue #35: a user compares these points with the pump's own curve before
+wiring the heating-setpoint entity. (The curve's 20/40 degC clamps, once the
+fixed ``HEATING_SUPPLY_MIN_C`` / ``HEATING_SUPPLY_MAX_C``, are the knobs
+``heating_supply_min_c`` / ``heating_supply_max_c`` since issue #35.)
 """
 
 _DHW_ONLY: str = "DHW only"
@@ -249,9 +244,9 @@ def heating_curve(config: ControllerConfig) -> WeatherCompCurve:
 
     Reuses the existing :class:`~tortoise_ufh.weather_comp.WeatherCompCurve`:
     ``t_supply = clip(heating_supply_base_c + heating_supply_slope *
-    max(0, ff_neutral_c - t_out), 20, 40)``. ``ff_neutral_c`` is deliberately
-    shared with the valve feedforward — it carries the same meaning ("the
-    outdoor temperature at which nothing extra is needed").
+    max(0, heating_curve_neutral_c - t_out), heating_supply_min_c,
+    heating_supply_max_c)``. Since issue #35 the curve has its own neutral
+    point; it no longer reads the valve feedforward's ``ff_neutral_c``.
 
     Args:
         config: The GLOBAL controller tuning (per-room overrides never carry
@@ -267,10 +262,32 @@ def heating_curve(config: ControllerConfig) -> WeatherCompCurve:
     return WeatherCompCurve(
         t_supply_base=config.heating_supply_base_c,
         slope=config.heating_supply_slope,
-        t_neutral=config.ff_neutral_c,
-        t_supply_max=HEATING_SUPPLY_MAX_C,
-        t_supply_min=HEATING_SUPPLY_MIN_C,
+        t_neutral=config.heating_curve_neutral_c,
+        t_supply_max=config.heating_supply_max_c,
+        t_supply_min=config.heating_supply_min_c,
     )
+
+
+def heating_curve_points(
+    config: ControllerConfig,
+    outdoor_c: Iterable[float] = HEATING_CURVE_PREVIEW_OUTDOOR_C,
+) -> tuple[tuple[float, float], ...]:
+    """Evaluate the heating curve at a few outdoor temperatures (issue #35).
+
+    The single source of the panel's curve preview, so the table shows
+    exactly what :func:`heating_curve` would write.
+
+    Args:
+        config: The GLOBAL controller tuning.
+        outdoor_c: The outdoor temperatures to evaluate [degC], in display
+            order (default :data:`HEATING_CURVE_PREVIEW_OUTDOOR_C`).
+
+    Returns:
+        ``((t_out, t_supply), ...)`` pairs [degC], clamped to the curve's
+        min/max, in the order of ``outdoor_c``.
+    """
+    curve = heating_curve(config)
+    return tuple((float(t_out), curve.t_supply(float(t_out))) for t_out in outdoor_c)
 
 
 # ---------------------------------------------------------------------------

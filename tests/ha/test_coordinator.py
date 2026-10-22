@@ -1083,6 +1083,75 @@ async def test_heat_pump_dhw_only_is_never_overwritten(
     assert select_calls == []
 
 
+async def test_heat_pump_heating_curve_uses_its_own_knobs(
+    hass: HomeAssistant,
+    register_sources: None,
+    entry_data: dict[str, Any],
+) -> None:
+    """Issue #35: the heating water follows heating_curve_neutral_c + clamps.
+
+    ``ff_neutral_c`` is set far away on purpose: the curve must not read it.
+    Outdoor is 5 degC, so 26 + 0.23 * (10 - 5) = 27.15 degC is written; the
+    payload carries the clamps and the preview points (+15 / +5 / -5 / -15),
+    the coldest one clamped to the 30 degC maximum.
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.tortoise_ufh.const import (
+        CONF_CONTROLLER,
+        CONF_ENTITY_HP_HEATING_SETPOINT,
+        CONF_HEAT_PUMP,
+        DOMAIN,
+    )
+
+    hass.states.async_set("number.z1_heat_request_temp", "25.0", {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=entry_data,
+        options={
+            CONF_HEAT_PUMP: {
+                CONF_ENTITY_HP_HEATING_SETPOINT: "number.z1_heat_request_temp"
+            },
+            CONF_CONTROLLER: {
+                "heating_curve_neutral_c": 10.0,
+                "heating_supply_slope": 0.23,
+                "heating_supply_max_c": 30.0,
+                "ff_neutral_c": 20.0,
+            },
+        },
+        title="Tortoise-UFH",
+        unique_id="50.5_19.5",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = _get_coordinator(entry)
+    mocks = _mock_actuator_services(hass)
+    coordinator._mode = Mode.HEATING
+    coordinator._room_states["Salon"] = ROOM_STATE_LIVE
+    await _refresh(hass, coordinator)
+
+    hp = coordinator.data.heat_pump
+    assert hp is not None and hp.heating is not None
+    heating = hp.heating
+    assert heating["target_c"] == pytest.approx(27.15)
+    assert heating["neutral_c"] == pytest.approx(10.0)
+    assert heating["slope"] == pytest.approx(0.23)
+    assert heating["min_c"] == pytest.approx(20.0)
+    assert heating["max_c"] == pytest.approx(30.0)
+    assert [p["t_out_c"] for p in heating["curve"]] == [15.0, 5.0, -5.0, -15.0]
+    assert [p["target_c"] for p in heating["curve"]] == pytest.approx(
+        [26.0, 27.15, 29.45, 30.0]
+    )
+    heat_writes = [
+        c
+        for c in mocks[("number", "set_value")]
+        if c.data["entity_id"] == "number.z1_heat_request_temp"
+    ]
+    assert len(heat_writes) == 1
+    assert 27.0 <= heat_writes[0].data["value"] <= 27.5
+
+
 # -- Manual hold (DECISIONS §28, 2026-09-04) ---------------------------------
 
 

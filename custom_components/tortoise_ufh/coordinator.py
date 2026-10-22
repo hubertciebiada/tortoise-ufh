@@ -106,6 +106,7 @@ from .core.models import (
 )
 from .probes import PROBE_DRIFT_FLAG, ProbeHealthTracker, room_loops
 from .readers import SourceReader
+from .tuning import heating_curve_preview
 from .writers import CommandWriter, FarewellResult
 
 if TYPE_CHECKING:
@@ -296,7 +297,9 @@ class HeatPumpRuntime:
         cooling: Cooling-setpoint payload ``{entity_id, target_c, base_c,
             safe_dew_c}`` or ``None`` when the entity is not configured.
         heating: Heating-setpoint payload ``{entity_id, target_c, t_out_c,
-            base_c, slope, neutral_c}`` or ``None``.
+            base_c, slope, neutral_c, min_c, max_c, curve}`` or ``None``
+            (``curve`` is :func:`~tortoise_ufh.tuning.heating_curve_preview`,
+            issue #35).
         hp_active: The "pump serves the UFH" reading, or ``None`` (unknown /
             unconfigured).
         hp_active_configured: Whether an hp-active entity is configured.
@@ -1627,6 +1630,10 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                 "base_c": curve.t_supply_base,
                 "slope": curve.slope,
                 "neutral_c": curve.t_neutral,
+                "min_c": curve.t_supply_min,
+                "max_c": curve.t_supply_max,
+                # Issue #35: the curve at a few outdoor points, for the panel.
+                "curve": heating_curve_preview(self._global_config),
             }
 
         hp_active = (

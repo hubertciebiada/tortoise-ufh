@@ -143,13 +143,30 @@ class ControllerConfig:
             — see :func:`~tortoise_ufh.hp_link.cooling_setpoint_c`. GLOBAL,
             building-level knob: a water setpoint per room makes no physical
             sense, so per-room overrides are rejected by the adapter.
-        heating_supply_base_c: Heating supply-water setpoint at the neutral
-            outdoor temperature ``ff_neutral_c`` [degC] (in [20, 40]; B2
-            2026-07-12). Feeds the optional heat-pump heating curve — see
+        heating_supply_base_c: Heating supply-water setpoint at the curve's
+            neutral outdoor temperature ``heating_curve_neutral_c`` [degC] (in
+            [20, 40] and inside [``heating_supply_min_c``,
+            ``heating_supply_max_c``]; B2 2026-07-12). Feeds the optional
+            heat-pump heating curve — see
             :func:`~tortoise_ufh.hp_link.heating_curve`. GLOBAL knob.
         heating_supply_slope: Heating-water curve steepness [K_supply per K
-            outdoor shortfall below ``ff_neutral_c``] (in [0, 2]; B2
-            2026-07-12). GLOBAL knob.
+            outdoor shortfall below ``heating_curve_neutral_c``] (in [0, 2];
+            B2 2026-07-12; UI step 0.01 since issue #35). GLOBAL knob.
+        heating_curve_neutral_c: Outdoor temperature at which the heating
+            curve sits at ``heating_supply_base_c`` [degC] (in [-30, 40];
+            default 15; issue #35, 2026-10-22). Until then the curve borrowed
+            the valve feedforward's ``ff_neutral_c`` (same default), so a
+            change of the feedforward silently moved the water curve. GLOBAL
+            knob.
+        heating_supply_min_c: Lower clamp of the heating curve [degC] (in
+            [20, 35]; default 20; issue #35 — previously the fixed
+            ``HEATING_SUPPLY_MIN_C``). Must be below ``heating_supply_max_c``.
+            GLOBAL knob.
+        heating_supply_max_c: Upper clamp of the heating curve [degC] (in
+            [25, 40]; default 40; issue #35 — previously the fixed
+            ``HEATING_SUPPLY_MAX_C``). A floor-heating install may want a
+            lower ceiling; 40 stays the hard upper bound (screed). GLOBAL
+            knob.
         hp_flicker_enabled: Master on/off for the opt-in, Panasonic-specific
             cooling setpoint-flicker (default ``False``; issue #7, 2026-07-15).
             A GLOBAL boolean knob read only by the adapter — it gates whether
@@ -232,6 +249,12 @@ class ControllerConfig:
     cooling_supply_base_c: float = 15.0
     heating_supply_base_c: float = 26.0
     heating_supply_slope: float = 0.5
+    # Heating-curve shape (issue #35, 2026-10-22): its own neutral point
+    # (was the shared ff_neutral_c, same 15 degC default) and the clamps that
+    # were the fixed 20/40 degC constants.
+    heating_curve_neutral_c: float = 15.0
+    heating_supply_min_c: float = 20.0
+    heating_supply_max_c: float = 40.0
     # Cooling setpoint-flicker knobs (2026-07-15, issue #7): global-only timing
     # of the opt-in, Panasonic-specific flicker that trips the cooling
     # compressor out of its fixed 3 K return-water deadband; read only by the
@@ -264,7 +287,12 @@ class ControllerConfig:
                 ``fast_manual_hold_minutes`` is negative, or a
                 heat-pump water knob is outside its range
                 (``cooling_supply_base_c`` [10, 25], ``heating_supply_base_c``
-                [20, 40], ``heating_supply_slope`` [0, 2]), a flicker knob is
+                [20, 40], ``heating_supply_slope`` [0, 2],
+                ``heating_curve_neutral_c`` [-30, 40], ``heating_supply_min_c``
+                [20, 35], ``heating_supply_max_c`` [25, 40]), the heating
+                clamps are not ordered (``heating_supply_min_c`` <
+                ``heating_supply_max_c``) or ``heating_supply_base_c`` lies
+                outside them, a flicker knob is
                 out of range (``hp_flicker_band_k`` [0.5, 3.0],
                 ``hp_flicker_stuck_minutes`` [5, 120],
                 ``hp_flicker_min_off_minutes`` [5, 120],
@@ -351,6 +379,7 @@ class ControllerConfig:
                 f"{self.heating_supply_slope}"
             )
             raise ValueError(msg)
+        self._validate_heating_curve()
         if not 0.5 <= self.hp_flicker_band_k <= 3.0:
             msg = (
                 f"hp_flicker_band_k must be in [0.5, 3.0], got {self.hp_flicker_band_k}"
@@ -387,6 +416,53 @@ class ControllerConfig:
             msg = (
                 f"valve_write_threshold_pct must be >= 0, "
                 f"got {self.valve_write_threshold_pct}"
+            )
+            raise ValueError(msg)
+
+    def _validate_heating_curve(self) -> None:
+        """Validate the heating-curve shape knobs (issue #35).
+
+        Raises:
+            ValueError: If ``heating_curve_neutral_c``, ``heating_supply_min_c``
+                or ``heating_supply_max_c`` is outside its range, the clamps
+                are not strictly ordered, or ``heating_supply_base_c`` lies
+                outside ``[heating_supply_min_c, heating_supply_max_c]``.
+        """
+        if not -30.0 <= self.heating_curve_neutral_c <= 40.0:
+            msg = (
+                "heating_curve_neutral_c must be in [-30, 40], got "
+                f"{self.heating_curve_neutral_c}"
+            )
+            raise ValueError(msg)
+        if not 20.0 <= self.heating_supply_min_c <= 35.0:
+            msg = (
+                "heating_supply_min_c must be in [20, 35], got "
+                f"{self.heating_supply_min_c}"
+            )
+            raise ValueError(msg)
+        if not 25.0 <= self.heating_supply_max_c <= 40.0:
+            msg = (
+                "heating_supply_max_c must be in [25, 40], got "
+                f"{self.heating_supply_max_c}"
+            )
+            raise ValueError(msg)
+        if self.heating_supply_min_c >= self.heating_supply_max_c:
+            msg = (
+                "heating_supply_min_c must be < heating_supply_max_c, got "
+                f"heating_supply_min_c={self.heating_supply_min_c} >= "
+                f"heating_supply_max_c={self.heating_supply_max_c}"
+            )
+            raise ValueError(msg)
+        if not (
+            self.heating_supply_min_c
+            <= self.heating_supply_base_c
+            <= self.heating_supply_max_c
+        ):
+            msg = (
+                "heating_supply_base_c must lie between heating_supply_min_c "
+                f"and heating_supply_max_c, got {self.heating_supply_base_c} "
+                f"outside [{self.heating_supply_min_c}, "
+                f"{self.heating_supply_max_c}]"
             )
             raise ValueError(msg)
 

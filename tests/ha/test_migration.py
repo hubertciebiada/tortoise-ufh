@@ -474,6 +474,53 @@ async def test_v5_to_v6_drops_the_pre_issue_32_defaults(hass: HomeAssistant) -> 
     assert entry.options[CONF_CONTROLLER] == {"fast_min_off_minutes": 20.0}
 
 
+async def test_v5_to_v6_copies_ff_neutral_into_the_heating_curve(
+    hass: HomeAssistant,
+) -> None:
+    """Issue #35: a stored ff_neutral_c keeps moving the heating curve.
+
+    Until #35 the heating-water curve read the feedforward's ``ff_neutral_c``.
+    It now has its own ``heating_curve_neutral_c``; the (unreleased) v5 -> v6
+    step copies a kept global ``ff_neutral_c`` override into it, so the
+    curve of such an install does not move.
+    """
+    entry = _entry(
+        hass,
+        rooms=[{CONF_ROOM_NAME: "Salon"}],
+        options={
+            CONF_CONTROLLER: _full_snapshot(ff_neutral_c=12.0),
+            CONF_ROOM_TUNING: {"Salon": {"ff_neutral_c": 18.0}},
+        },
+        version=5,
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert entry.version == 6
+    assert entry.options[CONF_CONTROLLER] == {
+        "ff_neutral_c": 12.0,
+        "heating_curve_neutral_c": 12.0,
+    }
+    # The curve is global-only: a per-room feedforward override is left alone.
+    assert entry.options[CONF_ROOM_TUNING] == {"Salon": {"ff_neutral_c": 18.0}}
+
+
+async def test_v5_to_v6_default_ff_neutral_adds_no_curve_override(
+    hass: HomeAssistant,
+) -> None:
+    """ff_neutral_c on its default (15) stores nothing for the curve either."""
+    entry = _entry(
+        hass,
+        rooms=[{CONF_ROOM_NAME: "Salon"}],
+        options={CONF_CONTROLLER: _full_snapshot(kp=16.0)},
+        version=5,
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert entry.options[CONF_CONTROLLER] == {"kp": 16.0}
+
+
 async def test_migrate_rejects_newer_version(hass: HomeAssistant) -> None:
     """A version newer than the code knows about is refused (no downgrade)."""
     entry = _entry(hass, rooms=[{CONF_ROOM_NAME: "Salon"}])

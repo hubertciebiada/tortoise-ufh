@@ -223,7 +223,7 @@ def test_every_knob_has_label_and_tooltip_in_both_languages() -> None:
     """Each exposed knob has tune_<name> and tip_knob_<name> in pl AND en."""
     sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
     knobs = _knob_names()
-    assert len(knobs) == 27, f"expected 27 exposed knobs, parsed {knobs}"
+    assert len(knobs) == 30, f"expected 30 exposed knobs, parsed {knobs}"
     missing: list[str] = []
     for knob in knobs:
         for key in (f"tune_{knob}", f"tip_knob_{knob}"):
@@ -381,11 +381,11 @@ def test_v0100_surfaces_have_their_str_keys() -> None:
 
 
 # New v0.13.0 surface: the Heat-pump tab's cooling setpoint-flicker diagnostics
-# block and its group label (issue #7). Pinned so a rename cannot silently drop
+# block (issue #7; its knobs moved to the "Cooling water" group in issue #35).
+# Pinned so a rename cannot silently drop
 # a flicker surface (the knob tune_/tip_ keys are already covered by the
 # per-knob loop above).
 _REQUIRED_V013_KEYS = (
-    "tune_grp_flicker",
     "hp_sec_flicker",
     "tip_hp_flicker",
     "hp_flicker_on",
@@ -456,6 +456,58 @@ def test_v021_surfaces_have_their_str_keys() -> None:
         if key not in sections[lang]
     ]
     assert not missing, f"missing STR keys: {missing}"
+
+
+# Issue #35: the heat-pump water groups split in two and the heating-curve
+# preview (Tuning tab + Heat-pump tab).
+_REQUIRED_ISSUE35_KEYS: tuple[str, ...] = (
+    "tune_grp_cooling_water",
+    "tune_grp_heating_water",
+    "hp_curve_cap",
+    "hp_curve_tout",
+    "hp_curve_target",
+    "hp_curve_unsaved",
+    "hp_curve_invalid",
+    "tip_hp_curve",
+)
+
+
+@pytest.mark.unit
+def test_issue35_surfaces_have_their_str_keys() -> None:
+    """The water-group and curve-preview STR keys (issue #35) exist."""
+    sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
+    missing = [
+        f"{lang}:{key}"
+        for key in _REQUIRED_ISSUE35_KEYS
+        for lang in ("pl", "en", "de")
+        if key not in sections[lang]
+    ]
+    assert not missing, f"missing STR keys: {missing}"
+    for lang in ("pl", "en", "de"):
+        assert "tune_grp_hp" not in sections[lang]
+        assert "tune_grp_flicker" not in sections[lang]
+
+
+@pytest.mark.unit
+def test_issue35_water_groups_split_cooling_from_heating() -> None:
+    """Heating water = the curve only; cooling water = base + flicker (#35)."""
+    source = _PANEL_JS.read_text(encoding="utf-8")
+    groups = dict(_knob_groups(source))
+    assert groups["tune_grp_heating_water"] == [
+        "heating_curve_neutral_c",
+        "heating_supply_base_c",
+        "heating_supply_slope",
+        "heating_supply_min_c",
+        "heating_supply_max_c",
+    ]
+    cooling = groups["tune_grp_cooling_water"]
+    assert cooling[0] == "cooling_supply_base_c"
+    assert all(k.startswith("hp_flicker_") for k in cooling[1:])
+    # The feedforward neutral stays with the valve feedforward.
+    assert "ff_neutral_c" in groups["tune_grp_weather"]
+    # The preview asks the core for the curve (one source of truth).
+    assert '"tortoise_ufh/preview_heating_curve"' in source
+    assert "curvePreview: true" in source
 
 
 _REQUIRED_TUNING_RESET_KEYS: tuple[str, ...] = (

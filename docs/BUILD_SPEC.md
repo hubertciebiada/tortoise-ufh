@@ -617,8 +617,11 @@ class ControllerConfig:
                                          # is clipped at gap 0 — still closed AT the dew point)
     dew_ramp_k: float = 2.0             # ramp width BELOW dew_margin_k (K6: previously above)
     cooling_supply_base_c: float = 15.0  # ADDITIVE (2026-07-12, B2): heat-pump cooling water base, GLOBAL-only, [10,25]; #32: 18 -> 15
-    heating_supply_base_c: float = 26.0  # ADDITIVE (2026-07-12, B2): heating water base at ff_neutral_c, GLOBAL-only, [20,40]
-    heating_supply_slope: float = 0.5    # ADDITIVE (2026-07-12, B2): heating curve slope, GLOBAL-only, [0,2]
+    heating_supply_base_c: float = 26.0  # ADDITIVE (2026-07-12, B2): heating water base at heating_curve_neutral_c (#35; was ff_neutral_c), GLOBAL-only, [20,40] and inside [min, max]
+    heating_supply_slope: float = 0.5    # ADDITIVE (2026-07-12, B2): heating curve slope, GLOBAL-only, [0,2]; UI step 0.01 since #35
+    heating_curve_neutral_c: float = 15.0  # ADDITIVE (2026-10-22, #35, DECISIONS §37): the curve's own neutral outdoor temp, GLOBAL-only, [-30,40]
+    heating_supply_min_c: float = 20.0   # ADDITIVE (#35): curve lower clamp (was HEATING_SUPPLY_MIN_C), GLOBAL-only, [20,35]
+    heating_supply_max_c: float = 40.0   # ADDITIVE (#35): curve upper clamp (was HEATING_SUPPLY_MAX_C), GLOBAL-only, [25,40]
     hp_flicker_band_k: float = 2.5       # ADDITIVE (2026-07-15, #7): flicker target cooling deadband, GLOBAL-only, [0.5,3.0]; #32: 1.5 -> 2.5
     hp_flicker_stuck_minutes: float = 30.0   # ADDITIVE (2026-07-15, #7): stuck&armed time before a pulse, GLOBAL-only, [5,120]; #32: 10 -> 30
     hp_flicker_min_off_minutes: float = 60.0  # ADDITIVE (2026-07-15, #7): forced-start cooldown, GLOBAL-only, [5,120]; #32: 20 -> 60
@@ -634,7 +637,9 @@ class ControllerConfig:
     # __post_init__: all gains >=0, 0<=valve_floor<=100, deadband>=0, margins>=0, cycle>0,
     # boost_offset_c > deadband_c, ff_neutral_c in [-30,40], ff_max_pct in [0,100],
     # fast_target_offset_k in [0,3], cooling_supply_base_c in [10,25], heating_supply_base_c in [20,40],
-    # heating_supply_slope in [0,2],
+    # heating_supply_slope in [0,2], heating_curve_neutral_c in [-30,40], heating_supply_min_c in [20,35],
+    # heating_supply_max_c in [25,40], heating_supply_min_c < heating_supply_max_c,
+    # heating_supply_min_c <= heating_supply_base_c <= heating_supply_max_c (#35),
     # hp_flicker_band_k in [0.5,3.0], hp_flicker_stuck_minutes in [5,120], hp_flicker_min_off_minutes in [5,120], hp_flicker_max_starts_per_h in [1,6]
 
 # ADDITIVE (2026-10-22, issue #31, DECISIONS §35): sparse tuning persistence helpers.
@@ -971,8 +976,13 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   `entry.options[CONF_CONTROLLER]` (sparse: only knobs differing from the default; a setup-time
   copy in `entry.data` is dropped) / `[CONF_ROOM_TUNING]`; a `None` value clears a room's field
   override (an emptied room map is pruned) or, in the global scope, resets the knob to the
-  library default; the write reloads the entry). The retired
-  `set_room_enabled` / `set_kill_switch` commands do not exist.
+  library default; the write reloads the entry), and — since issue #35 —
+  `tortoise_ufh/preview_heating_curve` (`{values?: {field: value}}`, read-only: the draft is
+  laid over the effective global tuning, checked like `set_tuning` and never persisted; replies
+  `{points: [{t_out_c, target_c}] at +15/+5/−5/−15 °C from core/hp_link.py::heating_curve_points,
+  min_c, max_c, error}` — an invalid draft is a result with `error` set and no points). The
+  `get_live` `heat_pump.heating` payload carries the same `curve` points plus `min_c`/`max_c`.
+  The retired `set_room_enabled` / `set_kill_switch` commands do not exist.
   Each `@websocket_api.websocket_command` + `@callback`, admin-guarded.
 - **`panel.py`** + `__init__.py`: serve `frontend/tortoise-ufh-panel.js` via
   `hass.http.async_register_static_paths([StaticPathConfig("/tortoise_ufh_panel/panel.js", <path>,
@@ -1018,6 +1028,13 @@ Must render:
   #31): a knob off its default shows a "custom" badge and a per-knob **reset to default** (saved
   as `null`); a value equal to an entry of `superseded_defaults` is marked "old default"; the save
   sends only non-default knobs (plus `null` for stored overrides put back on the default).
+  Issue #35: the global-only water knobs form two groups, "Cooling water"
+  (`cooling_supply_base_c` + the setpoint-flicker) and "Heating water" (the curve:
+  `heating_curve_neutral_c`, `heating_supply_base_c`, `heating_supply_slope`,
+  `heating_supply_min_c`, `heating_supply_max_c`; later issues add the write gate and the
+  compressor kick there); under the latter a curve preview table (outdoor → water, 1 decimal)
+  is refreshed from `preview_heating_curve` with the unsaved draft, and the Heat-pump tab
+  shows the live `heating.curve` next to the heating setpoint.
 - Poll `get_live` every ~5 s (or subscribe if you add an event).
 - Light/dark aware via `hass.themes`; degrade gracefully if a WS command errors (show message, never
   throw). Keep it dependency-free and defensive.

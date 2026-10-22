@@ -576,6 +576,138 @@ async def test_set_tuning_out_of_range_rejected(
     assert CONF_CONTROLLER not in setup_integration.options
 
 
+async def test_set_tuning_rejects_crossed_heating_clamps(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """Issue #35: min >= max (each in range) fails the merged-config check."""
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(
+        client,
+        {
+            "type": f"{DOMAIN}/set_tuning",
+            "scope": "global",
+            "values": {"heating_supply_min_c": 30.0, "heating_supply_max_c": 28.0},
+        },
+    )
+
+    assert msg["success"] is False
+    assert msg["error"]["code"] == "invalid_tuning"
+    message = msg["error"]["message"]
+    assert "heating_supply_min_c must be < heating_supply_max_c" in message
+    assert CONF_CONTROLLER not in setup_integration.options
+
+
+async def test_set_tuning_rejects_heating_curve_per_room(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """The new heating-curve knobs are global-only like the rest of the group."""
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(
+        client,
+        {
+            "type": f"{DOMAIN}/set_tuning",
+            "scope": "Salon",
+            "values": {"heating_curve_neutral_c": 12.0},
+        },
+    )
+
+    assert msg["success"] is False
+    assert msg["error"]["code"] == "invalid_tuning"
+
+
+async def test_get_tuning_exposes_the_heating_curve_knobs(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """Issue #35: slope steps by 0.01; neutral/min/max are exposed knobs."""
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(client, {"type": f"{DOMAIN}/get_tuning"})
+
+    assert msg["success"] is True
+    by_name = {f["name"]: f for f in msg["result"]["fields"]}
+    assert by_name["heating_supply_slope"]["step"] == 0.01
+    assert by_name["heating_curve_neutral_c"]["min"] == -30.0
+    assert by_name["heating_supply_min_c"]["max"] == 35.0
+    assert by_name["heating_supply_max_c"]["max"] == 40.0
+    defaults = msg["result"]["defaults"]
+    assert defaults["heating_curve_neutral_c"] == 15.0
+    assert defaults["heating_supply_min_c"] == 20.0
+    assert defaults["heating_supply_max_c"] == 40.0
+
+
+async def test_preview_heating_curve_saved_and_draft(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """The preview evaluates the core curve for the saved tuning or a draft.
+
+    Nothing is persisted: the draft only lives in the reply.
+    """
+    client = await hass_ws_client(hass)
+    saved = await _round_trip(client, {"type": f"{DOMAIN}/preview_heating_curve"})
+
+    assert saved["success"] is True
+    result = saved["result"]
+    assert result["error"] is None
+    assert [p["t_out_c"] for p in result["points"]] == [15.0, 5.0, -5.0, -15.0]
+    assert [p["target_c"] for p in result["points"]] == pytest.approx(
+        [26.0, 31.0, 36.0, 40.0]
+    )
+    assert (result["min_c"], result["max_c"]) == (20.0, 40.0)
+
+    draft = await _round_trip(
+        client,
+        {
+            "type": f"{DOMAIN}/preview_heating_curve",
+            "values": {
+                "heating_supply_base_c": 25.0,
+                "heating_supply_slope": 0.23,
+                "heating_supply_max_c": 31.0,
+                # Not a curve knob: must not move the curve (issue #35).
+                "ff_neutral_c": 5.0,
+            },
+        },
+    )
+    assert draft["success"] is True
+    assert [p["target_c"] for p in draft["result"]["points"]] == pytest.approx(
+        [25.0, 27.3, 29.6, 31.0]
+    )
+    assert CONF_CONTROLLER not in setup_integration.options
+
+
+async def test_preview_heating_curve_reports_an_invalid_draft(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """An invalid draft is an answer (error text, no points), not a failure."""
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(
+        client,
+        {
+            "type": f"{DOMAIN}/preview_heating_curve",
+            "values": {"heating_supply_max_c": 25.0},
+        },
+    )
+
+    assert msg["success"] is True
+    assert msg["result"]["points"] == []
+    assert "heating_supply_base_c must lie between" in msg["result"]["error"]
+
+    bad_range = await _round_trip(
+        client,
+        {"type": f"{DOMAIN}/preview_heating_curve", "values": {"kp": 999.0}},
+    )
+    assert bad_range["success"] is True
+    assert "kp must be in" in bad_range["result"]["error"]
+
+
 async def test_set_tuning_unknown_scope_rejected(
     hass: HomeAssistant,
     setup_integration: MockConfigEntry,

@@ -192,7 +192,11 @@ async def async_migrate_entry(
     what is left moves to ``options`` (dropped when empty) and ``data`` loses
     the key. Non-user-facing fields (``kd``, ``cycle_seconds``,
     ``valve_write_threshold_pct``) are dropped too. Per-room overrides are
-    already sparse and stay as they are. Every dropped key is logged.
+    already sparse and stay as they are. Every dropped key is logged. The same
+    step (issue #35, DECISIONS §37 — v6 was not yet released) copies a kept
+    global ``ff_neutral_c`` override into the new ``heating_curve_neutral_c``,
+    so the heating-water curve of such an install does not move when it
+    stops reading the feedforward's neutral point.
 
     A v1 entry passes every block sequentially in one call (each block ends at
     the version the next one picks up) and lands on v6.
@@ -368,6 +372,12 @@ async def async_migrate_entry(
                 stored.update(tuning)
         kept = controller_overrides(stored, fields=knob_names(), drop_superseded=True)
         dropped = {key: value for key, value in stored.items() if key not in kept}
+        # Issue #35 (DECISIONS §37): the heating curve used to read the
+        # feedforward's ff_neutral_c; it now has its own heating_curve_neutral_c
+        # (same 15 degC default). A stored ff_neutral_c override keeps moving
+        # the curve exactly as before by being copied into the new knob.
+        if "ff_neutral_c" in kept and "heating_curve_neutral_c" not in kept:
+            kept["heating_curve_neutral_c"] = kept["ff_neutral_c"]
         new_data_v6 = {
             key: value for key, value in entry.data.items() if key != CONF_CONTROLLER
         }
