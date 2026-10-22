@@ -56,6 +56,10 @@ from custom_components.tortoise_ufh.core.models import (
 )
 from tests.unit.conftest import make_inputs
 
+_TEN_MIN_DWELLS = ControllerConfig(fast_min_on_minutes=10.0, fast_min_off_minutes=10.0)
+"""Dwell-mechanics tests keep the pre-issue-#32 10/10 min fast-source dwells
+(the library default is 30/31 min since then) so a few 300 s steps span them."""
+
 
 class TestFastSourceBoost:
     """Split engagement gate and minimum ON/OFF dwell timers."""
@@ -78,7 +82,7 @@ class TestFastSourceBoost:
     @pytest.mark.unit
     def test_split_engages_beyond_boost_offset(self) -> None:
         """Demand beyond the boost offset engages the split in the heat mode."""
-        cfg = ControllerConfig(boost_offset_c=1.0)
+        cfg = ControllerConfig(boost_offset_c=1.0, fast_target_offset_k=1.0)
         controller = RoomController(cfg, name="salon")
         out = controller.step(
             make_inputs(
@@ -90,7 +94,8 @@ class TestFastSourceBoost:
         )
         assert out.fast_source.on is True
         assert out.fast_source.mode is FastSourceMode.HEATING
-        # S12 (2026-07-09): the boost target is setpoint + 1 K so the split's
+        # S12 (2026-07-09): the boost target is setpoint + offset (pinned to
+        # 1 K here; the library default is 0 since issue #32) so the split's
         # ceiling-mounted sensor does not throttle the unit before the boost
         # is delivered; release still belongs to OUR room sensor.
         assert out.fast_source.target_temperature_c == pytest.approx(22.0)
@@ -261,7 +266,10 @@ class TestFastDwellRemaining:
     def test_dwell_counts_down_then_clears(self) -> None:
         """After engaging, the min-ON lock counts down and clears to None."""
         cfg = ControllerConfig(
-            boost_offset_c=1.0, fast_min_on_minutes=10.0, deadband_c=0.3
+            boost_offset_c=1.0,
+            fast_min_on_minutes=10.0,
+            fast_min_off_minutes=10.0,
+            deadband_c=0.3,
         )
         controller = RoomController(cfg, name="salon")
 
@@ -320,9 +328,10 @@ class TestFastDwellSingleAccumulation:
         the dwell clock and flapping the min-runtime flag). Now the water-side
         S1 parks the valve while the wanted boost keeps running, and the dwell
         timer advances by exactly dt per step — never resetting while the
-        state holds.
+        state holds. (Dwells pinned to 10 min — the library default is 30/31
+        since issue #32 — so the min-ON elapses inside the window.)
         """
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         # Cold room, healthy supply: the split engages (dwell clock -> 0).
         engaged = controller.step(self._s1_inputs(19.0, 35.0), dt_seconds=300.0)
         assert engaged.fast_source.on is True
@@ -354,9 +363,9 @@ class TestFastDwellSingleAccumulation:
         double-counting bug saw 602 s and re-engaged the compressor half a
         dwell too early. (Rewritten for K3, 2026-07-12: an S1 no longer force-
         stops the split, so the forced-OFF path is exercised via sensor loss,
-        which still does.)
+        which still does. Dwells pinned to 10 min, issue #32.)
         """
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         engaged = controller.step(self._s1_inputs(19.0, 35.0), dt_seconds=300.0)
         assert engaged.fast_source.on is True
         sensor_lost = replace(self._s1_inputs(19.0, 35.0), room_temperature_c=None)
@@ -463,7 +472,10 @@ class TestFastDirectionMachine:
     @pytest.mark.unit
     def test_direction_flip_goes_through_off_with_full_min_off(self) -> None:
         """A real reversal is OFF-gated: min-ON, then OFF for the FULL min-OFF."""
-        cfg = ControllerConfig(fast_min_on_minutes=10.0, fast_min_off_minutes=10.0)
+        # boost 1 K so the 1.5 K overshoot below is a genuine cooling demand.
+        cfg = ControllerConfig(
+            boost_offset_c=1.0, fast_min_on_minutes=10.0, fast_min_off_minutes=10.0
+        )
         controller = RoomController(cfg, name="salon")
         engaged = controller.step(self._transitional(21.0, 19.0), dt_seconds=300.0)
         assert engaged.fast_source.mode is FastSourceMode.HEATING
@@ -486,8 +498,8 @@ class TestFastDirectionMachine:
 
     @pytest.mark.unit
     def test_active_mode_boost_target_is_offset(self) -> None:
-        """S12: active-mode boost targets are setpoint +1 K / -1 K."""
-        heating = RoomController(ControllerConfig(), name="a")
+        """S12: active-mode boost targets are setpoint +1 K / -1 K (offset 1)."""
+        heating = RoomController(ControllerConfig(fast_target_offset_k=1.0), name="a")
         out_h = heating.step(
             make_inputs(
                 mode=Mode.HEATING,
@@ -499,7 +511,7 @@ class TestFastDirectionMachine:
         )
         assert out_h.fast_source.target_temperature_c == pytest.approx(22.0)
 
-        cooling = RoomController(ControllerConfig(), name="b")
+        cooling = RoomController(ControllerConfig(fast_target_offset_k=1.0), name="b")
         out_c = cooling.step(
             make_inputs(
                 mode=Mode.COOLING,
@@ -584,7 +596,7 @@ class TestFastPhysicalSync:
     @pytest.mark.unit
     def test_stopped_unit_seeds_conservative_min_off(self) -> None:
         """A physically stopped split waits a FULL min-OFF before engaging."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         first = controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
         # Demand is 2 K > boost, but the conservative restart seed blocks the
         # engage until the full min-OFF (10 min) has elapsed.
@@ -609,7 +621,7 @@ class TestFastPhysicalSync:
         is NOT adopted — the machine stays the owner and only flags it.
         """
         controller = RoomController(
-            ControllerConfig(fast_manual_hold_minutes=0.0), name="salon"
+            replace(_TEN_MIN_DWELLS, fast_manual_hold_minutes=0.0), name="salon"
         )
         controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
         engaged = controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
@@ -623,7 +635,7 @@ class TestFastPhysicalSync:
     @pytest.mark.unit
     def test_agreeing_feedback_never_flags(self) -> None:
         """Feedback matching the emitted command raises no mismatch."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
         engaged = controller.step(self._inputs(19.0, fast_on=False), dt_seconds=300.0)
         assert engaged.fast_source.on is True
@@ -1004,7 +1016,8 @@ class TestDryAssist:
         )
         assert boosted.fast_source.on is True
         assert boosted.fast_source.mode is FastSourceMode.COOLING
-        assert boosted.fast_source.target_temperature_c == pytest.approx(23.0)
+        # Default fast_target_offset_k = 0 (issue #32): the plain setpoint.
+        assert boosted.fast_source.target_temperature_c == pytest.approx(24.0)
         assert "dry_assist" not in boosted.report.flags
 
     @pytest.mark.unit

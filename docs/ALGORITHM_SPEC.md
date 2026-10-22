@@ -203,11 +203,12 @@ knobs come from `tortoise_ufh.config.ControllerConfig` (a frozen dataclass, `__p
 | `ff_neutral_c` | 15.0 | °C | FF neutral outdoor temperature (knob since 2026-07-09) |
 | `ff_gain_pct_per_k` | 1.0 | %/K | FF gain |
 | `ff_max_pct` | 20.0 | % | FF cap |
-| `boost_offset_c` | 1.0 | K | split engage threshold (must be > `deadband_c`) |
-| `fast_min_on_minutes` | 10.0 | min | split min ON dwell |
-| `fast_min_off_minutes` | 10.0 | min | split min OFF dwell |
+| `boost_offset_c` | 1.5 | K | split engage threshold (must be > `deadband_c`; 1.0 before issue #32) |
+| `fast_min_on_minutes` | 30.0 | min | split min ON dwell (10 before issue #32) |
+| `fast_min_off_minutes` | 31.0 | min | split min OFF dwell (10 before issue #32) |
+| `fast_target_offset_k` | 0.0 | K | S12 split-target overdrive (1.0 before issue #32) |
 | `fast_manual_hold_minutes` | 60.0 | min | manual hold after a physical divergence of the split (§28, 2026-09-04; 0 = legacy mismatch flag) |
-| `dew_margin_k` | 2.0 | K | local S2 dew margin |
+| `dew_margin_k` | 1.5 | K | local S2 dew margin — throttle fully open at this supply-dew gap (2.0 before issue #32) |
 | `dew_ramp_k` | 2.0 | K | S2 graduated ramp width |
 | `cycle_seconds` | 300.0 | s | control cycle (= PID `dt`) |
 | `valve_write_threshold_pct` | 5.0 | % | HA write dead-zone |
@@ -521,7 +522,8 @@ belt-and-braces (Aneks §8.4). This is distinct from the independent hard-safety
 Only when `fast_source_kind != NONE`. Command shape (`FastSourceCommand`): `on` +
 `mode ∈ {HEATING, COOLING, OFF}` + `target_temperature_c` (S12, 2026-07-09: `setpoint + offset`
 while HEATING / `setpoint - offset` while COOLING — the `fast_target_offset_k` tuning knob since
-2026-07-13, default 1 K, `0` disables, previously the fixed `FAST_TARGET_OFFSET_K`; exactly
+2026-07-13, default 1 K until issue #32 and `0` (overdrive off) since, previously the fixed
+`FAST_TARGET_OFFSET_K`; exactly
 `setpoint` in TRANSITIONAL regardless of the knob). We set the split's own setpoint and mode (`climate.set_hvac_mode` +
 `climate.set_temperature`); we never touch compressor power — the split self-regulates. The
 adapter caches the last written `(hvac_mode, target)` per entity and re-sends only on change or
@@ -806,3 +808,4 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 | 2026-10-12 | S6 short-loop false alarm (DECISIONS §33, v0.22.2): displacement references ratchet to the probe's extreme away from the source since the last signature (a re-heat after a compressor pause is evidence even below the pre-pause peak), and a signature disarms the window until the loop departs from it by ≥ 0.5 K or loses its through-flow ΔT. No knob, contract or migration change. |
 | 2026-10-12 | S6 removed (DECISIONS §34, v0.22.3): the temperature-based no-flow watchdog (`loop_no_flow`, its integrator freeze, circulation gating, `binary_sensor.flow_fault`) and the `test_actuation` self-test are deleted — loop temperatures can prove flow but not its absence. Config migration v4→v5 strips `flow_epsilon_k`, `flow_open_threshold_pct`, `flow_response_window_min` (globals and per-room overrides). `RoomReport` drops the S6 fields and gains `loop_count`. |
 | 2026-10-22 | Tuning persisted as overrides (DECISIONS §35, issue #31): the global `ControllerConfig` was stored as a FULL snapshot (seeded into `entry.data` at setup, rewritten whole into `entry.options` by every save), so retuned defaults (§8 gains, the K2b write threshold) never reached existing installs — a live house ran kp 8 / ki 0.02 / kt 6 and a 2 pp threshold for months. Now only user-facing knobs differing from the library default are stored (`core/config.py::controller_overrides`), `null` resets a global knob to the default, and config migration v5→v6 drops non-knob fields and every value equal to a current or earlier shipped default (`SUPERSEDED_CONTROLLER_DEFAULTS`). The control law is unchanged. |
+| 2026-10-22 | Field-validated defaults (DECISIONS §36, issue #32; one house, a full cooling season + the start of heating): `boost_offset_c` 1.0→1.5 K, `fast_min_on/off_minutes` 10/10→30/31, `fast_target_offset_k` 1→0 (the split gets the plain setpoint), `dew_margin_k` 2→1.5 K (the local throttle ramp now ends 0.5 K BELOW the pump's unchanged 2 K global dew floor and starts at the dew point — ordinary water lag on a rising dew point no longer throttles; it stays the backstop), `cooling_supply_base_c` 18→15 °C, `dry_dew_max_c` 17→16 °C, flicker `band_k` 1.5→2.5, `stuck` 10→30 min, `min_off` 20→60 min, `max_starts_per_h` 2→1, `min_open_pct` 250→350. `dry_enabled`/`hp_flicker_enabled` stay opt-in; heating curve and FF untouched. The old values join `SUPERSEDED_CONTROLLER_DEFAULTS`, so the (still unreleased) v5→v6 migration drops a frozen copy. No contract change. |

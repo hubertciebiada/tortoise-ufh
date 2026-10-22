@@ -303,6 +303,52 @@ class TestControllerOverrides:
         assert not is_superseded_default("kp", True)
 
     @pytest.mark.unit
+    def test_issue_32_old_defaults_are_superseded(self) -> None:
+        """Every default retuned by issue #32 drops its old value on migration."""
+        old = {
+            "boost_offset_c": 1.0,
+            "fast_min_on_minutes": 10.0,
+            "fast_min_off_minutes": 10.0,
+            "fast_target_offset_k": 1.0,
+            "dew_margin_k": 2.0,
+            "cooling_supply_base_c": 18.0,
+            "dry_dew_max_c": 17.0,
+            "hp_flicker_band_k": 1.5,
+            "hp_flicker_stuck_minutes": 10.0,
+            "hp_flicker_min_off_minutes": 20.0,
+            "hp_flicker_max_starts_per_h": 2.0,
+            "hp_flicker_min_open_pct": 250.0,
+        }
+        for name, value in old.items():
+            assert is_superseded_default(name, value), name
+        assert controller_overrides(old, fields=old, drop_superseded=True) == {}
+        # Without the migration flag they are ordinary (non-default) values.
+        assert controller_overrides(old, fields=old) == old
+
+    @pytest.mark.unit
+    def test_issue_32_defaults(self) -> None:
+        """The field-validated issue #32 defaults; the feature flags stay off."""
+        cfg = ControllerConfig()
+        assert cfg.boost_offset_c == pytest.approx(1.5)
+        assert cfg.fast_min_on_minutes == pytest.approx(30.0)
+        assert cfg.fast_min_off_minutes == pytest.approx(31.0)
+        assert cfg.fast_target_offset_k == pytest.approx(0.0)
+        assert cfg.dew_margin_k == pytest.approx(1.5)
+        assert cfg.cooling_supply_base_c == pytest.approx(15.0)
+        assert cfg.dry_dew_max_c == pytest.approx(16.0)
+        assert cfg.hp_flicker_band_k == pytest.approx(2.5)
+        assert cfg.hp_flicker_stuck_minutes == pytest.approx(30.0)
+        assert cfg.hp_flicker_min_off_minutes == pytest.approx(60.0)
+        assert cfg.hp_flicker_max_starts_per_h == pytest.approx(1.0)
+        assert cfg.hp_flicker_min_open_pct == pytest.approx(350.0)
+        assert cfg.dry_enabled is False
+        assert cfg.hp_flicker_enabled is False
+        # Untouched by issue #32.
+        assert cfg.heating_supply_base_c == pytest.approx(26.0)
+        assert cfg.heating_supply_slope == pytest.approx(0.5)
+        assert cfg.ff_gain_pct_per_k == pytest.approx(1.0)
+
+    @pytest.mark.unit
     def test_table_never_lists_a_current_default(self) -> None:
         """Every superseded value is a real field and not today's default."""
         defaults = ControllerConfig()
@@ -747,9 +793,9 @@ class TestHeatPumpWaterKnobs:
 
     @pytest.mark.unit
     def test_defaults_valid(self) -> None:
-        """The library defaults (18 / 26 / 0.5) construct cleanly."""
+        """The library defaults (15 / 26 / 0.5) construct cleanly."""
         cfg = ControllerConfig()
-        assert cfg.cooling_supply_base_c == pytest.approx(18.0)
+        assert cfg.cooling_supply_base_c == pytest.approx(15.0)
         assert cfg.heating_supply_base_c == pytest.approx(26.0)
         assert cfg.heating_supply_slope == pytest.approx(0.5)
 

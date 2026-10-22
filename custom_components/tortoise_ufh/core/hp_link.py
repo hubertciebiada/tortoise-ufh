@@ -218,7 +218,7 @@ def round_to_step_c(value_c: float, step_c: float) -> float:
     NOT ``ceil``/``floor``. The cooling setpoint is a dew-safety floor
     (``max(base, safe_dew_c)``), and an earlier idea was to ``ceil`` it so
     quantization could never dip below the floor. That was rejected: the floor
-    already carries the full ``dew_margin_k`` (2 K default) condensation buffer,
+    already carries the full 2 K ``DEW_MARGIN_DEFAULT_K`` condensation buffer,
     so ceiling would sacrifice cooling capacity to defend a margin that is
     already generous. Round-to-nearest may surrender at most half a step of that
     2 K buffer — an accepted trade. The heating setpoint (an upper comfort/

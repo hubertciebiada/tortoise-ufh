@@ -92,7 +92,8 @@ class ControllerConfig:
             working through the boost, while the RELEASE decision stays with
             OUR room sensor (S12, 2026-07-09). ``0`` disables the overdrive
             (the split gets the plain setpoint). TRANSITIONAL always uses the
-            plain setpoint regardless of this knob.
+            plain setpoint regardless of this knob. Default ``0`` since issue
+            #32 (2026-10-22, field-validated; previously 1).
         dry_enabled: Opt-in dry assist (default ``False``; 2026-07-16,
             DECISIONS §24): in COOLING a SPLIT is engaged in its DRY mode when
             the room dew point exceeds ``dry_dew_max_c`` even though the
@@ -100,8 +101,9 @@ class ControllerConfig:
             a rising dew point steals its capacity, so the split's latent
             capacity is the system's only dehumidifier. Per-room overridable.
         dry_dew_max_c: Room dew point above which the dry assist engages
-            [degC] (in [12, 22]; default 17 from the owner's observation —
-            air feels stale from a real dew point of ~17-18 degC). Releases
+            [degC] (in [12, 22]; default 16 since issue #32, field-validated
+            over a cooling season — previously 17 from the owner's observation
+            that air feels stale from a real dew point of ~17-18 degC). Releases
             ``DRY_HYSTERESIS_K`` (1 K, a constant) below, or as soon as the
             room is overcooled past the deadband. Per-room overridable.
         fast_manual_hold_minutes: Manual-hold duration of the fast source
@@ -124,11 +126,16 @@ class ControllerConfig:
             2026-07-12 (K6): the ramp ENDS here — this is the same design gap
             the heat pump's global safe dew-point floor already guarantees,
             so full cooling is available exactly on that floor instead of a
-            second stacked margin above it.
+            second stacked margin above it. Default 1.5 since issue #32
+            (2026-10-22; previously 2): the ramp now ends 0.5 K BELOW the
+            pump's 2 K floor (``DEW_MARGIN_DEFAULT_K``), so ordinary floor
+            lag on a rising dew point no longer throttles the valve; the
+            ramp still closes fully at the dew point itself.
         dew_ramp_k: Width of the local throttle's linear ramp BELOW
             ``dew_margin_k`` [K] (> 0; K6 2026-07-12 — previously the ramp
-            sat ABOVE the margin). With the defaults (2/2) the valve ramps
-            1 -> 0 over gap 2 -> 0 K and closes fully at the room's actual
+            sat ABOVE the margin). With the defaults (1.5/2, issue #32) the
+            ramp start is clipped at the dew point, so the valve ramps
+            1 -> 0 over gap 1.5 -> 0 K and closes fully at the room's actual
             dew point.
         cooling_supply_base_c: Base cooling-water setpoint [degC] written to
             the heat pump while the home cools (in [10, 25]; B2 2026-07-12).
@@ -180,6 +187,9 @@ class ControllerConfig:
             written to the actuator [%] (>= 0).
     """
 
+    # Fast-source, dew-point and flicker defaults retuned 2026-10-22 (issue
+    # #32, DECISIONS §36) from one house's full cooling season + the start of
+    # a heating season; the old values are in SUPERSEDED_CONTROLLER_DEFAULTS.
     # Defaults retuned 2026-07-09 (C1; DECISIONS §8) on the CALIBRATED digital
     # twin: the old ki=0.02 (Ti ~ 7 min) was an order of magnitude too
     # aggressive for a tau = 3-6 h slab and produced a measured +1.2 K
@@ -204,22 +214,22 @@ class ControllerConfig:
     ff_neutral_c: float = 15.0
     ff_gain_pct_per_k: float = 1.0
     ff_max_pct: float = 20.0
-    boost_offset_c: float = 1.0
-    fast_min_on_minutes: float = 10.0
-    fast_min_off_minutes: float = 10.0
-    fast_target_offset_k: float = 1.0
+    boost_offset_c: float = 1.5
+    fast_min_on_minutes: float = 30.0
+    fast_min_off_minutes: float = 31.0
+    fast_target_offset_k: float = 0.0
     # Dry assist (2026-07-16, DECISIONS §24): humidity-triggered split DRY.
     dry_enabled: bool = False
-    dry_dew_max_c: float = 17.0
+    dry_dew_max_c: float = 16.0
     # Manual hold (2026-09-04, DECISIONS §28): a physical divergence of the
     # split is adopted as user intent for this long; 0 = legacy mismatch flag.
     fast_manual_hold_minutes: float = 60.0
-    dew_margin_k: float = 2.0
+    dew_margin_k: float = 1.5
     dew_ramp_k: float = 2.0
     # Optional heat-pump water setpoints (B2, 2026-07-12): global knobs read
     # only by the adapter's opt-in heat-pump link; the room control law never
     # touches them.
-    cooling_supply_base_c: float = 18.0
+    cooling_supply_base_c: float = 15.0
     heating_supply_base_c: float = 26.0
     heating_supply_slope: float = 0.5
     # Cooling setpoint-flicker knobs (2026-07-15, issue #7): global-only timing
@@ -228,11 +238,11 @@ class ControllerConfig:
     # adapter's SetpointFlicker (see core/hp_link.py). The room control law
     # never touches them.
     hp_flicker_enabled: bool = False
-    hp_flicker_band_k: float = 1.5
-    hp_flicker_stuck_minutes: float = 10.0
-    hp_flicker_min_off_minutes: float = 20.0
-    hp_flicker_max_starts_per_h: float = 2.0
-    hp_flicker_min_open_pct: float = 250.0
+    hp_flicker_band_k: float = 2.5
+    hp_flicker_stuck_minutes: float = 30.0
+    hp_flicker_min_off_minutes: float = 60.0
+    hp_flicker_max_starts_per_h: float = 1.0
+    hp_flicker_min_open_pct: float = 350.0
     cycle_seconds: float = 300.0
     # 2.0 -> 5.0 (2026-07-12, K2b): measured on the twin (steady_heating
     # @ 300 s, tail 24-48 h), the 2 pp threshold did NOT bound kt's noise
@@ -395,6 +405,20 @@ SUPERSEDED_CONTROLLER_DEFAULTS: Mapping[str, frozenset[float]] = MappingProxyTyp
         # K2b, 2026-07-12 (docs/DECISIONS.md §11): 2 -> 5 pp. Not a user-facing
         # knob, so a persisted copy is dropped anyway; listed for the record.
         "valve_write_threshold_pct": frozenset({2.0}),
+        # Issue #32, 2026-10-22 (docs/DECISIONS.md §36): field-validated on one
+        # house over a full cooling season and the start of a heating season.
+        "boost_offset_c": frozenset({1.0}),
+        "fast_min_on_minutes": frozenset({10.0}),
+        "fast_min_off_minutes": frozenset({10.0}),
+        "fast_target_offset_k": frozenset({1.0}),
+        "dew_margin_k": frozenset({2.0}),
+        "cooling_supply_base_c": frozenset({18.0}),
+        "dry_dew_max_c": frozenset({17.0}),
+        "hp_flicker_band_k": frozenset({1.5}),
+        "hp_flicker_stuck_minutes": frozenset({10.0}),
+        "hp_flicker_min_off_minutes": frozenset({20.0}),
+        "hp_flicker_max_starts_per_h": frozenset({2.0}),
+        "hp_flicker_min_open_pct": frozenset({250.0}),
     }
 )
 """Earlier shipped :class:`ControllerConfig` defaults, per field.

@@ -62,8 +62,9 @@ The one working margin of the two-layer protection (2026-07-12, K6 — owner
 decision "tylko pompa +2"): the global safe dew-point sensor reports
 ``max_over_cooled_rooms(T_dew) + this`` and the heat pump keeps the chilled
 supply at/above that floor. The per-room graduated throttle
-(``ControllerConfig.dew_margin_k``, same default value) reaches full opening
-exactly at this gap and only throttles BELOW it; the hard S2 rule
+(``ControllerConfig.dew_margin_k``) reaches full opening at its own margin —
+1.5 K by default since issue #32 (2026-10-22, DECISIONS §36; it was this same
+2 K before), i.e. 0.5 K BELOW this floor — and only throttles below it; the hard S2 rule
 (``safety.S2_HARD_MARGIN_K = 0``) backstops at the dew point itself. The
 margins are deliberately NOT stacked on top of each other.
 """

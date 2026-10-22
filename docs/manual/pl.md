@@ -152,7 +152,7 @@ Zakładki:
   pomiar z trendem, zadana (z korektą), uchyb, zawór %, zasilanie/powrót pierwszej
   pętli oraz — pod wspólnym nagłówkiem **Wspomaganie** — tryb i temperatura zadana
   splita/grzałki („—" = pokój bez wspomagania, „wył." = wspomaganie stoi; ikona „i"
-  przy „Temp." tłumaczy celowe ±1 K — §10). Kliknięcie wiersza otwiera **szczegóły
+  przy „Temp." tłumaczy podbicie nastawy splita — §10). Kliknięcie wiersza otwiera **szczegóły
   pokoju**: kafle (pomiar, zadana ze stepperem korekty, zawór, szybkie źródło —
   z linijką „dozwolone HH:MM–HH:MM", gdy pokój ma ciche godziny), sekcję
   **Decyzja regulatora** (uchyb, punkt rosy, wkład członów P/I/Trend/FF,
@@ -341,17 +341,17 @@ ostrzegawczy znaczek **„stara domyślna"** — przywróć domyślną, chyba ż
 
 | Parametr | Jednostka | Domyślnie | Co robi i kiedy ruszać |
 |---|---|---|---|
-| **Próg włączenia wspomagania** (`boost_offset_c`) | K | 1,0 | Próg dogrzewu: gdy uchyb przekroczy tę wartość, włącza się szybkie źródło (split/grzałka). Split puszcza z powrotem wewnątrz pasma komfortu; podłoga zawsze zostaje źródłem bazowym. Musi być większy niż strefa nieczułości. Domyślnie 1,0 K. |
-| **Minimalny czas pracy wspomagania** (`fast_min_on_minutes`) | min | 10 | Minimalny czas pracy szybkiego źródła po włączeniu. Chroni sprężarkę splita przed taktowaniem i uspokaja zmiany kierunku w grupie multisplit. Domyślnie 10 min; minimum 3. |
-| **Minimalny czas postoju wspomagania** (`fast_min_off_minutes`) | min | 10 | Minimalny czas postoju szybkiego źródła po wyłączeniu, zanim wolno je włączyć ponownie. Domyślnie 10 min; minimum 3. |
-| **Podbicie nastawy wspomagania** (`fast_target_offset_k`) | K | 1,0 | O ile kelwinów nastawa wysyłana do splita jest podbijana poza zadaną pokoju podczas dogrzewu/dochładzania (grzanie: zadana + wartość, chłodzenie: zadana − wartość). Czujnik splita pod sufitem czyta cieplej niż czujnik pokojowy — bez podbicia split dławi się przed dostarczeniem dogrzewu; o wyłączeniu i tak decyduje czujnik pokojowy (§10). 0 = bez podbicia. Domyślnie 1,0 K. |
+| **Próg włączenia wspomagania** (`boost_offset_c`) | K | 1,5 | Próg dogrzewu: gdy uchyb przekroczy tę wartość, włącza się szybkie źródło (split/grzałka). Split puszcza z powrotem wewnątrz pasma komfortu; podłoga zawsze zostaje źródłem bazowym. Musi być większy niż strefa nieczułości. Domyślnie 1,5 K. |
+| **Minimalny czas pracy wspomagania** (`fast_min_on_minutes`) | min | 30 | Minimalny czas pracy szybkiego źródła po włączeniu. Chroni sprężarkę splita przed taktowaniem i uspokaja zmiany kierunku w grupie multisplit. Domyślnie 30 min; minimum 3. |
+| **Minimalny czas postoju wspomagania** (`fast_min_off_minutes`) | min | 31 | Minimalny czas postoju szybkiego źródła po wyłączeniu, zanim wolno je włączyć ponownie. Domyślnie 31 min; minimum 3. |
+| **Podbicie nastawy wspomagania** (`fast_target_offset_k`) | K | 0 | O ile kelwinów nastawa wysyłana do splita jest podbijana poza zadaną pokoju podczas dogrzewu/dochładzania (grzanie: zadana + wartość, chłodzenie: zadana − wartość). Czujnik splita pod sufitem czyta cieplej niż czujnik pokojowy — bez podbicia split dławi się przed dostarczeniem dogrzewu; o wyłączeniu i tak decyduje czujnik pokojowy (§10). 0 = bez podbicia. Domyślnie 0 — podbij (np. 1 K), jeśli split dławi się przed dostarczeniem dogrzewu. |
 | **Czas ręcznego sterowania wspomaganiem** (`fast_manual_hold_minutes`) | min | 60 | Gdy split fizycznie robi co innego niż ostatnia komenda (włączony pilotem, wyłączony, przestawiony kierunek), regulator uznaje to za Twoją decyzję: przyjmuje stan urządzenia i przez tyle minut od ostatniego dotknięcia tylko go odzwierciedla — nic nie wysyła i nie nadpisuje ponownym wymuszaniem (flaga `fast_source_manual`, §10). Po upływie czasu wraca normalna logika (zmiana kierunku dalej przez OFF i minimalny postój). Zabezpieczenia S3/S4 i utrata czujnika przerywają utrzymanie. 0 = wyłączone (jak dawniej: `fast_source_mismatch` i ponowne wymuszenie po ~45 min). Domyślnie 60 min. |
 
 **Ochrona przed kondensacją (chłodzenie)**
 
 | Parametr | Jednostka | Domyślnie | Co robi i kiedy ruszać |
 |---|---|---|---|
-| **Margines bezpieczeństwa nad punktem rosy** (`dew_margin_k`) | K | 2 | Chłodzenie: gdy zasilanie jest co najmniej o tyle K powyżej punktu rosy, zawór działa bez ograniczeń; bliżej rosy zaczyna się dławienie przepływu (ochrona przed kondensacją na podłodze). Domyślnie 2 K; zwiększ, jeśli widzisz wilgoć. |
+| **Margines bezpieczeństwa nad punktem rosy** (`dew_margin_k`) | K | 1,5 | Chłodzenie: gdy zasilanie jest co najmniej o tyle K powyżej punktu rosy, zawór działa bez ograniczeń; bliżej rosy zaczyna się dławienie przepływu (ochrona przed kondensacją na podłodze). Domyślnie 1,5 K (pompa trzyma wodę 2 K nad rosą, więc zwykłe opóźnienie wody nie dławi); zwiększ, jeśli widzisz wilgoć. |
 | **Szerokość rampy dławienia chłodzenia** (`dew_ramp_k`) | K | 2 | Szerokość rampy dławienia poniżej marginesu rosy: na tym odcinku przepływ maleje liniowo od 100 % do 0. Mniejsza wartość = ostrzejsze odcinanie. Domyślnie 2 K. |
 
 **Pompa ciepła — woda (tylko globalnie; działa wyłącznie ze skonfigurowanym
@@ -359,7 +359,7 @@ sprzężeniem — §11)**
 
 | Parametr | Jednostka | Domyślnie | Co robi i kiedy ruszać |
 |---|---|---|---|
-| **Bazowa temperatura wody chłodzenia** (`cooling_supply_base_c`) | °C | 18 | Nastawa wody chłodzenia pisana do pompy, gdy dom chłodzi: zapisywana wartość to maksimum z tej bazy i globalnego bezpiecznego punktu rosy — nigdy poniżej punktu rosy. Działa tylko przy skonfigurowanej encji nastawy chłodzenia (opcje → Pompa ciepła). Parametr globalny — nie da się go nadpisać per pokój. Domyślnie 18 °C. |
+| **Bazowa temperatura wody chłodzenia** (`cooling_supply_base_c`) | °C | 15 | Nastawa wody chłodzenia pisana do pompy, gdy dom chłodzi: zapisywana wartość to maksimum z tej bazy i globalnego bezpiecznego punktu rosy — nigdy poniżej punktu rosy. Działa tylko przy skonfigurowanej encji nastawy chłodzenia (opcje → Pompa ciepła). Parametr globalny — nie da się go nadpisać per pokój. Domyślnie 15 °C. |
 | **Bazowa temperatura wody grzania** (`heating_supply_base_c`) | °C | 26 | Zasilanie wody grzewczej przy neutralnej temperaturze zewnętrznej (parametr „Temperatura neutralna członu pogodowego", domyślnie 15 °C). Poniżej niej nastawa rośnie według nachylenia krzywej; całość obcinana do 20–40 °C. Pisana do pompy tylko przy skonfigurowanej encji nastawy grzania — domyślnie pompa jedzie na własnej krzywej. Parametr globalny. Domyślnie 26 °C. |
 | **Nachylenie krzywej wody grzania** (`heating_supply_slope`) | K/K | 0,5 | O ile kelwinów rośnie nastawa wody grzania na każdy 1 K temperatury zewnętrznej poniżej temperatury neutralnej. Domyślnie 0,5 K/K; typowo 0,3–0,8 dla dobrze ocieplonego domu z podłogówką. |
 
@@ -403,14 +403,14 @@ udziału w chłodzeniu (kreator to wymusza).
   kondensacją**: dławienie punktu rosy (§9) nadal przymyka trzymany zawór, a utrata
   czujnika pokoju nadal zamyka go do 0. W grzaniu nic się nie zmienia. Nowych
   parametrów do ustawienia nie ma — działa automatycznie.
-- **Dlaczego nastawa splita różni się od zadanej:** nastawa splita jest celowo
-  podbijana o parametr **podbicie nastawy wspomagania** (§8; domyślnie 1 K —
-  grzanie: +1 K, chłodzenie: −1 K). Czujnik splita wisi pod sufitem i czyta
-  cieplej niż nasz czujnik pokojowy — nastawa równa zadanej gasiłaby split, zanim
-  dogrzanie/dochłodzenie faktycznie dotrze do pokoju. O wyłączeniu i tak decyduje
-  NASZ czujnik pokojowy z histerezą, więc pokój nie „ucieknie". Jeśli wolisz, by
-  split dostawał dokładnie zadaną, ustaw parametr na 0. W trybie przejściowym
-  nastawa = zadana zawsze.
+- **Kiedy nastawa splita różni się od zadanej:** nastawę splita można podbić
+  o parametr **podbicie nastawy wspomagania** (§8; grzanie: +wartość,
+  chłodzenie: −wartość). Domyślnie **0** (od issue #32 — sprawdzone w praktyce):
+  split dostaje dokładnie zadaną. Jeśli czujnik splita, wiszący pod sufitem, czyta
+  wyraźnie cieplej niż nasz czujnik pokojowy i split gasi się, zanim
+  dogrzanie/dochłodzenie dotrze do pokoju, ustaw np. 1 K. O wyłączeniu i tak
+  decyduje NASZ czujnik pokojowy z histerezą, więc pokój nie „ucieknie". W trybie
+  przejściowym nastawa = zadana zawsze.
 - **Timery dwell:** minimalny czas pracy i postoju (§8) — zmiana kierunku zawsze
   przechodzi przez OFF z pełnym czasem postoju.
 - **Ponowne wymuszanie:** niezmieniona komenda nie jest wysyłana co cykl (bez
@@ -463,7 +463,8 @@ wilgoć przy minimalnym schładzaniu. Po włączeniu parametru **„Osuszanie
 wspomagające"** (§8, grupa „Szybkie źródło"; domyślnie wyłączone):
 
 - **Start:** w trybie chłodzenia, gdy **punkt rosy pokoju** przekroczy **„Próg rosy
-  osuszania"** (domyślnie 17 °C — od ok. 17–18 °C rosy powietrze robi się lepkie),
+  osuszania"** (domyślnie 16 °C — osuszanie rusza, zanim powietrze zrobi się lepkie,
+  od ok. 17–18 °C rosy),
   a pokój jest **na nastawie lub cieplej** (split w dry też chłodzi, więc pokoju
   już przechłodzonego nie dochładzamy dalej; od v0.17.1), split pokoju dostaje
   komendę **dry** — nawet gdy temperatura niczego nie woła. Raport nosi flagę
@@ -578,7 +579,7 @@ globalnych pokręteł (docelowa histereza, min. suma otwarcia pętli, zwłoka pr
 min. przerwa między startami, limit startów na godzinę). Od v0.14.0 działa **bramka popytu**:
 start jest wymuszany tylko, gdy pokoje wołające o chłód razem zadają dość otwarcia zaworów —
 suma `zawór % × liczba pętli pokoju` musi osiągnąć próg **„Min. odbiór: suma otwarcia pętli"**
-(domyślnie 250, czyli 2,5 pętli w pełni otwartej; minimum 100 = jedna pętla, maksimum =
+(domyślnie 350, czyli 3,5 pętli w pełni otwartej; minimum 100 = jedna pętla, maksimum =
 wszystkie pętle × 100). Mniejszy odbiór — np. jeden pokój z jedną pętlą na 100 % — spokojnie
 pokrywa zimna woda z bufora i startu nie wymuszamy: wymuszenie zbiłoby tylko temperaturę
 bufora o 1–2 K i skróciło cykl sprężarki. Bieżącą sumę obok progu widać w zakładce Pompa
@@ -689,6 +690,20 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **Następne wydanie (issue #32)** — **nowe domyślne nastawy wspomagania, rosy i
+  wymuszania startu chłodzenia**, sprawdzone na jednym domu przez cały sezon chłodzenia
+  i początek grzania: próg dogrzewu 1,0 → **1,5 K**, minimalny czas pracy / postoju
+  wspomagania 10 / 10 → **30 / 31 min**, podbicie nastawy splita 1 → **0 K** (split
+  dostaje zadaną), margines rosy (lokalne dławienie) 2 → **1,5 K** (pompa nadal trzyma
+  wodę 2 K nad rosą), bazowa woda chłodzenia 18 → **15 °C**, próg rosy osuszania
+  17 → **16 °C**; wymuszanie startu chłodzenia: histereza 1,5 → **2,5 K**, zwłoka
+  10 → **30 min**, przerwa między startami 20 → **60 min**, maks. startów 2 → **1/h**,
+  min. suma otwarcia pętli 250 → **350**. Osuszanie i wymuszanie startu pozostają
+  **domyślnie wyłączone**; krzywa wody grzania i człon pogodowy bez zmian. Migracja
+  **v5 → v6** (ta sama co dla issue #31) traktuje zapisaną dawną domyślną wartość
+  tych parametrów jak zamrożoną kopię i ją usuwa — instalacja dostaje nowe wartości;
+  kto celowo ustawił dokładnie dawną wartość (np. próg 1,0 K), musi ją ustawić
+  ponownie (wpis w logu). Panel oznacza takie wartości jako **„stara domyślna"**.
 - **Następne wydanie (issue #31)** — **strojenie globalne zapisywane jako nadpisania**:
   dotąd kreator i każdy zapis strojenia utrwalały pełną kopię wszystkich nastaw, więc
   poprawione wartości domyślne nigdy nie docierały do istniejących instalacji (np. `kp 8 /

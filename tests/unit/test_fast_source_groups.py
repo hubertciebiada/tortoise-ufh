@@ -45,6 +45,21 @@ from tests.unit.conftest import make_inputs
 
 pytestmark = pytest.mark.unit
 
+_LEGACY_FAST: dict[str, float] = {
+    "boost_offset_c": 1.0,
+    "fast_min_on_minutes": 10.0,
+    "fast_min_off_minutes": 10.0,
+    "fast_target_offset_k": 1.0,
+}
+"""The pre-issue-#32 fast-source defaults these arbitration scenarios were
+written against (a 1.5 K demand engages, 300 s steps span the dwells)."""
+
+
+def _cfg(**overrides: object) -> ControllerConfig:
+    """A :class:`ControllerConfig` on the legacy fast-source tuning."""
+    return ControllerConfig(**{**_LEGACY_FAST, **overrides})  # type: ignore[arg-type]
+
+
 _GROUP = "outdoor_unit_a"
 
 
@@ -134,9 +149,7 @@ class TestGroupArbiter:
     def test_transitional_conflict_loser_forced_off(self) -> None:
         """Opposite TRANSITIONAL demands: the larger excess wins, the loser
         is OFF with the conflict flag."""
-        building = BuildingController(
-            {"south": ControllerConfig(), "north": ControllerConfig()}
-        )
+        building = BuildingController({"south": _cfg(), "north": _cfg()})
         out = building.step(
             {
                 # South room overheated by 3 K -> wants COOLING (excess 2.7 K).
@@ -154,9 +167,7 @@ class TestGroupArbiter:
 
     def test_loser_reengages_only_after_min_off(self) -> None:
         """The arbitrated OFF passes through an honest min-OFF dwell."""
-        building = BuildingController(
-            {"south": ControllerConfig(), "north": ControllerConfig()}
-        )
+        building = BuildingController({"south": _cfg(), "north": _cfg()})
         first = building.step(
             {
                 "south": _transitional(room_temperature_c=24.0),
@@ -193,9 +204,7 @@ class TestGroupArbiter:
         The arbiter never breaks a min-ON: the bigger|error| challenger loses
         while the running unit's dwell holds.
         """
-        building = BuildingController(
-            {"south": ControllerConfig(), "north": ControllerConfig()}
-        )
+        building = BuildingController({"south": _cfg(), "north": _cfg()})
         # Cycle 1: only the north room wants (and gets) HEATING.
         building.step(
             {
@@ -220,9 +229,7 @@ class TestGroupArbiter:
 
     def test_ungrouped_rooms_keep_opposite_directions(self) -> None:
         """Rooms WITHOUT a group are untouched — opposite directions stand."""
-        building = BuildingController(
-            {"south": ControllerConfig(), "north": ControllerConfig()}
-        )
+        building = BuildingController({"south": _cfg(), "north": _cfg()})
         out = building.step(
             {
                 "south": _transitional(room_temperature_c=24.0, group=""),
@@ -237,9 +244,7 @@ class TestGroupArbiter:
 
     def test_same_direction_group_not_arbitrated(self) -> None:
         """A group agreeing on one direction is left alone (no flags)."""
-        building = BuildingController(
-            {"south": ControllerConfig(), "north": ControllerConfig()}
-        )
+        building = BuildingController({"south": _cfg(), "north": _cfg()})
         out = building.step(
             {
                 "south": _transitional(room_temperature_c=24.0),
@@ -253,7 +258,7 @@ class TestGroupArbiter:
 
     def test_unconflicted_group_does_not_stop_arbitration(self) -> None:
         """A clean group must not skip arbitration of a LATER conflicted one."""
-        cfg = ControllerConfig(fast_min_on_minutes=0.0, fast_min_off_minutes=0.0)
+        cfg = _cfg(fast_min_on_minutes=0.0, fast_min_off_minutes=0.0)
         building = BuildingController({n: cfg for n in ("a", "b", "c", "d")})
         out = building.step(
             {
@@ -283,7 +288,7 @@ class TestManualHoldPin:
         rule. The heating room's band excess (1.2 K vs the manual room's 0)
         would win a plain excess arbitration — the pin overrides that.
         """
-        cfg = ControllerConfig(
+        cfg = _cfg(
             fast_min_on_minutes=3.0,
             fast_min_off_minutes=3.0,
             fast_manual_hold_minutes=60.0,
@@ -356,9 +361,7 @@ class TestDirectionMismatch:
         Legacy path (§28): ``fast_manual_hold_minutes = 0`` keeps the machine
         the owner; with the default hold the divergence is adopted instead.
         """
-        controller = RoomController(
-            ControllerConfig(fast_manual_hold_minutes=0.0), name="salon"
-        )
+        controller = RoomController(_cfg(fast_manual_hold_minutes=0.0), name="salon")
         first = controller.step(self._heating_split("heat"), dt_seconds=300.0)
         assert first.fast_source.mode is FastSourceMode.HEATING
         assert "fast_source_mismatch" not in first.report.flags
@@ -369,7 +372,7 @@ class TestDirectionMismatch:
 
     def test_agreeing_direction_stays_quiet(self) -> None:
         """A matching direction never flags."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_cfg(), name="salon")
         controller.step(self._heating_split("heat"), dt_seconds=300.0)
         out = controller.step(self._heating_split("heat"), dt_seconds=300.0)
         assert "fast_source_mismatch" not in out.report.flags
@@ -381,9 +384,7 @@ class TestDirectionMismatch:
         commanded to HEAT is a real divergence and must flag the mismatch
         (legacy path, hold knob 0 — §28).
         """
-        controller = RoomController(
-            ControllerConfig(fast_manual_hold_minutes=0.0), name="salon"
-        )
+        controller = RoomController(_cfg(fast_manual_hold_minutes=0.0), name="salon")
         controller.step(self._heating_split("heat"), dt_seconds=300.0)
         out = controller.step(self._heating_split("auto"), dt_seconds=300.0)
         assert "fast_source_mismatch" not in out.report.flags
@@ -396,7 +397,7 @@ class TestFarewellSync:
 
     def test_farewell_forces_min_off_on_return(self) -> None:
         """After a farewell, re-engaging waits out the full min-OFF."""
-        building = BuildingController({"salon": ControllerConfig()})
+        building = BuildingController({"salon": _cfg()})
         boost = make_inputs(
             room_temperature_c=19.0,
             fast_source_kind=FastSourceKind.SPLIT,
@@ -415,7 +416,7 @@ class TestFarewellSync:
 
     def test_farewell_unknown_room_is_ignored(self) -> None:
         """A farewell racing a room removal must not raise."""
-        building = BuildingController({"salon": ControllerConfig()})
+        building = BuildingController({"salon": _cfg()})
         building.notify_fast_source_farewell("nie_ma_takiego_pokoju")
 
 
@@ -452,7 +453,7 @@ class TestIncumbentHysteresis:
         import random
 
         rng = random.Random(42)
-        cfg = ControllerConfig(fast_min_on_minutes=0.0, fast_min_off_minutes=0.0)
+        cfg = _cfg(fast_min_on_minutes=0.0, fast_min_off_minutes=0.0)
         building = BuildingController({"north": cfg, "south": cfg})
         directions: list[FastSourceMode] = []
         for _ in range(30):
@@ -472,9 +473,7 @@ class TestIncumbentHysteresis:
 
     def test_clearly_stronger_challenger_takes_over(self) -> None:
         """An excess advantage beyond +0.5 K still flips the group."""
-        building = BuildingController(
-            {"north": ControllerConfig(), "south": ControllerConfig()}
-        )
+        building = BuildingController({"north": _cfg(), "south": _cfg()})
         # North engages HEATING alone (excess 1.7 K) and becomes incumbent.
         modes = self._step_conflict(building, t_heat_room=19.0, t_cool_room=21.0)
         assert modes["north"] is FastSourceMode.HEATING
@@ -490,9 +489,7 @@ class TestIncumbentHysteresis:
 
     def test_marginally_stronger_challenger_does_not_take_over(self) -> None:
         """An excess advantage inside the 0.5 K hysteresis changes nothing."""
-        building = BuildingController(
-            {"north": ControllerConfig(), "south": ControllerConfig()}
-        )
+        building = BuildingController({"north": _cfg(), "south": _cfg()})
         modes = self._step_conflict(building, t_heat_room=19.0, t_cool_room=21.0)
         assert modes["north"] is FastSourceMode.HEATING
         # South's excess 2.0 K vs north's 1.7 K: within the +0.5 K band.
@@ -503,9 +500,7 @@ class TestIncumbentHysteresis:
 
     def test_reset_clears_the_incumbency(self) -> None:
         """reset() forgets the last winner: the next conflict is excess-only."""
-        building = BuildingController(
-            {"north": ControllerConfig(), "south": ControllerConfig()}
-        )
+        building = BuildingController({"north": _cfg(), "south": _cfg()})
         modes = self._step_conflict(building, t_heat_room=19.0, t_cool_room=21.0)
         assert modes["north"] is FastSourceMode.HEATING
         building.reset()
@@ -522,7 +517,7 @@ class TestIncumbentHysteresis:
         direction, so a later challenger re-engaging from OFF faces the
         +0.5 K hysteresis against the stored winner.
         """
-        cfg = ControllerConfig(fast_min_on_minutes=0.0, fast_min_off_minutes=0.0)
+        cfg = _cfg(fast_min_on_minutes=0.0, fast_min_off_minutes=0.0)
         building = BuildingController({"north": cfg, "south": cfg})
         # Cycle 1: only the north room runs (HEATING) — no conflict, but the
         # direction claims the group incumbency.
@@ -554,7 +549,7 @@ def _dry_grouped(**overrides: object) -> RoomInputs:
     return make_inputs(**base)  # type: ignore[arg-type]
 
 
-_DRY_ROOM_CFG = ControllerConfig(dry_enabled=True, dry_dew_max_c=15.0)
+_DRY_ROOM_CFG = _cfg(dry_enabled=True, dry_dew_max_c=15.0)
 
 
 class TestDryGroupArbiter:
@@ -562,9 +557,7 @@ class TestDryGroupArbiter:
 
     def test_dry_and_cooling_coexist_in_one_group(self) -> None:
         """A drying room and a boosting cooler share the aggregate conflict-free."""
-        building = BuildingController(
-            {"south": ControllerConfig(), "north": _DRY_ROOM_CFG}
-        )
+        building = BuildingController({"south": _cfg(), "north": _DRY_ROOM_CFG})
         out = building.step(
             {
                 # South: 1.5 K over setpoint -> a genuine COOLING boost.
@@ -582,9 +575,7 @@ class TestDryGroupArbiter:
 
     def test_dry_loses_to_a_heating_claim(self) -> None:
         """DRY vs HEATING is a real conflict and the dry room (excess 0) loses."""
-        building = BuildingController(
-            {"south": ControllerConfig(), "north": _DRY_ROOM_CFG}
-        )
+        building = BuildingController({"south": _cfg(), "north": _DRY_ROOM_CFG})
         out = building.step(
             {
                 # South: undercooled TRANSITIONAL room -> wants HEATING
@@ -616,7 +607,7 @@ class TestArbitrateByExcess:
             A :class:`BuildingController` over rooms ``a``/``b`` with
             ``deadband_c = 0``.
         """
-        cfg = ControllerConfig(deadband_c=0.0)
+        cfg = _cfg(deadband_c=0.0)
         return BuildingController({"a": cfg, "b": cfg})
 
     def test_entry_direction_beats_the_stored_winner(self) -> None:
@@ -689,10 +680,10 @@ class TestDoublePin:
         left ON — and the NEXT conflicted group is still arbitrated."""
         building = BuildingController(
             {
-                "a": ControllerConfig(),
-                "b": ControllerConfig(),
-                "c": ControllerConfig(),
-                "d": ControllerConfig(),
+                "a": _cfg(),
+                "b": _cfg(),
+                "c": _cfg(),
+                "d": _cfg(),
             }
         )
         building._controllers["a"] = _LockedOnStub()  # type: ignore[assignment]

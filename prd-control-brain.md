@@ -531,7 +531,8 @@ zacieśniona EFEKTYWNA martwa strefa → chłodniejsza ŚREDNIA woda, powrót na
 postój wykrywany po częstotliwości sprężarki == 0 (bez heurystyki spadającego powrotu); cztery
 globalne pokrętła (`hp_flicker_band_k` 1,5 [0,5–3,0] K, `hp_flicker_stuck_minutes` 10 [5–120],
 `hp_flicker_min_off_minutes` 20 [5–120] — ochrona sprężarki, `hp_flicker_max_starts_per_h` 2
-[1–6] — limit na godzinę kroczącą); trzy opcjonalne encje pompy (powrót + częstotliwość napędzają
+[1–6] — limit na godzinę kroczącą; domyślne zmienione 2026-10-22, issue #32 / DECISIONS §36:
+2,5 K / 30 / 60 min / 1, próg odbioru 250 → 350); trzy opcjonalne encje pompy (powrót + częstotliwość napędzają
 logikę, wylot jest tylko diagnostyczny, zmapowany pod przyszłą ochronę przeciwrosową po stronie
 zasilania); maszyna trwała, tik dokładnie raz na cykl realnym `dt`, start w stanie „przerwa"
 (bezpieczne po restarcie); tooltipy PL/EN/DE dla każdej encji i pokrętła. Zapis nadal tylko gdy

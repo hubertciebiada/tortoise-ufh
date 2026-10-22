@@ -330,7 +330,8 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     # split target beyond the room setpoint; 0 disables (plain setpoint).
     ("fast_target_offset_k", 0.0, 3.0, 0.5),
     # Dry assist (2026-07-16, §24): room dew point above which a split is
-    # engaged in DRY; default 17 from the owner's stale-air observation.
+    # engaged in DRY; default 16 since issue #32 (17 before, from the owner's
+    # stale-air observation).
     ("dry_dew_max_c", 12.0, 22.0, 0.5),
     # Manual hold (2026-09-04, §28): how long a physical divergence of the
     # split (remote touch) is adopted and mirrored before the controller

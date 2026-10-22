@@ -179,10 +179,12 @@ def direction_of(mode: FastSourceMode | None) -> FastSourceMode | None:
 FAST_TARGET_OFFSET_K: float = 1.0
 """Split target offset from the room setpoint in HEATING/COOLING [K].
 
-Since 2026-07-13 this is only the DEFAULT of the
+Since 2026-07-13 the controller reads the
 :class:`~tortoise_ufh.core.config.ControllerConfig` ``fast_target_offset_k``
 tuning knob (owner request: adjustable per room, ``0`` disables the
-overdrive); the controller reads the knob, not this constant.
+overdrive), not this constant. The constant stays the S12 design value; it
+was also the knob's default until issue #32 (2026-10-22, DECISIONS §36), which
+made the field-validated default ``0`` (the split gets the plain setpoint).
 
 Amendment 2026-07-09 (S12): the split's own air sensor sits near the ceiling
 and reads warmer than the room sensor, so a target equal to the setpoint makes

@@ -51,6 +51,9 @@ pytestmark = pytest.mark.unit
 
 _DT = 300.0
 _SAFETY_EXPLANATION_MAX_LEN = 200  # documented cap in controller.py
+_TEN_MIN_DWELLS = ControllerConfig(fast_min_on_minutes=10.0, fast_min_off_minutes=10.0)
+"""Pre-issue-#32 fast-source dwells (default 30/31 min since): a 600 s step
+spans the min-ON, so release / re-engage paths are reachable in a few steps."""
 
 
 class TestStepDtContract:
@@ -390,7 +393,8 @@ class TestBoostHoldSnapshotClamp:
 
     def test_hold_snapshot_floored_at_zero(self) -> None:
         """A raw valve below 0 on the engage cycle snapshots as 0, not more."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        # boost 1 K (pre-issue-#32 default): the 1.5 K demand below engages.
+        controller = RoomController(ControllerConfig(boost_offset_c=1.0), name="salon")
         # Quiet hours block the engage while the room is hot; the raw valve
         # of the (later) engage cycle is driven negative by trend damping as
         # the room falls, so the snapshot clamps to exactly 0.
@@ -554,7 +558,7 @@ class TestTransitionalResult:
 
     def test_no_fast_source_parks_and_reports_brak(self) -> None:
         """Without a fast source: valve 0, split OFF, direction "brak"."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         out = controller.step(
             self._inputs(19.0, kind=FastSourceKind.NONE), dt_seconds=_DT
         )
@@ -564,7 +568,7 @@ class TestTransitionalResult:
 
     def test_idle_in_band_reports_brak_and_echoes_report_fields(self) -> None:
         """An idle split inside the band: "brak", parked valve, full report."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         out = controller.step(self._inputs(20.9), dt_seconds=_DT)
         assert out.valve_position_pct == pytest.approx(0.0)
         assert out.fast_source.on is False
@@ -576,7 +580,7 @@ class TestTransitionalResult:
 
     def test_heating_demand_engages_and_names_grzanie(self) -> None:
         """Demand beyond the boost offset engages the split: "grzanie, ON"."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         out = controller.step(self._inputs(19.0), dt_seconds=_DT)
         assert out.fast_source.on is True
         assert out.fast_source.mode is FastSourceMode.HEATING
@@ -584,7 +588,7 @@ class TestTransitionalResult:
 
     def test_demand_exactly_at_boost_offset_does_not_engage(self) -> None:
         """The engage threshold is strict: error == boost_offset stays OFF."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         heating = controller.step(self._inputs(20.0), dt_seconds=_DT)  # error 1.0
         assert heating.fast_source.on is False
         cooling = controller.step(self._inputs(22.0), dt_seconds=_DT)  # demand 1.0
@@ -592,7 +596,7 @@ class TestTransitionalResult:
 
     def test_engaged_heater_keeps_direction_inside_band(self) -> None:
         """A running heater holds "grzanie" until the FAR band edge is crossed."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(19.0), dt_seconds=_DT)
         out = controller.step(self._inputs(20.5), dt_seconds=_DT)  # error 0.5
         assert out.fast_source.on is True
@@ -601,7 +605,7 @@ class TestTransitionalResult:
 
     def test_engaged_heater_at_far_edge_requests_release(self) -> None:
         """At error == -deadband the heater asks to stop (min-ON may block)."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(19.0), dt_seconds=_DT)
         out = controller.step(self._inputs(21.3), dt_seconds=_DT)  # error -0.3
         # Release requested but blocked by the min-ON dwell (300 s < 600 s).
@@ -612,7 +616,7 @@ class TestTransitionalResult:
 
     def test_engaged_heater_inside_band_does_not_request_release(self) -> None:
         """At error == -0.1 K (inside band) no release is requested at all."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(19.0), dt_seconds=_DT)
         out = controller.step(self._inputs(21.1), dt_seconds=_DT)
         assert out.fast_source.on is True
@@ -620,7 +624,7 @@ class TestTransitionalResult:
 
     def test_engaged_heater_releases_after_dwell(self) -> None:
         """Past the min-ON dwell the far-edge release parks the split: "brak"."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(19.0), dt_seconds=_DT)
         out = controller.step(self._inputs(21.5), dt_seconds=600.0)
         assert out.fast_source.on is False
@@ -628,7 +632,7 @@ class TestTransitionalResult:
 
     def test_cooling_demand_engages_and_names_chlodzenie(self) -> None:
         """A cooling demand beyond the offset engages: "chlodzenie, ON"."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         out = controller.step(self._inputs(23.0), dt_seconds=_DT)
         assert out.fast_source.on is True
         assert out.fast_source.mode is FastSourceMode.COOLING
@@ -636,7 +640,7 @@ class TestTransitionalResult:
 
     def test_engaged_cooler_keeps_direction_inside_band(self) -> None:
         """A running cooler holds "chlodzenie" until the far band edge."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(23.0), dt_seconds=_DT)
         out = controller.step(self._inputs(21.5), dt_seconds=_DT)
         assert out.fast_source.on is True
@@ -645,7 +649,7 @@ class TestTransitionalResult:
 
     def test_engaged_cooler_at_far_edge_requests_release(self) -> None:
         """A cooler at cooling_demand == -deadband asks to stop (dwell blocks)."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(23.0), dt_seconds=_DT)
         out = controller.step(self._inputs(20.7), dt_seconds=_DT)  # demand -0.3
         assert "fast_source_min_runtime" in out.report.flags
@@ -654,7 +658,7 @@ class TestTransitionalResult:
 
     def test_engaged_cooler_inside_band_does_not_request_release(self) -> None:
         """A cooler at cooling_demand -0.1 K requests no release."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(23.0), dt_seconds=_DT)
         out = controller.step(self._inputs(20.9), dt_seconds=_DT)
         assert out.fast_source.on is True
@@ -662,7 +666,7 @@ class TestTransitionalResult:
 
     def test_engaged_cooler_releases_after_dwell(self) -> None:
         """Past the min-ON dwell the cooler parks: "brak, OFF"."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(23.0), dt_seconds=_DT)
         out = controller.step(self._inputs(20.5), dt_seconds=600.0)
         assert out.fast_source.on is False
@@ -670,7 +674,7 @@ class TestTransitionalResult:
 
     def test_heater_kind_cannot_cool(self) -> None:
         """A HEATER with a cooling demand stays OFF and is flagged."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         out = controller.step(
             self._inputs(23.0, kind=FastSourceKind.HEATER), dt_seconds=_DT
         )
@@ -686,7 +690,7 @@ class TestTransitionalResult:
         engage branch's own text is observable (an emitted ON overwrites it
         with the remembered direction).
         """
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(19.0), dt_seconds=_DT)  # engage HEATING
         released = controller.step(self._inputs(21.5), dt_seconds=600.0)
         assert released.fast_source.on is False
@@ -697,7 +701,7 @@ class TestTransitionalResult:
 
     def test_blocked_cooling_reengage_names_chlodzenie(self) -> None:
         """A min-OFF-blocked cooling engage names "chlodzenie" while OFF."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(23.0), dt_seconds=_DT)  # engage COOLING
         released = controller.step(self._inputs(20.5), dt_seconds=600.0)
         assert released.fast_source.on is False
@@ -708,7 +712,7 @@ class TestTransitionalResult:
 
     def test_heater_cannot_cool_force_off_leaves_no_dwell(self) -> None:
         """The heater force-off shows no assist timer (unlike a decide()-OFF)."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         controller.step(self._inputs(19.0, kind=FastSourceKind.HEATER), dt_seconds=_DT)
         released = controller.step(
             self._inputs(21.5, kind=FastSourceKind.HEATER), dt_seconds=600.0
@@ -722,7 +726,7 @@ class TestTransitionalResult:
 
     def test_quiet_hours_block_engagement(self) -> None:
         """Quiet hours veto a fresh engage: "brak, OFF" plus the quiet flag."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         out = controller.step(self._inputs(19.0, allowed=False), dt_seconds=_DT)
         assert out.fast_source.on is False
         assert "fast_source_quiet_hours" in out.report.flags
@@ -730,7 +734,7 @@ class TestTransitionalResult:
 
     def test_no_quiet_flag_when_allowed(self) -> None:
         """The quiet flag is only stamped when the verdict actually blocks."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        controller = RoomController(_TEN_MIN_DWELLS, name="salon")
         out = controller.step(self._inputs(20.9), dt_seconds=_DT)
         assert "fast_source_quiet_hours" not in out.report.flags
 
@@ -1217,7 +1221,10 @@ class TestFastSourceCoordination:
         keeps the split ON.
         """
         cfg = ControllerConfig(
-            fast_min_on_minutes=0.0, fast_min_off_minutes=0.0, dry_enabled=True
+            boost_offset_c=1.0,
+            fast_min_on_minutes=0.0,
+            fast_min_off_minutes=0.0,
+            dry_enabled=True,
         )
         controller = RoomController(cfg, name="salon")
         cool = make_inputs(

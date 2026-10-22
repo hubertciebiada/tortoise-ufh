@@ -56,8 +56,9 @@ S2_HARD_MARGIN_K: float = 0.0
 """Margin [K] the S2 hard rule adds to the room dew point (2026-07-12, K6).
 
 Deliberately ZERO: after the K6 margin de-stacking the graduated local
-throttle already reaches factor 0 at ``supply - dew <= 0`` (with the default
-``dew_margin_k = dew_ramp_k = 2``), and the heat pump's global floor holds the
+throttle already reaches factor 0 at ``supply - dew <= 0`` (with the defaults
+``dew_margin_k = 1.5`` / ``dew_ramp_k = 2`` the ramp start is clipped at the dew
+point), and the heat pump's global floor holds the
 supply at ``max(T_dew) + 2 K``. The hard rule is the last backstop below both
 layers — it fires only at physical condensation onset (supply at/below the
 room's dew point), e.g. when the graduated layer could not compute or the

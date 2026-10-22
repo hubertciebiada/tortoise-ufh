@@ -192,8 +192,10 @@ class TestSafetyOverrideStateSync:
         assert "s3_emergency_heat" in frozen.report.flags
         assert frozen.fast_source.on is True
         assert frozen.fast_source.mode is FastSourceMode.HEATING
-        # The machine is synced: the min-ON lock is armed for the report.
-        assert frozen.report.fast_dwell_remaining_s == pytest.approx(600.0)
+        # The machine is synced: the full min-ON lock (30 min default) is armed.
+        assert frozen.report.fast_dwell_remaining_s == pytest.approx(
+            ControllerConfig().fast_min_on_minutes * 60.0
+        )
 
         # The room recovers into the comfort band (S3 cleared, no demand): the
         # min-ON dwell keeps the just-started compressor running instead of an

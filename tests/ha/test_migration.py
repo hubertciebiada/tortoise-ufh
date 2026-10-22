@@ -428,6 +428,52 @@ async def test_v5_to_v6_all_defaults_leaves_no_tuning(hass: HomeAssistant) -> No
     assert CONF_CONTROLLER not in entry.options
 
 
+_PRE_ISSUE_32_DEFAULTS: dict[str, float] = {
+    "boost_offset_c": 1.0,
+    "fast_min_on_minutes": 10.0,
+    "fast_min_off_minutes": 10.0,
+    "fast_target_offset_k": 1.0,
+    "dew_margin_k": 2.0,
+    "cooling_supply_base_c": 18.0,
+    "dry_dew_max_c": 17.0,
+    "hp_flicker_band_k": 1.5,
+    "hp_flicker_stuck_minutes": 10.0,
+    "hp_flicker_min_off_minutes": 20.0,
+    "hp_flicker_max_starts_per_h": 2.0,
+    "hp_flicker_min_open_pct": 250.0,
+}
+
+
+async def test_v5_to_v6_drops_the_pre_issue_32_defaults(hass: HomeAssistant) -> None:
+    """A snapshot frozen before issue #32 picks up the retuned defaults.
+
+    Every default retuned by issue #32 is listed in
+    ``SUPERSEDED_CONTROLLER_DEFAULTS``, so the old value — indistinguishable
+    from a frozen default — is dropped; a value that never was a default
+    (fast_min_off 20) survives as a genuine override.
+    """
+    entry = _entry(
+        hass,
+        rooms=[{CONF_ROOM_NAME: "Salon"}],
+        options={
+            CONF_CONTROLLER: _full_snapshot(
+                **{**_PRE_ISSUE_32_DEFAULTS, "fast_min_off_minutes": 20.0}
+            )
+        },
+        version=5,
+    )
+    hass.config_entries.async_update_entry(
+        entry,
+        data={**entry.data, CONF_CONTROLLER: _full_snapshot(**_PRE_ISSUE_32_DEFAULTS)},
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert entry.version == 6
+    assert CONF_CONTROLLER not in entry.data
+    assert entry.options[CONF_CONTROLLER] == {"fast_min_off_minutes": 20.0}
+
+
 async def test_migrate_rejects_newer_version(hass: HomeAssistant) -> None:
     """A version newer than the code knows about is refused (no downgrade)."""
     entry = _entry(hass, rooms=[{CONF_ROOM_NAME: "Salon"}])

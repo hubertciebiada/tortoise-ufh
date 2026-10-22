@@ -12,7 +12,8 @@ the boost-hold neutralised (the pre-fix baseline, reproduced by forcing the
 per-cycle hold snapshot to 0) and once with the fix live, and assert the fix
 (1) keeps the floor materially open during boost instead of starving it to 0,
 (2) does not increase — and here strictly reduces — the split cycle count, and
-(3) never weakens the condensation defences under high humidity.
+(3) never weakens the condensation defences under high humidity (the supply
+stays on the pump's dew floor; the extra slab cooling it buys is bounded).
 
 Only #1 (the ``max`` floor) is implemented; the plan's #2/#3 were dropped as
 empirically unnecessary (see docs/DECISIONS.md §18), so there are no
@@ -156,11 +157,15 @@ class TestBoostHoldReproduction:
         """Fix vs neutralised baseline on the isolated (dry) reproduction.
 
         Empirical numbers on this deterministic twin (no RNG), captured on the
-        first run and used to pin the thresholds:
+        first run and used to pin the thresholds (re-measured for the issue
+        #32 defaults — 30/31 min dwells, 1.5 K boost offset; the 10-min-dwell
+        numbers of the original reproduction in brackets):
 
-            baseline (hold off): 24 split cycles, engaged-valve mean 0.0 %
-            fixed  (#1 hold on): 22 split cycles, engaged-valve mean 35.9 %,
-                                 engaged-valve min 20.7 %, dew factor 1.0
+            baseline (hold off): 7 [24] split cycles, engaged-valve mean
+                                 0.6 % [0.0 %]
+            fixed  (#1 hold on): 6 [22] split cycles, engaged-valve mean
+                                 62.9 % [35.9 %], engaged-valve min
+                                 50.0 % [20.7 %], dew factor 1.0
 
         The humidity is kept low so the S2 dew throttle stays fully open and
         the boost-hold is what moves the floor (throttle interaction is covered
@@ -186,7 +191,7 @@ class TestBoostHoldReproduction:
         )
 
         # (2) The fix never increases the split cycle count, and here strictly
-        #     reduces it (22 < 24) — the slab discharges through the held floor
+        #     reduces it (6 < 7) — the slab discharges through the held floor
         #     instead of rebounding the air off a warm mass.
         assert fix.split_cycles < base.split_cycles
 
@@ -203,20 +208,35 @@ class TestBoostHoldDewNeutral:
 
         The global safe dew-point floor keeps the supply water at ``dew + 2 K``
         regardless of valve position, so the extra flow the hold admits cannot
-        drive the slab below where the baseline already sits: the worst
-        slab-vs-room-dew margin is dew-neutral (identical to 0.05 K here). The
+        lower the supply temperature — only how long the slab is cooled. The
         S2 throttle scaling the HELD valve toward 0 as the supply nears the dew
         point is exercised precisely in the unit suite (T4).
+
+        At 78 % outdoor RH and 34 degC the twin's indoor air is saturated (RH
+        clamped at 100 %), so the "room dew point" equals the air temperature
+        and the margin below is slab minus air: it measures how far the floor
+        has cooled the slab, not a supply-side dew violation. With the
+        10-min dwells of the original reproduction both runs hit the same
+        worst instant (-0.56 K, identical to 0.001 K). With the issue #32
+        30-min min-ON each boost is three times longer and the held floor
+        (~91 % open vs ~2 % in the baseline) keeps discharging through it,
+        so at the worst instant — the air rebound right after a release —
+        the slab sits 0.12 K further below the air (-0.80 vs -0.68 K). The
+        S2 throttle never engages in either run (dew factor 1.0). The gate
+        therefore bounds that cost at 0.15 K instead of asserting equality.
         """
         base = _run(humidity_pct=78.0, neutralise_hold=True)
         fix = _run(humidity_pct=78.0, neutralise_hold=False)
 
-        # The hold still opens the floor under high humidity.
-        assert base.engaged_valve_mean < 1.0
+        # The hold still opens the floor under high humidity; the baseline
+        # starves it (mean 1.8 %: the 30-min boosts outlast the overcooled-air
+        # dip, so the PI briefly re-opens a little late in a long boost).
+        assert base.engaged_valve_mean < 5.0
         assert fix.engaged_valve_mean >= 25.0
+        assert fix.engaged_dew_factor_min == pytest.approx(1.0)
 
-        # Condensation-neutral: the fix's worst margin is no worse than the
-        # baseline's (they coincide because the pump dew floor, untouched by the
-        # hold, drives the supply — the hold only ever raises FLOW, never lowers
-        # the supply temperature).
-        assert fix.worst_slab_minus_dew_c >= base.worst_slab_minus_dew_c - 0.05
+        # Bounded dew cost: the pump dew floor, untouched by the hold, drives
+        # the supply — the hold only ever raises FLOW, never lowers the supply
+        # temperature — so the fix's worst margin stays within 0.15 K of the
+        # baseline's (measured 0.12 K; see the docstring).
+        assert fix.worst_slab_minus_dew_c >= base.worst_slab_minus_dew_c - 0.15

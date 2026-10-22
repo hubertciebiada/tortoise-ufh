@@ -48,6 +48,7 @@ from typing import Protocol
 import pytest
 
 from custom_components.tortoise_ufh.core.config import SimScenario
+from custom_components.tortoise_ufh.core.const import DEW_MARGIN_DEFAULT_K
 from custom_components.tortoise_ufh.core.metrics import (
     SimMetrics,
     assert_comfort,
@@ -408,17 +409,25 @@ class TestScenarioSimulation:
         1. The slab stays ``margin`` kelvin above the Magnus dew point in
            every room (both protection layers + the supply floor fed back
            from the global safe dew point). Measured minimum slab-dew margin
-           @ 300 s: +1.51 K.
+           @ 300 s: +1.47 K (+1.51 K before issue #32).
         2. Cooling actually flows — valves open for a substantial share of
            the run (the pre-calibration twin passed condensation checks with
            valves at a flat 0 %). After the K6 margin de-stacking
            (2026-07-12) full cooling is available right on the heat pump's
            dew floor: the measured open share jumped from 29.7 % to 94.2 %,
            so the gate now demands a solid majority instead of a token 25 %.
-        3. The local S2 throttle is genuinely ACTIVE (factor < 1 at times) —
-           the scenario exercises the protection, not just the PI loop
-           (measured @ 300 s: factor < 1 for 31.2 % of room-records, the
-           humid transients where the supply dips below the pump floor).
+        3. The scenario genuinely exercises the condensation protection, not
+           just the PI loop: the global safe dew-point floor BINDS (the
+           coldest supply sits within 0.25 K of ``dew + DEW_MARGIN_DEFAULT_K``
+           for ~52 % of room-records), and the local S2 throttle still bites
+           (factor < 1) in the humid transients where the supply falls more
+           than 0.5 K below that floor. Until issue #32 the throttle ramp
+           ended AT the 2 K floor (``dew_margin_k`` 2), so every floor lag
+           on a rising dew point throttled (22 % of records); with the
+           field-validated ``dew_margin_k`` 1.5 the ramp ends 0.5 K below
+           the floor and the layer is the backstop it was designed to be
+           (K6; issue #32, DECISIONS §36) — measured 0.03 % @ 60 s / 0.17 % @ 300 s,
+           so the gate asserts that it engages at all, not a share.
 
         Args:
             dt_seconds: Control/physics step for this parametrization [s].
@@ -446,14 +455,26 @@ class TestScenarioSimulation:
             f"only {open_share:.0%} of room-records (K6 de-stacked margins "
             "should yield a solid majority; measured 94 %)"
         )
-        throttled = (
-            sum(1 for r in log if r.outputs.report.dew_throttle_factor < 1.0)
-            / n_records
+        on_floor = 0
+        for rec in log:
+            supplies = [
+                loop.supply_temperature_c
+                for loop in rec.inputs.loops
+                if loop.supply_temperature_c is not None
+            ]
+            room_dew = rec.outputs.report.room_dew_point_c
+            if supplies and room_dew is not None:
+                gap = min(supplies) - room_dew
+                on_floor += gap < DEW_MARGIN_DEFAULT_K + 0.25
+        assert on_floor / n_records > 0.25, (
+            "hot_july_floor_cooling: the supply rarely sits on the global "
+            f"safe dew-point floor ({on_floor / n_records:.0%} of room-records)"
+            " — the scenario no longer exercises the condensation protection"
         )
-        assert throttled > 0.10, (
-            "hot_july_floor_cooling: the S2 dew throttle never engaged "
-            f"({throttled:.0%} of room-records) — the scenario no longer "
-            "exercises the condensation protection"
+        throttled = sum(1 for r in log if r.outputs.report.dew_throttle_factor < 1.0)
+        assert throttled > 0, (
+            "hot_july_floor_cooling: the local S2 dew throttle never engaged "
+            "— the scenario no longer exercises the backstop layer"
         )
 
     def test_night_setback_bumpless_transfer(
@@ -545,8 +566,9 @@ class TestScenarioSimulation:
     ) -> None:
         """The split boosts a cold room and releases inside the comfort band.
 
-        Asserts the fast source actually ran (the demand starts ~3 K past the
-        boost offset), did NOT run permanently (the release hysteresis works),
+        Asserts the fast source actually ran for at least one full min-ON
+        dwell (the demand starts ~3 K past the boost offset), did NOT run
+        permanently (the release hysteresis works),
         and that anti priority-inversion held: whenever the split was ON while
         the room still called for heat, the floor valve stayed open too.
 
@@ -557,7 +579,13 @@ class TestScenarioSimulation:
         log, metrics = run_scenario(scenario)
 
         assert len(log) > 0, "split_boost: empty simulation log"
-        assert metrics.fast_source_runtime_pct > 5.0, (
+        # One full min-ON dwell (30 min since issue #32 = 2.1 % of the day).
+        # The twin's split delivers full power while ON (it does not model the
+        # unit's own thermostat), so a 30-min dwell lifts the air fast: two
+        # runs, 4.2 % (6.3 % with the old 10-min dwell, hence the old 5 % gate).
+        min_on_minutes = scenario.building.rooms[0].controller.fast_min_on_minutes
+        min_on_pct = 100.0 * min_on_minutes / scenario.duration_minutes
+        assert metrics.fast_source_runtime_pct >= min_on_pct, (
             "split_boost: the split never engaged "
             f"({metrics.fast_source_runtime_pct:.1f}% runtime)"
         )

@@ -165,7 +165,7 @@ Reiter:
   Vorlauf/Rücklauf des ersten Heizkreises sowie — unter der gemeinsamen Überschrift
   **Zusatzquelle** — Modus und Sollwert des Splits/Heizgeräts („—“ = Raum ohne
   Zusatzquelle, „aus“ = Zusatzquelle ruht; das „i“-Symbol bei „Temp.“ erklärt die
-  bewusste ±1 K — §10). Ein Klick auf die Zeile öffnet die **Raumdetails**: Kacheln
+  Sollwert-Überhöhung des Splits — §10). Ein Klick auf die Zeile öffnet die **Raumdetails**: Kacheln
   (Messwert, Sollwert mit Offset-Stepper, Ventil, Zusatzquelle — mit der Zeile
   „erlaubt HH:MM–HH:MM“, wenn der Raum Ruhezeiten hat), den Abschnitt
   **Reglerentscheidung** (Regelabweichung, Taupunkt, Anteile der Glieder
@@ -369,17 +369,17 @@ Standard“** — setzen Sie ihn zurück, sofern Sie ihn nicht bewusst gewählt 
 
 | Parameter | Einheit | Standard | Was er bewirkt und wann man ihn ändert |
 |---|---|---|---|
-| **Zuschaltschwelle der Zusatzquelle** (`boost_offset_c`) | K | 1,0 | Zuschaltschwelle: sobald die Regelabweichung diesen Wert überschreitet, schaltet sich die Zusatzquelle (Split/Heizgerät) zu. Sie gibt innerhalb des Komfortbands wieder frei; der Boden bleibt stets die Basisquelle. Muss größer als das Totband sein. Standard 1,0 K. |
-| **Mindestlaufzeit der Zusatzquelle** (`fast_min_on_minutes`) | min | 10 | Mindestlaufzeit der Zusatzquelle nach dem Einschalten. Schützt den Split-Kompressor vor Takten und beruhigt Richtungswechsel in einer Multisplit-Gruppe. Standard 10 min; Minimum 3. |
-| **Mindeststillstandszeit der Zusatzquelle** (`fast_min_off_minutes`) | min | 10 | Mindeststillstandszeit der Zusatzquelle, bevor sie wieder starten darf. Standard 10 min; Minimum 3. |
-| **Sollwert-Überhöhung der Zusatzquelle** (`fast_target_offset_k`) | K | 1,0 | Um wie viel Kelvin der an den Split gesendete Sollwert während des Nachheizens/Nachkühlens über den Raum-Sollwert hinaus angehoben wird (Heizung: Sollwert + Wert, Kühlung: Sollwert − Wert). Der deckenmontierte Sensor des Splits misst wärmer als der Raumsensor — ohne die Überhöhung drosselt sich der Split, bevor das Nachheizen geliefert wird; über das Abschalten entscheidet ohnehin der Raumsensor (§10). 0 = keine Überhöhung. Standard 1,0 K. |
+| **Zuschaltschwelle der Zusatzquelle** (`boost_offset_c`) | K | 1,5 | Zuschaltschwelle: sobald die Regelabweichung diesen Wert überschreitet, schaltet sich die Zusatzquelle (Split/Heizgerät) zu. Sie gibt innerhalb des Komfortbands wieder frei; der Boden bleibt stets die Basisquelle. Muss größer als das Totband sein. Standard 1,5 K. |
+| **Mindestlaufzeit der Zusatzquelle** (`fast_min_on_minutes`) | min | 30 | Mindestlaufzeit der Zusatzquelle nach dem Einschalten. Schützt den Split-Kompressor vor Takten und beruhigt Richtungswechsel in einer Multisplit-Gruppe. Standard 30 min; Minimum 3. |
+| **Mindeststillstandszeit der Zusatzquelle** (`fast_min_off_minutes`) | min | 31 | Mindeststillstandszeit der Zusatzquelle, bevor sie wieder starten darf. Standard 31 min; Minimum 3. |
+| **Sollwert-Überhöhung der Zusatzquelle** (`fast_target_offset_k`) | K | 0 | Um wie viel Kelvin der an den Split gesendete Sollwert während des Nachheizens/Nachkühlens über den Raum-Sollwert hinaus angehoben wird (Heizung: Sollwert + Wert, Kühlung: Sollwert − Wert). Der deckenmontierte Sensor des Splits misst wärmer als der Raumsensor — ohne die Überhöhung drosselt sich der Split, bevor das Nachheizen geliefert wird; über das Abschalten entscheidet ohnehin der Raumsensor (§10). 0 = keine Überhöhung. Standard 0 — erhöhen Sie ihn (z. B. 1 K), falls sich der Split vor dem Boost selbst drosselt. |
 | **Haltezeit der manuellen Steuerung** (`fast_manual_hold_minutes`) | min | 60 | Tut der Split physisch etwas anderes als der letzte Befehl (per Fernbedienung eingeschaltet, ausgeschaltet, Richtung geändert), wertet der Regler das als Ihre Entscheidung: Er übernimmt den Zustand des Geräts und spiegelt ihn für so viele Minuten seit der letzten Berührung nur — schreibt nichts und überschreibt nichts durch das erneute Erzwingen (Meldung `fast_source_manual`, §10). Danach läuft die normale Logik weiter (Richtungswechsel weiterhin über AUS und Mindeststillstandszeit). Die Sicherheitsregeln S3/S4 und ein verlorener Sensor beenden das Halten. 0 = aus (wie früher: `fast_source_mismatch` und erneutes Erzwingen nach ~45 min). Standard 60 min. |
 
 **Kondensationsschutz (Kühlung)**
 
 | Parameter | Einheit | Standard | Was er bewirkt und wann man ihn ändert |
 |---|---|---|---|
-| **Sicherheitsmarge über dem Taupunkt** (`dew_margin_k`) | K | 2 | Kühlung: solange der Vorlauf mindestens so viele K über dem Taupunkt liegt, läuft das Ventil uneingeschränkt; näher am Taupunkt wird der Durchfluss gedrosselt (Kondensationsschutz am Boden). Standard 2 K; erhöhen Sie ihn, falls Sie jemals Feuchtigkeit sehen. |
+| **Sicherheitsmarge über dem Taupunkt** (`dew_margin_k`) | K | 1,5 | Kühlung: solange der Vorlauf mindestens so viele K über dem Taupunkt liegt, läuft das Ventil uneingeschränkt; näher am Taupunkt wird der Durchfluss gedrosselt (Kondensationsschutz am Boden). Standard 1,5 K (die Wärmepumpe hält das Wasser 2 K über dem Taupunkt, normale Verzögerung des Wassers drosselt also nicht); erhöhen Sie ihn, falls Sie jemals Feuchtigkeit sehen. |
 | **Rampenbreite der Kühldrosselung** (`dew_ramp_k`) | K | 2 | Breite der Drosselrampe unterhalb der Taupunkt-Marge: über diese Spanne fällt der Durchfluss linear von 100 % auf 0. Kleiner = schärferes Abschneiden. Standard 2 K. |
 
 **Wärmepumpe — Wasser (nur global; wirkt ausschließlich mit konfigurierter Anbindung —
@@ -387,7 +387,7 @@ Standard“** — setzen Sie ihn zurück, sofern Sie ihn nicht bewusst gewählt 
 
 | Parameter | Einheit | Standard | Was er bewirkt und wann man ihn ändert |
 |---|---|---|---|
-| **Basistemperatur Kühlwasser** (`cooling_supply_base_c`) | °C | 18 | Der an die Wärmepumpe geschriebene Kühlwasser-Sollwert, während das Haus kühlt: Der geschriebene Wert ist das Maximum aus dieser Basis und dem globalen sicheren Taupunkt — nie unter dem Taupunkt. Nur aktiv, wenn die Kühl-Sollwert-Entität konfiguriert ist (Optionen → Wärmepumpe). Globaler Parameter — kann nicht je Raum übersteuert werden. Standard 18 °C. |
+| **Basistemperatur Kühlwasser** (`cooling_supply_base_c`) | °C | 15 | Der an die Wärmepumpe geschriebene Kühlwasser-Sollwert, während das Haus kühlt: Der geschriebene Wert ist das Maximum aus dieser Basis und dem globalen sicheren Taupunkt — nie unter dem Taupunkt. Nur aktiv, wenn die Kühl-Sollwert-Entität konfiguriert ist (Optionen → Wärmepumpe). Globaler Parameter — kann nicht je Raum übersteuert werden. Standard 15 °C. |
 | **Basistemperatur Heizwasser** (`heating_supply_base_c`) | °C | 26 | Heizungsvorlauf bei der neutralen Außentemperatur (Parameter „Neutrale Außentemperatur der Vorsteuerung“, Standard 15 °C). Darunter steigt der Sollwert entlang der Kurvensteigung; das Ergebnis wird auf 20–40 °C begrenzt. Nur an die Pumpe geschrieben, wenn die Heiz-Sollwert-Entität konfiguriert ist — standardmäßig folgt die Pumpe ihrer eigenen Kurve. Globaler Parameter. Standard 26 °C. |
 | **Kurvensteigung Heizwasser** (`heating_supply_slope`) | K/K | 0,5 | Um wie viele Kelvin der Heizwasser-Sollwert je 1 K Außentemperatur unterhalb des Neutralpunkts steigt. Standard 0,5 K/K; typisch 0,3–0,8 für ein gut gedämmtes Fußbodenheizungshaus. |
 
@@ -436,15 +436,14 @@ das).
   Taupunkt-Drosselung (§9) schließt das gehaltene Ventil weiterhin, und der Verlust des
   Raumsensors schließt es weiterhin auf 0. Beim Heizen ändert sich nichts. Es gibt
   keine neuen Parameter einzustellen — es funktioniert automatisch.
-- **Warum der Sollwert des Splits vom Raum-Sollwert abweicht:** Der Sollwert des
-  Splits wird bewusst um den Parameter **Sollwert-Überhöhung der Zusatzquelle**
-  angehoben (§8; Standard 1 K — Heizung: +1 K, Kühlung: −1 K). Der Sensor des Splits
-  hängt unter der Decke und misst wärmer als unser Raumsensor — ein Sollwert gleich dem
-  Ziel würde den Split abschalten, bevor das Nachheizen/Nachkühlen den Raum tatsächlich
-  erreicht. Über das Abschalten entscheidet ohnehin UNSER Raumsensor mit Hysterese,
-  sodass der Raum nicht „davonläuft“. Wenn Sie möchten, dass der Split genau den
-  Sollwert erhält, setzen Sie den Parameter auf 0. Im Übergangsmodus gilt stets
-  Sollwert = Ziel.
+- **Wann der Sollwert des Splits vom Raum-Sollwert abweicht:** Der Sollwert des
+  Splits kann um den Parameter **Sollwert-Überhöhung der Zusatzquelle** angehoben
+  werden (§8; Heizung: +Wert, Kühlung: −Wert). Standard ist **0** (seit Issue #32 —
+  in der Praxis erprobt): Der Split erhält genau den Sollwert. Misst der Sensor des
+  Splits unter der Decke deutlich wärmer als unser Raumsensor und schaltet der Split
+  ab, bevor das Nachheizen/Nachkühlen den Raum erreicht, stellen Sie z. B. 1 K ein.
+  Über das Abschalten entscheidet ohnehin UNSER Raumsensor mit Hysterese, sodass der
+  Raum nicht „davonläuft“. Im Übergangsmodus gilt stets Sollwert = Ziel.
 - **Dwell-Timer:** Mindestlaufzeit und -stillstand (§8) — ein Richtungswechsel geht
   stets über AUS mit voller Stillstandszeit.
 - **Erneutes Erzwingen:** Ein unveränderter Befehl wird nicht in jedem Zyklus gesendet
@@ -503,8 +502,8 @@ Abkühlung. Nach dem Aktivieren des Parameters **„Entfeuchtungs-Assistent"**
 (§8, Gruppe „Zusatzquelle"; standardmäßig aus):
 
 - **Start:** Im Kühlbetrieb, sobald der **Taupunkt des Raums** die
-  **„Taupunktschwelle der Entfeuchtung"** überschreitet (Standard 17 °C — ab
-  ~17–18 °C Taupunkt wirkt die Luft klebrig) und der Raum **auf oder über dem
+  **„Taupunktschwelle der Entfeuchtung"** überschreitet (Standard 16 °C — die
+  Entfeuchtung startet, bevor die Luft ab ~17–18 °C Taupunkt klebrig wirkt) und der Raum **auf oder über dem
   Sollwert** liegt (ein Split kühlt auch im Entfeuchten — ein bereits
   unterkühlter Raum wird nicht weiter gekühlt; ab v0.17.1), erhält der Split
   des Raums den Befehl **dry** — auch ohne jede Temperaturanforderung. Der
@@ -627,7 +626,7 @@ globale Regler (angestrebtes Totband, min. Gesamtöffnung der Kreise, Verzögeru
 Erzwingen, Mindestabstand zwischen Starts, Obergrenze der Starts pro Stunde). Ab v0.14.0 greift
 eine **Bedarfsschwelle**: ein Start wird nur erzwungen, wenn die kühlenden Räume zusammen genug
 Ventilöffnung anfordern — die Summe `Ventil % × Kreiszahl des Raums` muss die Schwelle
-**„Min. Abnahme: Gesamtöffnung der Kreise“** erreichen (Standard 250, also 2,5 voll geöffnete
+**„Min. Abnahme: Gesamtöffnung der Kreise“** erreichen (Standard 350, also 3,5 voll geöffnete
 Kreise; Minimum 100 = ein Kreis, Maximum = alle Kreise × 100). Kleinere Abnahmen — etwa ein
 Raum mit einem Kreis auf 100 % — deckt das kalte Wasser im Pufferspeicher problemlos, und kein
 Start wird erzwungen: Er würde den Puffer nur um 1–2 K herunterkühlen und den Verdichter takten
@@ -747,6 +746,22 @@ für das ganze Haus.
 
 **Versionsverlauf / Migrationen**
 
+- **Nächste Version (Issue #32)** — **neue Standardwerte für Zusatzquelle, Taupunkt
+  und Kühlstart-Erzwingung**, erprobt an einem Haus über eine ganze Kühlsaison und den
+  Beginn der Heizsaison: Zuschaltschwelle 1,0 → **1,5 K**, Mindestlauf-/-stillstandszeit
+  der Zusatzquelle 10 / 10 → **30 / 31 min**, Sollwert-Überhöhung des Splits 1 → **0 K**
+  (der Split erhält den Sollwert), Taupunkt-Marge (lokale Drosselung) 2 → **1,5 K** (die
+  Wärmepumpe hält das Wasser weiterhin 2 K über dem Taupunkt), Basistemperatur
+  Kühlwasser 18 → **15 °C**, Taupunktschwelle der Entfeuchtung 17 → **16 °C**;
+  Kühlstart erzwingen: Totband 1,5 → **2,5 K**, Verzögerung 10 → **30 min**, Abstand
+  zwischen Starts 20 → **60 min**, max. Starts 2 → **1/h**, min. Gesamtöffnung der
+  Kreise 250 → **350**. Entfeuchtung und Kühlstart-Erzwingung bleiben **standardmäßig
+  aus**; Heizwasserkurve und Wettervorsteuerung unverändert. Die Migration **v5 → v6**
+  (dieselbe wie für Issue #31) behandelt einen gespeicherten alten Standardwert dieser
+  Parameter als eingefrorene Kopie und entfernt ihn — die Installation erhält die neuen
+  Werte; wer genau den alten Wert bewusst gesetzt hat (z. B. Schwelle 1,0 K), muss ihn
+  erneut setzen (Eintrag im Log). Das Panel markiert solche Werte als **„alter
+  Standard“**.
 - **Nächste Version (Issue #31)** — **globale Abstimmung als Übersteuerungen gespeichert**:
   Bisher speicherten der Assistent und jedes Speichern der Abstimmung eine vollständige
   Kopie aller Einstellungen, sodass verbesserte Standardwerte bestehende Installationen nie
