@@ -53,7 +53,11 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   Tuning: sparse global overrides (`options[CONF_CONTROLLER]`) + sparse per-room overrides
   (`options[CONF_ROOM_TUNING]`) — only knobs that differ from the library default are ever
   stored, `None` clears (back to default / global), so retuned defaults reach existing installs
-  (issue #31, config migration v5→v6, DECISIONS §35; never persist an `asdict` snapshot); the knob
+  (issue #31, config migration v5→v6, DECISIONS §35; never persist an `asdict` snapshot). When
+  you retune a `ControllerConfig` default, add the OLD value to
+  `core/config.py::SUPERSEDED_CONTROLLER_DEFAULTS`: the v5→v6 migration drops a snapshot's
+  frozen copy and the panel marks a stored one "old default" (issue #32, DECISIONS §36,
+  retuned the fast-source / dew-point / flicker defaults that way); the knob
   specs (`CONTROLLER_NUMBER_KNOBS`) and `CONF_CONTROLLER` live in `const.py`. Imports the
   core via `.core`; is imported by nothing.
 - **Panel** — `custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js`. Self-contained

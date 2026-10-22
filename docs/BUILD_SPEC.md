@@ -603,22 +603,29 @@ class ControllerConfig:
     ff_neutral_c: float = 15.0           # FF shaping knobs (control-F6, 2026-07-09)
     ff_gain_pct_per_k: float = 1.0
     ff_max_pct: float = 20.0
-    boost_offset_c: float = 1.0          # split engages beyond this |error|; must be > deadband_c (D2)
-    fast_min_on_minutes: float = 10.0
-    fast_min_off_minutes: float = 10.0
-    fast_target_offset_k: float = 1.0    # ADDITIVE (2026-07-13): S12 boost overdrive, now a knob in [0,3]; 0 = split gets the plain setpoint
+    # Defaults marked "#32" retuned 2026-10-22 (issue #32, DECISIONS §36; field-validated,
+    # old values in SUPERSEDED_CONTROLLER_DEFAULTS).
+    boost_offset_c: float = 1.5          # split engages beyond this |error|; must be > deadband_c (D2); #32: 1.0 -> 1.5
+    fast_min_on_minutes: float = 30.0    # #32: 10 -> 30
+    fast_min_off_minutes: float = 31.0   # #32: 10 -> 31
+    fast_target_offset_k: float = 0.0    # ADDITIVE (2026-07-13): S12 boost overdrive, now a knob in [0,3]; 0 = split gets the plain setpoint; #32: 1 -> 0
     fast_manual_hold_minutes: float = 60.0  # ADDITIVE (2026-09-04, DECISIONS §28): manual hold after a physical divergence of the split, >= 0; 0 = legacy mismatch flag
-    dew_margin_k: float = 2.0            # gap at which the local throttle is FULLY OPEN
-                                         # (K6 2026-07-12: the ramp ENDS here — the same design
-                                         # gap the pump's global dew floor already guarantees)
+    dew_margin_k: float = 1.5            # gap at which the local throttle is FULLY OPEN
+                                         # (K6 2026-07-12: the ramp ENDS here; #32: 2 -> 1.5,
+                                         # i.e. 0.5 K BELOW the pump's 2 K global dew floor, so
+                                         # ordinary water lag no longer throttles; the ramp start
+                                         # is clipped at gap 0 — still closed AT the dew point)
     dew_ramp_k: float = 2.0             # ramp width BELOW dew_margin_k (K6: previously above)
-    cooling_supply_base_c: float = 18.0  # ADDITIVE (2026-07-12, B2): heat-pump cooling water base, GLOBAL-only, [10,25]
+    cooling_supply_base_c: float = 15.0  # ADDITIVE (2026-07-12, B2): heat-pump cooling water base, GLOBAL-only, [10,25]; #32: 18 -> 15
     heating_supply_base_c: float = 26.0  # ADDITIVE (2026-07-12, B2): heating water base at ff_neutral_c, GLOBAL-only, [20,40]
     heating_supply_slope: float = 0.5    # ADDITIVE (2026-07-12, B2): heating curve slope, GLOBAL-only, [0,2]
-    hp_flicker_band_k: float = 1.5       # ADDITIVE (2026-07-15, #7): flicker target cooling deadband, GLOBAL-only, [0.5,3.0]
-    hp_flicker_stuck_minutes: float = 10.0   # ADDITIVE (2026-07-15, #7): stuck&armed time before a pulse, GLOBAL-only, [5,120]
-    hp_flicker_min_off_minutes: float = 20.0  # ADDITIVE (2026-07-15, #7): forced-start cooldown, GLOBAL-only, [5,120]
-    hp_flicker_max_starts_per_h: float = 2.0  # ADDITIVE (2026-07-15, #7): forced starts/rolling hour cap, GLOBAL-only, [1,6]
+    hp_flicker_band_k: float = 2.5       # ADDITIVE (2026-07-15, #7): flicker target cooling deadband, GLOBAL-only, [0.5,3.0]; #32: 1.5 -> 2.5
+    hp_flicker_stuck_minutes: float = 30.0   # ADDITIVE (2026-07-15, #7): stuck&armed time before a pulse, GLOBAL-only, [5,120]; #32: 10 -> 30
+    hp_flicker_min_off_minutes: float = 60.0  # ADDITIVE (2026-07-15, #7): forced-start cooldown, GLOBAL-only, [5,120]; #32: 20 -> 60
+    hp_flicker_max_starts_per_h: float = 1.0  # ADDITIVE (2026-07-15, #7): forced starts/rolling hour cap, GLOBAL-only, [1,6]; #32: 2 -> 1
+    # (dry_enabled False / dry_dew_max_c 16.0 (#32: 17 -> 16), hp_flicker_enabled False /
+    #  hp_flicker_min_open_pct 350.0 (#32: 250 -> 350) — see core/config.py; the two feature
+    #  flags stay opt-in)
     # flow_epsilon_k / flow_open_threshold_pct / flow_response_window_min: REMOVED 2026-10-12 (§34)
     cycle_seconds: float = 300.0        # 5 min
     valve_write_threshold_pct: float = 5.0   # 2.0 -> 5.0 (K2b 2026-07-12: measured, 2 pp did
@@ -632,7 +639,14 @@ class ControllerConfig:
 
 # ADDITIVE (2026-10-22, issue #31, DECISIONS §35): sparse tuning persistence helpers.
 SUPERSEDED_CONTROLLER_DEFAULTS: Mapping[str, frozenset[float]]  # earlier shipped defaults:
-                                         # kp {8}, ki {0.02}, kt {6}, valve_write_threshold_pct {2}
+                                         # kp {8}, ki {0.02}, kt {6}, valve_write_threshold_pct {2};
+                                         # issue #32 (DECISIONS §36): boost_offset_c {1},
+                                         # fast_min_on/off_minutes {10}, fast_target_offset_k {1},
+                                         # dew_margin_k {2}, cooling_supply_base_c {18},
+                                         # dry_dew_max_c {17}, hp_flicker_band_k {1.5},
+                                         # hp_flicker_stuck_minutes {10}, hp_flicker_min_off_minutes
+                                         # {20}, hp_flicker_max_starts_per_h {2},
+                                         # hp_flicker_min_open_pct {250}
 def is_superseded_default(field_name: str, value: object) -> bool: ...
 def controller_overrides(values: Mapping[str, object], *, fields: Iterable[str],
                          drop_superseded: bool = False) -> dict[str, object]: ...

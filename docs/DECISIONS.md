@@ -2026,3 +2026,82 @@ overrides.
 value in the migration (it is indistinguishable from the frozen default) and sees the log
 line; one who deliberately keeps a knob AT today's default follows the next retune of that
 default. Both are the intended reading of "default".
+
+## 36. Field-validated defaults for fast-source, dew-point and flicker knobs (2026-10-22, issue #32)
+
+**Context.** The defaults below were set on the twin or from first impressions. One house
+has since run a full cooling season and the start of a heating season with retuned values,
+and the owner asked for those values to become the library defaults. Since issue #31 (§35)
+only overrides are stored, so a new default does reach existing installs.
+
+| Knob | Old | New |
+|---|---|---|
+| `boost_offset_c` | 1.0 K | **1.5 K** |
+| `fast_min_on_minutes` / `fast_min_off_minutes` | 10 / 10 min | **30 / 31 min** |
+| `fast_target_offset_k` | 1 K | **0** (the split gets the plain setpoint) |
+| `dew_margin_k` | 2 K | **1.5 K** |
+| `cooling_supply_base_c` | 18 °C | **15 °C** |
+| `dry_dew_max_c` | 17 °C | **16 °C** |
+| `hp_flicker_band_k` | 1.5 K | **2.5 K** |
+| `hp_flicker_stuck_minutes` | 10 min | **30 min** |
+| `hp_flicker_min_off_minutes` | 20 min | **60 min** |
+| `hp_flicker_max_starts_per_h` | 2 | **1** |
+| `hp_flicker_min_open_pct` | 250 | **350** |
+
+**Decision.**
+
+- **Fast source.** The split engages later (1.5 K) and runs and rests in half-hour blocks.
+  Longer dwells mean fewer compressor starts and calmer multisplit arbitration. Every
+  release still happens inside the comfort band. The overdrive defaults to 0 (S12 stays
+  available as a knob, and `FAST_TARGET_OFFSET_K` keeps its 1 K design value for
+  reference): the field house ran the season with the plain setpoint.
+- **Dew point.** `dew_margin_k` 1.5 moves the end of the local S2 ramp 0.5 K **below** the
+  heat pump's global floor. That floor is still `max(T_dew) + 2 K` (`DEW_MARGIN_DEFAULT_K`,
+  unchanged), so the K6 de-stacking (§11) is kept: on the floor the valve is fully open.
+  Ordinary water lag on a rising dew point no longer throttles the valve. With
+  `dew_ramp_k` 2 the ramp start is clipped at gap 0, so the valve still closes at the
+  dew point itself, and the S2 hard rule still backstops there. With a cooling-water base
+  of 15 °C, the dew floor sets the written cooling setpoint whenever the floor is above
+  15 °C, instead of a fixed 18 °C base overriding it. The dry assist threshold moves to a 16 °C dew point, so drying starts before the
+  air turns sticky (~17–18 °C).
+- **Setpoint flicker (§21/§23).** The new values are more conservative: a wider target
+  band (still below the pump's fixed 3 K), a longer wait (30 min) before a start is
+  forced, a cooldown of 1 h, at most one forced start per hour, and a higher demand gate
+  (3.5 fully open loops).
+- **Not changed.** `dry_enabled` and `hp_flicker_enabled` stay opt-in (maintainer
+  decision), and `heating_supply_base_c`, `heating_supply_slope` and `ff_gain_pct_per_k`
+  are untouched. All new values are inside the existing validators and UI ranges and on
+  the UI steps. A house with fewer than 3.5 loops gets a flicker demand gate above its
+  physical ceiling. The UI ceiling already widens to the stored or default value
+  (`flicker_open_max_pct`), and the flicker is off by default anyway.
+- **Migration.** The old values join `SUPERSEDED_CONTROLLER_DEFAULTS`. The v5 → v6
+  migration of §35 is not released yet and ships together with this change, so extending
+  its table is enough and there is no v7. A pre-#31 install has the old defaults frozen
+  in its snapshot. That migration drops them and the install runs on the new defaults.
+  The panel marks a remaining old value as "old default".
+
+**Trade-off (same policy as §35).** An install that deliberately set exactly an old
+default (say `boost_offset_c` 1.0 or `fast_min_on_minutes` 10) cannot be told apart from a
+frozen snapshot. It loses that value in the migration and gets an INFO log line naming
+the dropped key, so it must set the value again. The gain is that every install that
+never touched these knobs gets the field-validated values.
+
+**Twin and test consequences.** The unit tests for dwell, overdrive and throttle
+mechanics now pin the old values explicitly (`_TEN_MIN_DWELLS`, `_LEGACY_FAST`,
+`dew_margin_k=2`), because they test mechanisms, not defaults. Three simulation gates
+were re-based, each on measured behaviour:
+
+- `hot_july_floor_cooling`: the local throttle now acts on 0.03 % / 0.17 % of records
+  (it was 22 %), because the supply only falls 0.5 K below the floor in rare
+  transients. The gate now asserts that the global floor binds (the supply is within
+  0.25 K of `dew + 2 K` on ~52 % of records) and that the backstop engages at all. The
+  minimum slab-dew margin is +1.47 K (it was +1.51 K), and there is no condensation.
+- `split_boost`: the twin's split delivers full power while it is ON (it does not model
+  the unit's thermostat). A 30-min dwell therefore produces two runs, a 4.2 % runtime
+  (6.3 % before). The "it engaged" gate is now one full min-ON dwell instead of a fixed
+  5 %.
+- Boost-hold under high humidity: the indoor RH is clamped at 100 %, so the slab-dew
+  margin there is really slab minus air. With 30-min boosts the held floor (~91 % open)
+  cools the slab 0.12 K further at the worst instant than the starved baseline. The
+  supply never leaves the pump floor and the throttle never engages. The gate bounds
+  that cost at 0.15 K instead of asserting equality to 0.05 K.

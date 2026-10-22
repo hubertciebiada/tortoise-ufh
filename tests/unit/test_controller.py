@@ -144,8 +144,9 @@ class TestCoolingDewThrottle:
     def test_throttle_partial_inside_pump_floor_band(self) -> None:
         """A supply between the dew point and the pump floor ramps the valve.
 
-        K6 (2026-07-12): gap = 1 K with margin 2 / ramp 2 sits mid-ramp
-        (factor 0.5) — under the OLD stacked semantics this was a hard 0.
+        K6 (2026-07-12): gap = 1 K sits mid-ramp — under the OLD stacked
+        semantics this was a hard 0. With the defaults margin 1.5 / ramp 2
+        (issue #32) the ramp spans gap 0 -> 1.5 K, so the factor is 1/1.5.
         """
         cfg = ControllerConfig()
         controller = RoomController(cfg, name="salon")
@@ -161,7 +162,7 @@ class TestCoolingDewThrottle:
             ),
             dt_seconds=300.0,
         )
-        assert out.report.dew_throttle_factor == pytest.approx(0.5)
+        assert out.report.dew_throttle_factor == pytest.approx(1.0 / 1.5)
         assert "s2_throttle" not in out.report.flags
 
     @pytest.mark.unit

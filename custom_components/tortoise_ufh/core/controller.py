@@ -174,9 +174,8 @@ report/websocket payload can never bloat.
 # ``FAST_TARGET_OFFSET_K`` and the fast-source dwell/direction machinery moved
 # to :mod:`tortoise_ufh.fast_source` (2026-07-10); the constant is re-exported
 # above so existing importers keep working (BUILD_SPEC §2 note). Since
-# 2026-07-13 it is only the documented DEFAULT of the
-# ``ControllerConfig.fast_target_offset_k`` knob, which the controller reads
-# instead.
+# 2026-07-13 the controller reads the ``ControllerConfig.fast_target_offset_k``
+# knob instead (default 0 since issue #32; the constant keeps the S12 1 K).
 
 GLOBAL_SAFE_DEW_MARGIN_K: float = DEW_MARGIN_DEFAULT_K
 """Safety margin [K] added on top of ``max_i(T_dew_i)`` for the global sensor.
@@ -230,7 +229,7 @@ when its best comfort-band excess exceeds the incumbent direction's best
 excess by MORE than this margin. Without it the winner was a bare
 ``max(band_excess)`` — two rooms with persistent opposite ~2 K demands plus
 sensor noise (sigma = 0.05 K) ping-ponged the shared outdoor unit through
-15 direction reversals in 2.5 h at zero dwells (7 at the default 10/10 min);
+15 direction reversals in 2.5 h at zero dwells (7 at the then-default 10/10 min);
 with the hysteresis the first winner holds unless the other side genuinely
 outgrows it. Deliberately a fixed constant, not a config knob."""
 

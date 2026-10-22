@@ -119,11 +119,12 @@ class TestBoostHoldThrottleOrdering:
         controller = RoomController(ControllerConfig(), name="salon")
         snapshot = _engage(controller)
         # Overcool so the raw PI valve is below the snapshot (hold dominates),
-        # and place the coldest supply one kelvin above the dew point so the
-        # graduated throttle (margin=ramp=2 -> factor = gap/2) reads 0.5.
+        # and place the coldest supply 0.75 K above the dew point so the
+        # graduated throttle (defaults margin 1.5 / ramp 2 since issue #32 ->
+        # the ramp starts at the dew point, factor = gap/1.5) reads 0.5.
         room = 23.5
         humidity = 50.0
-        supply = dew_point(room, humidity) + 1.0
+        supply = dew_point(room, humidity) + 0.75
         out = controller.step(
             _cool(room=room, humidity=humidity, supply=supply), dt_seconds=_DT
         )
@@ -205,7 +206,12 @@ class TestBoostHoldSnapshotLifecycle:
     @pytest.mark.unit
     def test_release_clears_and_reengage_resnapshots(self) -> None:
         """The hold snapshot is per-engagement, not persisted across a release."""
-        controller = RoomController(ControllerConfig(), name="salon")
+        # 10/10 min dwells (pre-issue-#32 defaults) keep release + re-engage
+        # inside the short window below.
+        controller = RoomController(
+            ControllerConfig(fast_min_on_minutes=10.0, fast_min_off_minutes=10.0),
+            name="salon",
+        )
         snapshot1 = _engage(controller)
         # Cycle 2: engaged, hold armed at snapshot1.
         controller.step(_cool(room=23.5), dt_seconds=_DT)

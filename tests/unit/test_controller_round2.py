@@ -116,6 +116,10 @@ class TestBumplessSetpointTransfer:
         assert abs(out.report.i_term) < 1.0
 
 
+_MARGIN_2 = ControllerConfig(dew_margin_k=2.0)
+"""Throttle ramp spanning gap 0 -> 2 K: factor = gap / 2 (pre-issue-#32 margin)."""
+
+
 class TestStaleHumidityGate:
     """K7/D5: a held 60-120 min old RH pads the dew point by frac * 1 K."""
 
@@ -130,9 +134,11 @@ class TestStaleHumidityGate:
         """The same reading throttles harder when stale (+1 K pad) + flag."""
         # Room 26/60 % -> dew ~17.9. Supply 19.4 -> gap ~1.5 -> factor ~0.73
         # fresh; stale pads dew to ~18.9 -> gap ~0.5 -> factor ~0.23 (the
-        # +1 K pad moves the factor down by exactly pad/ramp = 0.5).
-        fresh_ctrl = RoomController(ControllerConfig(), name="a")
-        stale_ctrl = RoomController(ControllerConfig(), name="b")
+        # +1 K pad moves the factor down by exactly pad/ramp = 0.5). Margin
+        # pinned to 2 = ramp (the default is 1.5 since issue #32) so the whole
+        # ramp is linear in this range with slope 1/ramp.
+        fresh_ctrl = RoomController(_MARGIN_2, name="a")
+        stale_ctrl = RoomController(_MARGIN_2, name="b")
         loops = (LoopInput(None, 19.4, None),)
         fresh = fresh_ctrl.step(
             make_inputs(loops=loops, **self._ROOM), dt_seconds=300.0
@@ -154,10 +160,10 @@ class TestStaleHumidityGate:
         exactly ``0.5 * pad / ramp = 0.25`` — the pad grows continuously with
         the age instead of jumping a full +1 K at the 60-min edge (the jump
         was itself a mini limit cycle: factor stepped by 0.5 across one
-        reporting cadence).
+        reporting cadence). Margin pinned to 2 = ramp, as above.
         """
-        fresh_ctrl = RoomController(ControllerConfig(), name="a")
-        half_ctrl = RoomController(ControllerConfig(), name="b")
+        fresh_ctrl = RoomController(_MARGIN_2, name="a")
+        half_ctrl = RoomController(_MARGIN_2, name="b")
         loops = (LoopInput(None, 19.4, None),)
         fresh = fresh_ctrl.step(
             make_inputs(loops=loops, **self._ROOM), dt_seconds=300.0

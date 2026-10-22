@@ -392,21 +392,22 @@ const STR = {
       "Próg dogrzewu: gdy uchyb przekroczy tę wartość, włącza się szybkie " +
       "źródło (split/grzałka). Split puszcza z powrotem wewnątrz pasma " +
       "komfortu; podłoga zawsze zostaje źródłem bazowym. Musi być większy niż " +
-      "strefa nieczułości. Domyślnie 1,0 K.",
+      "strefa nieczułości. Domyślnie 1,5 K.",
     tip_knob_fast_min_on_minutes:
       "Minimalny czas pracy szybkiego źródła po włączeniu. Chroni sprężarkę " +
       "splita przed taktowaniem i uspokaja zmiany kierunku w grupie " +
-      "multisplit. Domyślnie 10 min; minimum 3.",
+      "multisplit. Domyślnie 30 min; minimum 3.",
     tip_knob_fast_min_off_minutes:
       "Minimalny czas postoju szybkiego źródła po wyłączeniu, zanim wolno je " +
-      "włączyć ponownie. Domyślnie 10 min; minimum 3.",
+      "włączyć ponownie. Domyślnie 31 min; minimum 3.",
     tip_knob_fast_target_offset_k:
       "O ile kelwinów nastawa wysyłana do splita jest podbijana poza zadaną " +
       "pokoju podczas dogrzewu/dochładzania (grzanie: zadana + wartość, " +
       "chłodzenie: zadana − wartość). Czujnik splita pod sufitem czyta " +
       "cieplej niż czujnik pokojowy — bez podbicia split dławi się przed " +
       "dostarczeniem dogrzewu. O wyłączeniu i tak decyduje czujnik pokojowy. " +
-      "0 = bez podbicia (split dostaje dokładnie zadaną). Domyślnie 1 K.",
+      "0 = bez podbicia (split dostaje dokładnie zadaną). Domyślnie 0 — " +
+      "podbij (np. 1 K), jeśli split dławi się przed dostarczeniem dogrzewu.",
     tip_knob_dry_enabled:
       "W chłodzeniu split (tylko klimatyzator) jest załączany w trybie " +
       "osuszania, gdy punkt rosy pokoju przekroczy próg — nawet gdy " +
@@ -418,8 +419,8 @@ const STR = {
       "Punkt rosy pokoju, powyżej którego startuje osuszanie [°C]. Start " +
       "tylko, gdy pokój jest na nastawie lub cieplej (split w dry też " +
       "chłodzi). Zwolnienie 1 K poniżej progu (histereza) albo gdy pokój " +
-      "przechłodzi się poza martwą strefę. Domyślnie 17 °C — od ok. " +
-      "17–18 °C rosy powietrze robi się lepkie.",
+      "przechłodzi się poza martwą strefę. Domyślnie 16 °C — osuszanie " +
+      "rusza, zanim powietrze zrobi się lepkie (od ok. 17–18 °C rosy).",
     tip_knob_fast_manual_hold_minutes:
       "Gdy split fizycznie robi co innego niż ostatnia komenda (włączony " +
       "pilotem, wyłączony, przestawiony kierunek), regulator uznaje to za " +
@@ -433,7 +434,9 @@ const STR = {
     tip_knob_dew_margin_k:
       "Chłodzenie: gdy zasilanie jest co najmniej o tyle K powyżej punktu " +
       "rosy, zawór działa bez ograniczeń; bliżej rosy zaczyna się dławienie " +
-      "przepływu (ochrona przed kondensacją na podłodze). Domyślnie 2 K; " +
+      "przepływu (ochrona przed kondensacją na podłodze). Domyślnie 1,5 K " +
+      "(pompa trzyma wodę 2 K nad rosą, więc zwykłe opóźnienie wody nie " +
+      "dławi); " +
       "zwiększ, jeśli widzisz wilgoć.",
     tip_knob_dew_ramp_k:
       "Szerokość rampy dławienia poniżej marginesu rosy: na tym odcinku " +
@@ -458,7 +461,7 @@ const STR = {
       "wartość to maksimum z tej bazy i globalnego bezpiecznego punktu rosy " +
       "— nigdy poniżej punktu rosy. Działa tylko przy skonfigurowanej encji " +
       "nastawy chłodzenia (opcje → Pompa ciepła). Parametr globalny — nie da " +
-      "się go nadpisać per pokój. Domyślnie 18 °C.",
+      "się go nadpisać per pokój. Domyślnie 15 °C.",
     tip_knob_heating_supply_base_c:
       "Zasilanie wody grzewczej przy neutralnej temperaturze zewnętrznej " +
       "(parametr „Temperatura neutralna członu pogodowego”, domyślnie " +
@@ -477,11 +480,12 @@ const STR = {
       "i temperatura zadana dla urządzenia. „—” = pokój nie ma wspomagania; " +
       "„wył.” = wspomaganie stoi (pokój trzyma podłoga).",
     tip_assist_target:
-      "Nastawa splita celowo różni się od zadanej pokoju o „podbicie " +
-      "nastawy wspomagania” (domyślnie 1 K; grzanie: +, chłodzenie: −). " +
-      "Czujnik splita wisi pod sufitem i czyta cieplej niż nasz czujnik " +
-      "pokojowy — nastawa równa zadanej gasiłaby split, zanim " +
-      "dogrzanie/dochłodzenie faktycznie dotrze do pokoju. O wyłączeniu " +
+      "Nastawa splita może różnić się od zadanej pokoju o „podbicie " +
+      "nastawy wspomagania” (domyślnie 0 — split dostaje zadaną; " +
+      "grzanie: +, chłodzenie: −). Czujnik splita wisi pod sufitem i może " +
+      "czytać cieplej niż nasz czujnik pokojowy — wtedy nastawa równa " +
+      "zadanej gasi split, zanim dogrzanie/dochłodzenie faktycznie dotrze " +
+      "do pokoju, i warto podbicie zwiększyć (np. 1 K). O wyłączeniu " +
       "i tak decyduje NASZ czujnik pokojowy z histerezą, więc pokój nie " +
       "„ucieknie”. Wartość zmienisz w Strojeniu (0 = bez podbicia). " +
       "W trybie przejściowym nastawa = zadana.",
@@ -948,14 +952,14 @@ const STR = {
     tip_knob_boost_offset_c:
       "Boost threshold: once the error exceeds this, the fast source " +
       "(split/heater) engages. It releases inside the comfort band; the floor " +
-      "always stays the base source. Must exceed the deadband. Default 1.0 K.",
+      "always stays the base source. Must exceed the deadband. Default 1.5 K.",
     tip_knob_fast_min_on_minutes:
       "Minimum runtime of the fast source once switched on. Protects the " +
       "split compressor from short-cycling and calms direction changes on a " +
-      "multisplit group. Default 10 min; minimum 3.",
+      "multisplit group. Default 30 min; minimum 3.",
     tip_knob_fast_min_off_minutes:
       "Minimum off-time of the fast source before it may start again. " +
-      "Default 10 min; minimum 3.",
+      "Default 31 min; minimum 3.",
     tip_knob_fast_target_offset_k:
       "How many kelvin the setpoint sent to the split is pushed beyond the " +
       "room setpoint during a boost (heating: setpoint + value, cooling: " +
@@ -963,7 +967,8 @@ const STR = {
       "than the room sensor — without the overdrive the unit throttles " +
       "itself before the boost is delivered. Release is still decided by " +
       "the room sensor. 0 = no overdrive (the split gets the plain " +
-      "setpoint). Default 1 K.",
+      "setpoint). Default 0 — raise it (e.g. 1 K) if the split throttles " +
+      "itself before the boost is delivered.",
     tip_knob_dry_enabled:
       "In cooling, the split (air-con only) is engaged in its dry mode when " +
       "the room dew point exceeds the threshold — even with no temperature " +
@@ -975,8 +980,8 @@ const STR = {
       "Room dew point above which the dry assist engages [°C]. Engages only " +
       "while the room is at or above its setpoint (a split cools in dry " +
       "too). Releases 1 K below the threshold (hysteresis) or as soon as " +
-      "the room overcools past the deadband. Default 17 °C — air starts " +
-      "feeling sticky from a dew point of ~17–18 °C.",
+      "the room overcools past the deadband. Default 16 °C — drying starts " +
+      "before the air turns sticky (from a dew point of ~17–18 °C).",
     tip_knob_fast_manual_hold_minutes:
       "When the split is physically doing something other than the last " +
       "command (switched on by remote, switched off, direction changed), the " +
@@ -990,7 +995,9 @@ const STR = {
     tip_knob_dew_margin_k:
       "Cooling: while supply is at least this many K above the dew point the " +
       "valve runs unrestricted; closer to the dew point the flow gets " +
-      "throttled (floor condensation protection). Default 2 K; raise it if " +
+      "throttled (floor condensation protection). Default 1.5 K (the heat " +
+      "pump keeps the water 2 K above the dew point, so ordinary water lag " +
+      "does not throttle); raise it if " +
       "you ever see moisture.",
     tip_knob_dew_ramp_k:
       "Width of the throttle ramp below the dew margin: over this span the " +
@@ -1014,7 +1021,7 @@ const STR = {
       "cools: the written value is the maximum of this base and the global " +
       "safe dew point — never below the dew point. Active only with the " +
       "cooling-setpoint entity configured (options → Heat pump). Global " +
-      "parameter — cannot be overridden per room. Default 18 °C.",
+      "parameter — cannot be overridden per room. Default 15 °C.",
     tip_knob_heating_supply_base_c:
       "Heating supply water at the neutral outdoor temperature (the " +
       "“Feedforward neutral outdoor temperature” knob, default 15 °C). " +
@@ -1034,11 +1041,12 @@ const STR = {
       "direction and the unit's target temperature. “—” = the room has no " +
       "assist; “off” = the assist is idle (the floor holds the room).",
     tip_assist_target:
-      "The split's setpoint deliberately differs from the room target by " +
-      "the “assist target overdrive” knob (default 1 K; heating: +, " +
-      "cooling: −). The split's own sensor sits near the ceiling and reads " +
-      "warmer than our room sensor — a setpoint equal to the target would " +
-      "throttle the unit before the boost actually reaches the room. " +
+      "The split's setpoint can differ from the room target by the " +
+      "“assist target overdrive” knob (default 0 — the split gets the " +
+      "target; heating: +, cooling: −). The split's own sensor sits near " +
+      "the ceiling and may read warmer than our room sensor — then a " +
+      "setpoint equal to the target throttles the unit before the boost " +
+      "actually reaches the room, and raising the knob (e.g. 1 K) helps. " +
       "Release is still decided by OUR room sensor with hysteresis, so the " +
       "room cannot run away. Adjust it in Tuning (0 = no overdrive). In " +
       "transitional mode the setpoint equals the target.",
@@ -1511,14 +1519,14 @@ const STR = {
       "Zuschaltschwelle: sobald die Regelabweichung diesen Wert überschreitet, " +
       "schaltet sich die Zusatzquelle (Split/Heizgerät) zu. Sie gibt innerhalb des " +
       "Komfortbands wieder frei; der Boden bleibt stets die Basisquelle. Muss größer " +
-      "als das Totband sein. Standard 1,0 K.",
+      "als das Totband sein. Standard 1,5 K.",
     tip_knob_fast_min_on_minutes:
       "Mindestlaufzeit der Zusatzquelle nach dem Einschalten. Schützt den " +
       "Split-Kompressor vor Takten und beruhigt Richtungswechsel in einer " +
-      "Multisplit-Gruppe. Standard 10 min; Minimum 3.",
+      "Multisplit-Gruppe. Standard 30 min; Minimum 3.",
     tip_knob_fast_min_off_minutes:
       "Mindeststillstandszeit der Zusatzquelle, bevor sie wieder starten darf. " +
-      "Standard 10 min; Minimum 3.",
+      "Standard 31 min; Minimum 3.",
     tip_knob_fast_target_offset_k:
       "Um wie viel Kelvin der an den Split gesendete Sollwert während eines Boosts " +
       "über den Raum-Sollwert hinaus angehoben wird (Heizung: Sollwert + Wert, " +
@@ -1526,7 +1534,8 @@ const STR = {
       "als der Raumsensor — ohne die Überhöhung drosselt sich die Einheit selbst, " +
       "bevor der Boost geliefert wird. Über das Abschalten entscheidet weiterhin der " +
       "Raumsensor. 0 = keine Überhöhung (der Split erhält den reinen Sollwert). " +
-      "Standard 1 K.",
+      "Standard 0 — erhöhen Sie ihn (z. B. 1 K), falls sich der Split vor dem " +
+      "Boost selbst drosselt.",
     tip_knob_dry_enabled:
       "Beim Kühlen wird der Split (nur Klimagerät) in seinem Entfeuchtungsmodus " +
       "eingeschaltet, sobald der Taupunkt des Raums die Schwelle überschreitet — " +
@@ -1540,7 +1549,8 @@ const STR = {
       "Start nur, wenn der Raum auf oder über dem Sollwert liegt (ein Split " +
       "kühlt auch im Entfeuchten). Freigabe 1 K unter der Schwelle " +
       "(Hysterese) oder sobald der Raum über das Totband hinaus unterkühlt. " +
-      "Standard 17 °C — ab ~17–18 °C Taupunkt wirkt die Luft stickig.",
+      "Standard 16 °C — die Entfeuchtung startet, bevor die Luft stickig " +
+      "wirkt (ab ~17–18 °C Taupunkt).",
     tip_knob_fast_manual_hold_minutes:
       "Tut der Split physisch etwas anderes als der letzte Befehl (per " +
       "Fernbedienung eingeschaltet, ausgeschaltet, Richtung geändert), wertet " +
@@ -1555,7 +1565,9 @@ const STR = {
     tip_knob_dew_margin_k:
       "Kühlung: solange der Vorlauf mindestens so viele K über dem Taupunkt liegt, " +
       "läuft das Ventil uneingeschränkt; näher am Taupunkt wird der Durchfluss " +
-      "gedrosselt (Kondensationsschutz am Boden). Standard 2 K; erhöhen Sie ihn, " +
+      "gedrosselt (Kondensationsschutz am Boden). Standard 1,5 K (die " +
+      "Wärmepumpe hält das Wasser 2 K über dem Taupunkt, normale Verzögerung " +
+      "des Wassers drosselt also nicht); erhöhen Sie ihn, " +
       "falls Sie jemals Feuchtigkeit sehen.",
     tip_knob_dew_ramp_k:
       "Breite der Drosselrampe unterhalb der Taupunkt-Marge: über diese Spanne fällt " +
@@ -1579,7 +1591,7 @@ const STR = {
       "kühlt: Der geschriebene Wert ist das Maximum aus dieser Basis und dem globalen " +
       "sicheren Taupunkt — nie unter dem Taupunkt. Nur aktiv, wenn die " +
       "Kühl-Sollwert-Entität konfiguriert ist (Optionen → Wärmepumpe). Globaler " +
-      "Parameter — kann nicht je Raum übersteuert werden. Standard 18 °C.",
+      "Parameter — kann nicht je Raum übersteuert werden. Standard 15 °C.",
     tip_knob_heating_supply_base_c:
       "Heizungsvorlauf bei der neutralen Außentemperatur (Parameter „Neutrale " +
       "Außentemperatur der Vorsteuerung“, Standard 15 °C). Darunter steigt der " +
@@ -1599,11 +1611,12 @@ const STR = {
       "und Zieltemperatur der Einheit. „—“ = der Raum hat keine Zusatzquelle; " +
       "„aus“ = die Zusatzquelle ruht (der Boden hält den Raum).",
     tip_assist_target:
-      "Der Sollwert des Splits weicht bewusst um den Parameter „Sollwert-Überhöhung " +
-      "der Zusatzquelle“ vom Raum-Sollwert ab (Standard 1 K; Heizung: +, Kühlung: −). " +
-      "Der eigene Sensor des Splits sitzt nahe der Decke und misst wärmer als unser " +
-      "Raumsensor — ein Sollwert gleich dem Ziel würde die Einheit drosseln, bevor " +
-      "der Boost den Raum tatsächlich erreicht. Über das Abschalten entscheidet " +
+      "Der Sollwert des Splits kann um den Parameter „Sollwert-Überhöhung der " +
+      "Zusatzquelle“ vom Raum-Sollwert abweichen (Standard 0 — der Split erhält " +
+      "das Ziel; Heizung: +, Kühlung: −). Der eigene Sensor des Splits sitzt nahe " +
+      "der Decke und kann wärmer messen als unser Raumsensor — dann drosselt ein " +
+      "Sollwert gleich dem Ziel die Einheit, bevor der Boost den Raum tatsächlich " +
+      "erreicht, und eine Erhöhung (z. B. 1 K) hilft. Über das Abschalten entscheidet " +
       "weiterhin UNSER Raumsensor mit Hysterese, sodass der Raum nicht davonlaufen " +
       "kann. Passen Sie ihn in der Abstimmung an (0 = keine Überhöhung). Im " +
       "Übergangsmodus entspricht der Sollwert dem Ziel.",

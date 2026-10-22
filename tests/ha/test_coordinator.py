@@ -379,10 +379,12 @@ async def test_room_offset_change_rewrites_split_target_same_cycle(
     coordinator._room_states["Salon"] = ROOM_STATE_LIVE
     # A cold room makes the split boost and self-regulate to the room target.
     # Two refreshes: the >4 K drop needs the C3 two-sample confirmation; the
-    # 11-min tick lets the S4 conservative restart seed's min-OFF dwell elapse.
+    # S4 conservative restart seed's min-OFF dwell (31 min since issue #32)
+    # elapses over the setup step (300 s), the clamped first interval (900 s)
+    # and the 12-min tick.
     hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
     await _refresh(hass, coordinator)
-    freezer.tick(timedelta(minutes=11))
+    freezer.tick(timedelta(minutes=12))
     hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
     await _refresh(hass, coordinator)
     assert coordinator.data.rooms["Salon"].outputs.fast_source.on is True
@@ -409,11 +411,12 @@ async def test_room_offset_change_rewrites_split_target_same_cycle(
     assert salon.setpoint_c == pytest.approx(23.0)
     assert salon.report.error_c == pytest.approx(8.0, abs=0.05)  # 23.0 - 15.0
 
-    # S12 (2026-07-09): the heating boost target is setpoint + 1 K.
+    # S12 (2026-07-09): the heating boost target is setpoint + the overdrive
+    # knob, 0 by default since issue #32 — the split gets the setpoint.
     set_temp_calls = mocks[("climate", "set_temperature")]
     assert any(
         call.data.get("entity_id") == "climate.salon_split"
-        and call.data.get("temperature") == pytest.approx(24.0)
+        and call.data.get("temperature") == pytest.approx(23.0)
         for call in set_temp_calls
     )
 
@@ -751,13 +754,16 @@ async def test_split_command_change_writes_immediately(
     coordinator._room_states["Salon"] = ROOM_STATE_LIVE
     hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
     await _refresh(hass, coordinator)
-    freezer.tick(timedelta(minutes=11))
+    # 300 s setup step + 900 s clamped first interval + 12 min > the 31-min
+    # conservative min-OFF seed (issue #32 default).
+    freezer.tick(timedelta(minutes=12))
     hass.states.async_set("sensor.salon_temp", "15.0", _TEMP_ATTRS)
 
     mocks = _mock_actuator_services(hass)
     await _refresh(hass, coordinator)
     temp_calls = mocks[("climate", "set_temperature")]
-    assert [c.data["temperature"] for c in temp_calls] == [pytest.approx(22.0)]
+    # Overdrive 0 by default (issue #32): the target is the plain setpoint.
+    assert [c.data["temperature"] for c in temp_calls] == [pytest.approx(21.0)]
     # The unit obeys the write (§28: an un-obeying unit is adopted as a manual
     # OFF and held instead of being re-written).
     hass.states.async_set("climate.salon_split", "heat", {})
@@ -765,8 +771,8 @@ async def test_split_command_change_writes_immediately(
     coordinator.set_room_offset("Salon", 1.0)
     await _refresh(hass, coordinator)
     assert [c.data["temperature"] for c in temp_calls] == [
+        pytest.approx(21.0),
         pytest.approx(22.0),
-        pytest.approx(23.0),
     ]
 
 
@@ -855,7 +861,8 @@ async def test_off_room_does_not_vote_in_group_arbitration(
         FAST_SOURCE_KIND_SPLIT,
     )
 
-    hass.states.async_set("sensor.polnoc_temp", "19.5", _TEMP_ATTRS)  # wants heat
+    # 2 K below the setpoint: past the 1.5 K boost offset (issue #32).
+    hass.states.async_set("sensor.polnoc_temp", "19.0", _TEMP_ATTRS)  # wants heat
     hass.states.async_set("sensor.poludnie_temp", "24.5", _TEMP_ATTRS)  # wants cool
     # No climate feedback states on purpose: an observed OFF would seed the
     # conservative full min-OFF dwell (S4) and keep both splits idle for the
@@ -957,7 +964,7 @@ async def test_heat_pump_cooling_setpoint_and_mode_written_rarely(
     ]
     hass.states.async_set("number.z1_cool_request_temp", "18.0", {})
     hass.states.async_set("select.heat_pump_mode", "Heat+DHW", {"options": hp_options})
-    # RH 85 % lifts the safe dew point above the 18 degC cooling base.
+    # RH 85 % lifts the safe dew point above the 15 degC cooling base.
     hass.states.async_set("sensor.salon_humidity", "85", {"unit_of_measurement": "%"})
 
     entry = MockConfigEntry(
@@ -996,7 +1003,7 @@ async def test_heat_pump_cooling_setpoint_and_mode_written_rarely(
     await _refresh(hass, coordinator)
 
     data = coordinator.data
-    expected_target = max(18.0, dew_point(21.5, 85.0) + GLOBAL_SAFE_DEW_MARGIN_K)
+    expected_target = max(15.0, dew_point(21.5, 85.0) + GLOBAL_SAFE_DEW_MARGIN_K)
     hp = data.heat_pump
     assert hp is not None and hp.writes_enabled is True
     assert hp.dhw_active is True and hp.dhw_only is False

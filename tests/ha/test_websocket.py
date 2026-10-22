@@ -380,6 +380,19 @@ async def test_get_tuning_returns_fields_and_values(
         "kp": [8.0],
         "ki": [0.02],
         "kt": [6.0],
+        # Issue #32 retunes.
+        "boost_offset_c": [1.0],
+        "fast_min_on_minutes": [10.0],
+        "fast_min_off_minutes": [10.0],
+        "fast_target_offset_k": [1.0],
+        "dew_margin_k": [2.0],
+        "cooling_supply_base_c": [18.0],
+        "dry_dew_max_c": [17.0],
+        "hp_flicker_band_k": [1.5],
+        "hp_flicker_stuck_minutes": [10.0],
+        "hp_flicker_min_off_minutes": [20.0],
+        "hp_flicker_max_starts_per_h": [2.0],
+        "hp_flicker_min_open_pct": [250.0],
     }
 
 
