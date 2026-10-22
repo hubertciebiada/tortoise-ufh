@@ -2105,3 +2105,56 @@ were re-based, each on measured behaviour:
   cools the slab 0.12 K further at the worst instant than the starved baseline. The
   supply never leaves the pump floor and the throttle never engages. The gate bounds
   that cost at 0.15 K instead of asserting equality to 0.05 K.
+
+## 37. Heating-water curve: its own neutral point, knob clamps, 0.01 slope step and a preview (2026-10-22, issue #35)
+
+**Context.** The optional heating-water curve (§14, B2) is
+`clip(heating_supply_base_c + heating_supply_slope · max(0, T_n − T_out), 20, 40)`. Three
+things made it hard to match a real pump curve before wiring `entity_hp_heating_setpoint`:
+
+- The slope stepped by 0.1 K/K. A typical pump curve, 25 °C at +15 °C and 32 °C at −15 °C,
+  needs 7/30 ≈ 0.233 K/K, which falls between two steps.
+- The neutral point `T_n` was the valve feedforward's `ff_neutral_c`. Changing the
+  feedforward silently moved the water curve. In the panel the curve knobs sat in the mixed
+  "Heat pump — water" group, while their neutral point sat in the feedforward group.
+- The clamps were the constants `HEATING_SUPPLY_MIN_C` / `HEATING_SUPPLY_MAX_C` (20 / 40 °C).
+  A floor-only house may want a lower ceiling.
+
+**Decision.**
+
+- **Own neutral point.** New global knob `heating_curve_neutral_c`, default 15 °C, range
+  [−30, 40] (the range of `ff_neutral_c`, so a copied value is always valid).
+  `core/hp_link.py::heating_curve` no longer reads `ff_neutral_c`; that knob is valve
+  feedforward only. The default equals the `ff_neutral_c` default (15 °C), so a fresh
+  install's curve does not move.
+- **Clamps are knobs.** `heating_supply_min_c` (20 °C, range [20, 35]) and
+  `heating_supply_max_c` (40 °C, range [25, 40]). The defaults are the old constants, which
+  are removed. 40 °C stays the hard upper bound (screed), so the max can only go lower.
+  `ControllerConfig` validates `min < max` and `min ≤ heating_supply_base_c ≤ max`. The base
+  keeps its static [20, 40] range, which is the outer envelope of the clamps.
+- **Slope step 0.01 K/K** in `CONTROLLER_NUMBER_KNOBS` (panel and options flow). The
+  validator range [0, 2] is unchanged.
+- **Panel groups.** The mixed `hp` group is split into two global-only groups. "Cooling
+  water" holds `cooling_supply_base_c` and the setpoint-flicker knobs (the old `flicker`
+  group). "Heating water" holds the curve: neutral, base, slope, min, max. Issues #33 (write
+  gate on compressor state) and #34 (opt-in compressor kick) will add their knobs to this
+  group. `ff_neutral_c` stays in the feedforward group.
+- **Curve preview, one source.** `heating_curve_points(config)` evaluates the same
+  `heating_curve` at +15 / +5 / −5 / −15 °C (`HEATING_CURVE_PREVIEW_OUTDOOR_C`). The Tuning
+  tab shows the points under the Heating water knobs. A read-only WS command
+  `preview_heating_curve` lays the unsaved draft over the effective global tuning and
+  checks it like `set_tuning`, so the table follows each nudge (debounced) and an invalid
+  draft (for example a max below the base) shows the validator's message instead of
+  points. The Heat-pump tab shows the live `heat_pump.heating.curve` (plus `min_c` /
+  `max_c`) next to the heating setpoint. The panel never computes the curve itself.
+- **Migration, no v7.** Entry version 6 (§35/§36) is not released yet and ships with this
+  change, so the v5 → v6 step is extended. When a kept global `ff_neutral_c` override
+  exists, it is copied into `heating_curve_neutral_c`. Such an install's curve followed that
+  value before and still follows it. A per-room `ff_neutral_c` override is not copied, since
+  the curve only ever read the global tuning.
+
+**Trade-off.** An install that relied on one `ff_neutral_c` moving both the feedforward and
+the curve now has two knobs to change. That coupling is exactly what the owner asked to
+remove. A development build that already migrated to v6 before this change gets no copy:
+if it had a non-default `ff_neutral_c`, its curve goes back to the 15 °C neutral point until
+the new knob is set. v6 was never released, so no released install is affected.

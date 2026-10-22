@@ -81,6 +81,7 @@ from .tuning import (
     global_controller,
     global_controller_dict,
     global_overrides,
+    heating_curve_preview,
     knob_names,
     knob_values,
     persisted_global_overrides,
@@ -108,6 +109,7 @@ WS_SET_MODE: str = f"{DOMAIN}/set_mode"
 WS_GET_TUNING: str = f"{DOMAIN}/get_tuning"
 WS_SET_TUNING: str = f"{DOMAIN}/set_tuning"
 WS_SET_HP_DHW: str = f"{DOMAIN}/set_hp_dhw"
+WS_PREVIEW_HEATING_CURVE: str = f"{DOMAIN}/preview_heating_curve"
 
 # Websocket error codes.
 _ERR_NOT_FOUND: str = "not_found"
@@ -748,6 +750,7 @@ def async_register_ws(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_mode)
     websocket_api.async_register_command(hass, ws_get_tuning)
     websocket_api.async_register_command(hass, ws_set_tuning)
+    websocket_api.async_register_command(hass, ws_preview_heating_curve)
     websocket_api.async_register_command(hass, ws_set_hp_dhw)
 
 
@@ -957,6 +960,81 @@ def ws_get_tuning(
     )
     result = _tuning_result(entry, open_max_pct=open_max)
     connection.send_result(msg["id"], result.to_dict())
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): WS_PREVIEW_HEATING_CURVE,
+        vol.Optional("values", default={}): dict,
+    }
+)
+@callback
+def ws_preview_heating_curve(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Evaluate the heating-water curve for a draft of the global tuning.
+
+    Issue #35: the panel shows the curve at a few outdoor temperatures next to
+    the Heating water knobs, so a user can compare it with the pump's own
+    curve — also for unsaved edits. ``values`` are global knob values laid
+    over the effective global tuning (``None`` = back to the default), checked
+    exactly like ``set_tuning`` but never persisted. A draft that fails the
+    checks is a normal answer here, not an error: the reply carries the
+    message in ``error`` and no points.
+
+    Args:
+        hass: The running Home Assistant instance.
+        connection: The active websocket connection.
+        msg: The decoded request message with an optional ``values`` dict.
+
+    Returns:
+        None. ``{"points": [{"t_out_c", "target_c"}, ...], "min_c", "max_c",
+        "error"}`` is sent through ``connection.send_result``.
+    """
+    coordinator = _resolve_coordinator(hass)
+    if coordinator is None:
+        connection.send_error(msg["id"], _ERR_NOT_FOUND, "No Tortoise-UFH entry loaded")
+        return
+
+    entry = coordinator.config_entry
+    open_max = flicker_open_max_pct(
+        entry.data.get(CONF_ROOMS, []),
+        current_value=global_controller(entry).hp_flicker_min_open_pct,
+    )
+    knob_set = set(knob_names())
+    merged = {
+        key: value
+        for key, value in global_controller_dict(entry).items()
+        if key in knob_set
+    }
+    try:
+        coerced = coerce_tuning_values(
+            dict(msg["values"]), room_scope=False, open_max_pct=open_max
+        )
+        for field_name, value in coerced.items():
+            if value is None:
+                merged.pop(field_name, None)
+            else:
+                merged[field_name] = value
+        config = ControllerConfig(**merged)
+    except (TypeError, ValueError) as err:
+        connection.send_result(
+            msg["id"],
+            {"points": [], "min_c": None, "max_c": None, "error": str(err)},
+        )
+        return
+    connection.send_result(
+        msg["id"],
+        {
+            "points": heating_curve_preview(config),
+            "min_c": config.heating_supply_min_c,
+            "max_c": config.heating_supply_max_c,
+            "error": None,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

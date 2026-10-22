@@ -187,11 +187,12 @@ Reiter:
 - **Abstimmung** — globale Einstellungen + vereinzelte Übersteuerungen je Raum (§8),
   seit v0.8.0 als **Liste von Parametern in thematischen Gruppen** (PI-Regler und
   Trend / Komfortband und Ventil / Wetterglied / Zusatzquelle / Kondensationsschutz /
-  Wärmepumpe — Wasser) mit vollständigen Namen. Die Auswahl des Bereichs (**Global**
+  Heizwasser / Kühlwasser) mit vollständigen Namen. Die Auswahl des Bereichs (**Global**
   oder ein konkreter Raum) erfolgt über **Reiter** oben (seit v0.10.1 — früher Chips).
   Bei jedem Parameter ein **„i“**-Symbol mit Erläuterung (mit der Maus überfahren,
-  klicken oder tippen). Die Gruppe „Wärmepumpe — Wasser“ ist nur im Bereich Global
-  sichtbar (§8).
+  klicken oder tippen). Die Gruppen „Heizwasser“ und „Kühlwasser“ sind nur im Bereich
+  Global sichtbar (§8); unter den Heizwasser-Parametern steht eine **Kurvenvorschau**
+  (Issue #35).
 - **Zusatzquelle** — je Raum mit Zusatzquelle: Art, Gruppe (Multisplit), Befehl,
   Ist-Zustand der `climate`-Entität, Dwell-Timer, **erlaubte Zeiten** (Ruhezeiten-
   Fenster oder „immer“ — §10), Meldungen, Link zur Entität und die Verknüpfung
@@ -325,8 +326,8 @@ wählen (Reiter oben), übersteuern Sie einzelne Parameter nur für diesen — e
 übersteuerter Parameter erhält die Markierung „übersteuert“ und die Schaltfläche
 **„Auf global zurücksetzen“**. Seit v0.8.0 sind die Parameter in **thematische
 Gruppen** geordnet (eine Liste unter der anderen), und die Namen sind vollständig,
-ohne Abkürzungen. Die Gruppe **„Wärmepumpe — Wasser“** ist ausschließlich global — die
-Wasser-Sollwerte betreffen das gesamte Gebäude, daher hat eine Übersteuerung je Raum
+ohne Abkürzungen. Die Gruppen **„Heizwasser“** und **„Kühlwasser“** sind ausschließlich
+global — die Wasser-Sollwerte betreffen das gesamte Gebäude, daher hat eine Übersteuerung je Raum
 keinen physikalischen Sinn und wird abgelehnt. **Hinweis: Das Speichern der Abstimmung
 lädt den Regler neu — der PID-Integrator wird auf null gesetzt.**
 
@@ -361,7 +362,7 @@ Standard“** — setzen Sie ihn zurück, sofern Sie ihn nicht bewusst gewählt 
 | Parameter | Einheit | Standard | Was er bewirkt und wann man ihn ändert |
 |---|---|---|---|
 | **Wettervorsteuerung aktiviert** (`outdoor_ff_enabled`) | — | aus | Wettervorsteuerung: fügt eine Grundöffnung des Ventils basierend auf der Außentemperatur hinzu, bevor der Raum Zeit hat auszukühlen. Nützlich bei großen Glasflächen und Kälteeinbrüchen. Standardmäßig aus. |
-| **Neutrale Außentemperatur der Vorsteuerung** (`ff_neutral_c`) | °C | 15 | Außentemperatur, bei der das Wetterglied null ist; darunter fügt jede 1 K Kälte Öffnung gemäß der FF-Verstärkung hinzu. Standard 15 °C. |
+| **Neutrale Außentemperatur der Vorsteuerung** (`ff_neutral_c`) | °C | 15 | Außentemperatur, bei der das Wetterglied null ist; darunter fügt jede 1 K Kälte Öffnung gemäß der FF-Verstärkung hinzu. Verschiebt die Heizwasserkurve nicht (sie hat eine eigene neutrale Temperatur — Issue #35). Standard 15 °C. |
 | **Verstärkung der Vorsteuerung** (`ff_gain_pct_per_k`) | %/K | 1 | Wie viel Prozent Öffnung das Wetterglied je 1 K unterhalb der neutralen Temperatur hinzufügt. Standard 1 %/K. |
 | **Obergrenze der Vorsteuerung** (`ff_max_pct`) | % | 20 | Obergrenze für das Wetterglied — die Vorsteuerung fügt nie mehr als diesen Prozentsatz an Öffnung hinzu. Standard 20 %. |
 
@@ -382,14 +383,33 @@ Standard“** — setzen Sie ihn zurück, sofern Sie ihn nicht bewusst gewählt 
 | **Sicherheitsmarge über dem Taupunkt** (`dew_margin_k`) | K | 1,5 | Kühlung: solange der Vorlauf mindestens so viele K über dem Taupunkt liegt, läuft das Ventil uneingeschränkt; näher am Taupunkt wird der Durchfluss gedrosselt (Kondensationsschutz am Boden). Standard 1,5 K (die Wärmepumpe hält das Wasser 2 K über dem Taupunkt, normale Verzögerung des Wassers drosselt also nicht); erhöhen Sie ihn, falls Sie jemals Feuchtigkeit sehen. |
 | **Rampenbreite der Kühldrosselung** (`dew_ramp_k`) | K | 2 | Breite der Drosselrampe unterhalb der Taupunkt-Marge: über diese Spanne fällt der Durchfluss linear von 100 % auf 0. Kleiner = schärferes Abschneiden. Standard 2 K. |
 
-**Wärmepumpe — Wasser (nur global; wirkt ausschließlich mit konfigurierter Anbindung —
+**Heizwasser — Wärmepumpe (nur global; wird nur bei konfigurierter Heiz-Sollwert-Entität
+geschrieben — §11)**
+
+Kurve: `Basis + Steigung × max(0, neutrale Temperatur − Außentemperatur)`, begrenzt auf
+`[Minimum, Maximum]`. Unter den Parametern zeigt das Panel eine **Kurvenvorschau** — den
+Wasser-Sollwert bei +15 / +5 / −5 / −15 °C außen (auf 0,1 °C), von der Integration aus den
+aktuellen, auch noch ungespeicherten Werten berechnet. Vergleichen Sie sie mit der Kurve Ihrer
+Pumpe, bevor Sie die Heiz-Sollwert-Entität verbinden. Beispiel: Die Pumpe liefert 25 °C bei
++15 °C und 32 °C bei −15 °C → Basis 25 °C, neutrale Temperatur 15 °C, Steigung
+7/30 ≈ **0,23 K/K**.
+
+| Parameter | Einheit | Standard | Was er bewirkt und wann man ihn ändert |
+|---|---|---|---|
+| **Neutrale Außentemperatur der Heizkurve** (`heating_curve_neutral_c`) | °C | 15 | Außentemperatur, bei der die Kurve genau die Basis liefert; darunter steigt der Sollwert entlang der Steigung. Eigener Parameter der Kurve (seit Issue #35) — die neutrale Temperatur der Ventil-Vorsteuerung verschiebt sie nicht mehr. Standard 15 °C. |
+| **Basistemperatur Heizwasser** (`heating_supply_base_c`) | °C | 26 | Heizungsvorlauf bei der neutralen Temperatur der Kurve. Muss zwischen Minimum und Maximum liegen. Standardmäßig folgt die Pumpe ihrer eigenen Kurve — der Wert wird nur bei konfigurierter Heiz-Sollwert-Entität geschrieben. Standard 26 °C. |
+| **Kurvensteigung Heizwasser** (`heating_supply_slope`) | K/K | 0,5 | Um wie viele Kelvin der Heizwasser-Sollwert je 1 K Außentemperatur unterhalb des Neutralpunkts der Kurve steigt. Schrittweite **0,01** (seit Issue #35, vorher 0,1). Standard 0,5 K/K; typisch 0,2–0,8 für ein gut gedämmtes Fußbodenheizungshaus. |
+| **Minimale Heizwassertemperatur** (`heating_supply_min_c`) | °C | 20 | Untere Grenze der Kurve (20–35 °C). Muss unter dem Maximum liegen. Standard 20 °C. |
+| **Maximale Heizwassertemperatur** (`heating_supply_max_c`) | °C | 40 | Obere Grenze der Kurve (25–40 °C). Eine reine Fußbodenheizung will oft weniger (Estrich). Standard 40 °C. |
+
+**Kühlwasser — Wärmepumpe (nur global; wirkt ausschließlich mit konfigurierter Anbindung —
 §11)**
 
 | Parameter | Einheit | Standard | Was er bewirkt und wann man ihn ändert |
 |---|---|---|---|
 | **Basistemperatur Kühlwasser** (`cooling_supply_base_c`) | °C | 15 | Der an die Wärmepumpe geschriebene Kühlwasser-Sollwert, während das Haus kühlt: Der geschriebene Wert ist das Maximum aus dieser Basis und dem globalen sicheren Taupunkt — nie unter dem Taupunkt. Nur aktiv, wenn die Kühl-Sollwert-Entität konfiguriert ist (Optionen → Wärmepumpe). Globaler Parameter — kann nicht je Raum übersteuert werden. Standard 15 °C. |
-| **Basistemperatur Heizwasser** (`heating_supply_base_c`) | °C | 26 | Heizungsvorlauf bei der neutralen Außentemperatur (Parameter „Neutrale Außentemperatur der Vorsteuerung“, Standard 15 °C). Darunter steigt der Sollwert entlang der Kurvensteigung; das Ergebnis wird auf 20–40 °C begrenzt. Nur an die Pumpe geschrieben, wenn die Heiz-Sollwert-Entität konfiguriert ist — standardmäßig folgt die Pumpe ihrer eigenen Kurve. Globaler Parameter. Standard 26 °C. |
-| **Kurvensteigung Heizwasser** (`heating_supply_slope`) | K/K | 0,5 | Um wie viele Kelvin der Heizwasser-Sollwert je 1 K Außentemperatur unterhalb des Neutralpunkts steigt. Standard 0,5 K/K; typisch 0,3–0,8 für ein gut gedämmtes Fußbodenheizungshaus. |
+
+In derselben Gruppe stehen die Parameter von „Kühlstart erzwingen“ (§11).
 
 ## 9. Flächenkühlung und Kondensation
 
@@ -599,12 +619,15 @@ den Taupunkt (issue #5). Bewusst gewöhnliche Rundung, nicht „immer aufwärts�
 bei einer Änderung ≥ 0,5 K, alle ~45 min erneut erzwungen.
 
 **Heizwasser-Sollwert (optional):** eine einfache Wetterkurve — Basis + Steigung ×
-Unterschreitung der neutralen Temperatur, begrenzt auf 20–40 °C (§8). Ohne einen
+Unterschreitung der neutralen Temperatur der Kurve, begrenzt auf Minimum und Maximum des
+Heizwassers (Standard 20–40 °C; §8). Ohne einen
 Außentemperatur-Messwert im jeweiligen Zyklus wird nichts geschrieben (die Pumpe bleibt
 beim letzten Sollwert — ihre Firmware hat eigene Grenzen). Der Heiz-Sollwert wird mit
 derselben gewöhnlichen Rundung wie beim Kühlen auf den Schritt der Entität gerundet.
 Bevor Sie die Heiz-Entität angeben, vergleichen Sie die Tortoise-Kurve mit der Kurve
-Ihrer eigenen Pumpe.
+Ihrer eigenen Pumpe — die Vorschau steht im Reiter **Abstimmung** unter der Gruppe
+„Heizwasser“ und bei konfigurierter Entität auch im Reiter **Wärmepumpe** neben dem
+Heizwasser-Sollwert.
 
 **WW-Schalter (Reiter Wärmepumpe):** fügt den Teil „+DHW“ der Modus-Entität hinzu oder
 entfernt ihn (z. B. „Heat only“ ↔ „Heat+DHW“) — das ist eine manuelle Anforderung
@@ -621,7 +644,8 @@ Aktivieren senkt Tortoise — sobald es die Pumpe im Stillstand mit echtem Bedar
 geschriebenen Sollwert für einen Zyklus auf den taupunktsicheren Taupunkt, um den Verdichter zu
 lösen, und stellt danach sofort den normalen Sollwert wieder her. Ergebnis: kälteres
 Durchschnittswasser bei weiterhin taupunktsicherem Rücklauf. **Aktivieren und einstellen** Sie es
-im Reiter **Feineinstellung**, Gruppe **„Kühlstart erzwingen“**: der Ein/Aus-Schalter plus fünf
+im Reiter **Feineinstellung**, Gruppe **„Kühlwasser“** (bis Issue #35: „Kühlstart
+erzwingen“): der Ein/Aus-Schalter plus fünf
 globale Regler (angestrebtes Totband, min. Gesamtöffnung der Kreise, Verzögerung vor dem
 Erzwingen, Mindestabstand zwischen Starts, Obergrenze der Starts pro Stunde). Ab v0.14.0 greift
 eine **Bedarfsschwelle**: ein Start wird nur erzwungen, wenn die kühlenden Räume zusammen genug
@@ -746,6 +770,19 @@ für das ganze Haus.
 
 **Versionsverlauf / Migrationen**
 
+- **Nächste Version (Issue #35)** — **Heizwasserkurve mit eigenen Parametern und
+  Vorschau**: Die Kurvensteigung hat die Schrittweite **0,01 K/K** (vorher 0,1 — z. B.
+  0,23 K/K für eine Pumpe mit 25 °C bei +15 °C / 32 °C bei −15 °C). Die Kurve hat eine
+  eigene **neutrale Temperatur** (`heating_curve_neutral_c`, Standard 15 °C) — bisher nutzte
+  sie die neutrale Temperatur der Ventil-Vorsteuerung, sodass eine Änderung der
+  Vorsteuerung die Wasserkurve unbemerkt verschob. Die Grenzen 20 / 40 °C sind jetzt die
+  Parameter **Minimum / Maximum des Heizwassers** (gleicher Standard; das Maximum lässt sich
+  für eine reine Fußbodenheizung senken). Im Reiter Abstimmung wurde die Gruppe
+  „Wärmepumpe — Wasser“ in **„Heizwasser“** (Kurve und ihre Vorschau bei
+  +15 / +5 / −5 / −15 °C) und **„Kühlwasser“** (Kühlbasis + Kühlstart erzwingen) geteilt.
+  Eine neue Installation verhält sich wie bisher. Die Migration **v5 → v6** (dieselbe wie für
+  Issue #31) übernimmt eine gespeicherte globale neutrale Temperatur der Vorsteuerung in den
+  neuen Kurvenparameter, sodass sich die Kurve keiner Installation verschiebt.
 - **Nächste Version (Issue #32)** — **neue Standardwerte für Zusatzquelle, Taupunkt
   und Kühlstart-Erzwingung**, erprobt an einem Haus über eine ganze Kühlsaison und den
   Beginn der Heizsaison: Zuschaltschwelle 1,0 → **1,5 K**, Mindestlauf-/-stillstandszeit

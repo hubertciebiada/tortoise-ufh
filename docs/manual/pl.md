@@ -172,10 +172,11 @@ Zakładki:
 - **Strojenie** — nastawy globalne + rzadkie nadpisania per pokój (§8), od v0.8.0
   jako **lista parametrów w grupach tematycznych** (Regulator PI i trend / Pasmo
   komfortu i zawór / Człon pogodowy / Szybkie źródło / Ochrona przed kondensacją /
-  Pompa ciepła — woda) z pełnymi nazwami. Wybór zakresu (**Globalne** lub konkretny
+  Woda grzania / Woda chłodzenia) z pełnymi nazwami. Wybór zakresu (**Globalne** lub konkretny
   pokój) to **zakładki** u góry (od v0.10.1 — wcześniej chipy). Przy każdym parametrze
-  ikona **„i"** z objaśnieniem (najedź myszą, kliknij lub tapnij). Grupa „Pompa ciepła —
-  woda" jest widoczna tylko w zakresie Globalne (§8).
+  ikona **„i"** z objaśnieniem (najedź myszą, kliknij lub tapnij). Grupy „Woda grzania" i
+  „Woda chłodzenia" są widoczne tylko w zakresie Globalne (§8); pod parametrami wody
+  grzania jest **podgląd krzywej** (issue #35).
 - **Wspomaganie** — per pokój z szybkim źródłem: rodzaj, grupa (multisplit),
   komenda, stan rzeczywisty encji `climate`, timer dwell, **dozwolone godziny**
   (okno cichych godzin albo „zawsze" — §10), flagi, link do encji i skrót „dostrój".
@@ -299,8 +300,8 @@ Zakładka **Strojenie** pokazuje nastawy **globalne**; wybierając pokój (chips
 nadpisujesz pojedyncze parametry tylko dla niego — nadpisany knob dostaje znaczek
 „nadpisane" i przycisk **„Wróć do globalnej"**. Od v0.8.0 parametry są ułożone
 w **grupy tematyczne** (jedna lista pod drugą), a nazwy są pełne, bez skrótowców.
-Grupa **„Pompa ciepła — woda"** jest wyłącznie globalna — nastawy wody dotyczą całego
-budynku, więc nadpisanie per pokój nie ma fizycznego sensu i jest odrzucane.
+Grupy **„Woda grzania"** i **„Woda chłodzenia"** są wyłącznie globalne — nastawy wody
+dotyczą całego budynku, więc nadpisanie per pokój nie ma fizycznego sensu i jest odrzucane.
 **Uwaga: zapis strojenia przeładowuje regulator — integrator PID jest zerowany.**
 
 Zapisywane są tylko wartości **różne od domyślnych** (issue #31). Parametr pozostawiony na
@@ -333,7 +334,7 @@ ostrzegawczy znaczek **„stara domyślna"** — przywróć domyślną, chyba ż
 | Parametr | Jednostka | Domyślnie | Co robi i kiedy ruszać |
 |---|---|---|---|
 | **Człon pogodowy włączony** (`outdoor_ff_enabled`) | — | wył. | Sprzężenie pogodowe: dodaje bazowe otwarcie zaworu zależne od temperatury zewnętrznej, zanim pokój zdąży się wychłodzić. Przydatne przy dużych przeszkleniach i mrozach. Domyślnie wyłączone. |
-| **Temperatura neutralna członu pogodowego** (`ff_neutral_c`) | °C | 15 | Temperatura zewnętrzna, przy której człon pogodowy wynosi zero; poniżej niej każdy 1 K chłodniej dodaje otwarcie według wzmocnienia FF. Domyślnie 15 °C. |
+| **Temperatura neutralna członu pogodowego** (`ff_neutral_c`) | °C | 15 | Temperatura zewnętrzna, przy której człon pogodowy wynosi zero; poniżej niej każdy 1 K chłodniej dodaje otwarcie według wzmocnienia FF. Nie przesuwa krzywej wody grzania (ma ona własną temperaturę neutralną — issue #35). Domyślnie 15 °C. |
 | **Wzmocnienie członu pogodowego** (`ff_gain_pct_per_k`) | %/K | 1 | Ile procent otwarcia dodaje człon pogodowy za każdy 1 K poniżej temperatury neutralnej. Domyślnie 1 %/K. |
 | **Górny limit członu pogodowego** (`ff_max_pct`) | % | 20 | Górny limit członu pogodowego — sprzężenie nigdy nie doda więcej niż tyle procent otwarcia. Domyślnie 20 %. |
 
@@ -354,14 +355,32 @@ ostrzegawczy znaczek **„stara domyślna"** — przywróć domyślną, chyba ż
 | **Margines bezpieczeństwa nad punktem rosy** (`dew_margin_k`) | K | 1,5 | Chłodzenie: gdy zasilanie jest co najmniej o tyle K powyżej punktu rosy, zawór działa bez ograniczeń; bliżej rosy zaczyna się dławienie przepływu (ochrona przed kondensacją na podłodze). Domyślnie 1,5 K (pompa trzyma wodę 2 K nad rosą, więc zwykłe opóźnienie wody nie dławi); zwiększ, jeśli widzisz wilgoć. |
 | **Szerokość rampy dławienia chłodzenia** (`dew_ramp_k`) | K | 2 | Szerokość rampy dławienia poniżej marginesu rosy: na tym odcinku przepływ maleje liniowo od 100 % do 0. Mniejsza wartość = ostrzejsze odcinanie. Domyślnie 2 K. |
 
-**Pompa ciepła — woda (tylko globalnie; działa wyłącznie ze skonfigurowanym
+**Woda grzania — pompa ciepła (tylko globalnie; pisana wyłącznie przy skonfigurowanej encji
+nastawy grzania — §11)**
+
+Krzywa: `baza + nachylenie × max(0, temperatura neutralna − T zewn.)`, obcięta do
+`[minimum, maksimum]`. Pod parametrami panel pokazuje **podgląd krzywej** — nastawę wody
+przy +15 / +5 / −5 / −15 °C na zewnątrz (z dokładnością do 0,1 °C), liczony przez integrację
+z bieżących, także jeszcze niezapisanych wartości. Porównaj go z krzywą swojej pompy, zanim
+podłączysz encję nastawy grzania. Przykład: pompa daje 25 °C przy +15 °C i 32 °C przy
+−15 °C → baza 25 °C, temperatura neutralna 15 °C, nachylenie 7/30 ≈ **0,23 K/K**.
+
+| Parametr | Jednostka | Domyślnie | Co robi i kiedy ruszać |
+|---|---|---|---|
+| **Temperatura neutralna krzywej wody grzania** (`heating_curve_neutral_c`) | °C | 15 | Temperatura zewnętrzna, przy której krzywa daje dokładnie bazę; poniżej niej nastawa rośnie według nachylenia. Własny parametr krzywej (od issue #35) — temperatura neutralna członu pogodowego zaworów już jej nie przesuwa. Domyślnie 15 °C. |
+| **Bazowa temperatura wody grzania** (`heating_supply_base_c`) | °C | 26 | Zasilanie wody grzewczej przy temperaturze neutralnej krzywej. Musi leżeć między minimum a maksimum. Domyślnie pompa jedzie na własnej krzywej — wartość jest pisana tylko przy skonfigurowanej encji nastawy grzania. Domyślnie 26 °C. |
+| **Nachylenie krzywej wody grzania** (`heating_supply_slope`) | K/K | 0,5 | O ile kelwinów rośnie nastawa wody grzania na każdy 1 K temperatury zewnętrznej poniżej temperatury neutralnej krzywej. Krok **0,01** (od issue #35, wcześniej 0,1). Domyślnie 0,5 K/K; typowo 0,2–0,8 dla dobrze ocieplonego domu z podłogówką. |
+| **Minimalna temperatura wody grzania** (`heating_supply_min_c`) | °C | 20 | Dolne ograniczenie krzywej (20–35 °C). Musi być niższe od maksimum. Domyślnie 20 °C. |
+| **Maksymalna temperatura wody grzania** (`heating_supply_max_c`) | °C | 40 | Górne ograniczenie krzywej (25–40 °C). Dla samej podłogówki często warto zejść niżej (wylewka). Domyślnie 40 °C. |
+
+**Woda chłodzenia — pompa ciepła (tylko globalnie; działa wyłącznie ze skonfigurowanym
 sprzężeniem — §11)**
 
 | Parametr | Jednostka | Domyślnie | Co robi i kiedy ruszać |
 |---|---|---|---|
 | **Bazowa temperatura wody chłodzenia** (`cooling_supply_base_c`) | °C | 15 | Nastawa wody chłodzenia pisana do pompy, gdy dom chłodzi: zapisywana wartość to maksimum z tej bazy i globalnego bezpiecznego punktu rosy — nigdy poniżej punktu rosy. Działa tylko przy skonfigurowanej encji nastawy chłodzenia (opcje → Pompa ciepła). Parametr globalny — nie da się go nadpisać per pokój. Domyślnie 15 °C. |
-| **Bazowa temperatura wody grzania** (`heating_supply_base_c`) | °C | 26 | Zasilanie wody grzewczej przy neutralnej temperaturze zewnętrznej (parametr „Temperatura neutralna członu pogodowego", domyślnie 15 °C). Poniżej niej nastawa rośnie według nachylenia krzywej; całość obcinana do 20–40 °C. Pisana do pompy tylko przy skonfigurowanej encji nastawy grzania — domyślnie pompa jedzie na własnej krzywej. Parametr globalny. Domyślnie 26 °C. |
-| **Nachylenie krzywej wody grzania** (`heating_supply_slope`) | K/K | 0,5 | O ile kelwinów rośnie nastawa wody grzania na każdy 1 K temperatury zewnętrznej poniżej temperatury neutralnej. Domyślnie 0,5 K/K; typowo 0,3–0,8 dla dobrze ocieplonego domu z podłogówką. |
+
+W tej samej grupie są parametry wymuszania startu chłodzenia (§11).
 
 ## 9. Chłodzenie podłogowe i kondensacja
 
@@ -555,11 +574,14 @@ zapasem pokrywa najwyżej pół działki luzu. Zapis przy zmianie ≥ 0,5 K, wym
 ponownie co ~45 min.
 
 **Nastawa wody grzania (opcjonalna):** prosta krzywa pogodowa — baza + nachylenie ×
-niedobór względem temperatury neutralnej, obcięta do 20–40 °C (§8). Bez odczytu
+niedobór względem temperatury neutralnej krzywej, obcięta do minimum i maksimum wody
+grzania (domyślnie 20–40 °C; §8). Bez odczytu
 temperatury zewnętrznej w danym cyklu nic nie jest pisane (pompa zostaje na
 ostatniej nastawie — jej firmware ma własne limity). Nastawa grzania jest
 zaokrąglana do kroku encji tym samym zwykłym zaokrągleniem co chłodzenie. Zanim
-wskażesz encję grzania, porównaj krzywą Tortoise z krzywą własnej pompy.
+wskażesz encję grzania, porównaj krzywą Tortoise z krzywą własnej pompy — podgląd jest
+w zakładce **Strojenie** pod grupą „Woda grzania", a przy skonfigurowanej encji także w
+zakładce **Pompa ciepła** obok nastawy wody grzania.
 
 **Przełącznik CWU (zakładka Pompa ciepła):** dokłada/zdejmuje człon „+DHW" w encji
 trybu (np. „Heat only" ↔ „Heat+DHW") — to ręczna prośba „dogrzej wodę teraz /
@@ -574,7 +596,8 @@ wysoko, a podłoga niedodostarcza. Po włączeniu Tortoise — widząc pompę w 
 zapotrzebowaniem — na jeden cykl obniża zapisaną nastawę do bezpiecznego dla rosy punktu rosy,
 żeby wytrącić sprężarkę, po czym natychmiast przywraca normalną nastawę. Efekt: chłodniejsza
 średnia woda przy wciąż bezpiecznym dla rosy powrocie. **Włączasz i stroisz** to na zakładce
-**Strojenie**, w grupie **„Wymuszanie startu chłodzenia"**: przełącznik on/off plus pięć
+**Strojenie**, w grupie **„Woda chłodzenia"** (do issue #35: „Wymuszanie startu
+chłodzenia"): przełącznik on/off plus pięć
 globalnych pokręteł (docelowa histereza, min. suma otwarcia pętli, zwłoka przed wymuszeniem,
 min. przerwa między startami, limit startów na godzinę). Od v0.14.0 działa **bramka popytu**:
 start jest wymuszany tylko, gdy pokoje wołające o chłód razem zadają dość otwarcia zaworów —
@@ -690,6 +713,18 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **Następne wydanie (issue #35)** — **krzywa wody grzania z własnymi parametrami i
+  podglądem**: nachylenie krzywej ma krok **0,01 K/K** (wcześniej 0,1 — np. 0,23 K/K dla
+  pompy 25 °C przy +15 °C / 32 °C przy −15 °C). Krzywa ma własną **temperaturę neutralną**
+  (`heating_curve_neutral_c`, domyślnie 15 °C) — dotąd korzystała z temperatury neutralnej
+  członu pogodowego zaworów, więc zmiana członu pogodowego po cichu przesuwała krzywą wody.
+  Granice 20 / 40 °C są teraz parametrami **minimum / maksimum wody grzania** (to samo
+  domyślnie; maksimum można obniżyć dla samej podłogówki). W zakładce Strojenie grupa
+  „Pompa ciepła — woda" rozdzieliła się na **„Woda grzania"** (krzywa i jej podgląd przy
+  +15 / +5 / −5 / −15 °C) i **„Woda chłodzenia"** (baza chłodzenia + wymuszanie startu
+  chłodzenia). Nowa instalacja działa tak samo jak wcześniej. Migracja **v5 → v6** (ta
+  sama co dla issue #31) przepisuje zapisaną globalną temperaturę neutralną członu
+  pogodowego do nowego parametru krzywej, więc krzywa żadnej instalacji się nie przesuwa.
 - **Następne wydanie (issue #32)** — **nowe domyślne nastawy wspomagania, rosy i
   wymuszania startu chłodzenia**, sprawdzone na jednym domu przez cały sezon chłodzenia
   i początek grzania: próg dogrzewu 1,0 → **1,5 K**, minimalny czas pracy / postoju

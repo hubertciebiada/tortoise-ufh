@@ -200,7 +200,7 @@ knobs come from `tortoise_ufh.config.ControllerConfig` (a frozen dataclass, `__p
 | `deadband_c` | 0.3 | K | comfort band |
 | `valve_floor_pct` | 15.0 | % | minimum open when calling for heat |
 | `outdoor_ff_enabled` | False | — | optional feedforward toggle |
-| `ff_neutral_c` | 15.0 | °C | FF neutral outdoor temperature (knob since 2026-07-09) |
+| `ff_neutral_c` | 15.0 | °C | FF neutral outdoor temperature (knob since 2026-07-09; valve FF only — the heating-water curve has its own `heating_curve_neutral_c` since issue #35) |
 | `ff_gain_pct_per_k` | 1.0 | %/K | FF gain |
 | `ff_max_pct` | 20.0 | % | FF cap |
 | `boost_offset_c` | 1.5 | K | split engage threshold (must be > `deadband_c`; 1.0 before issue #32) |
@@ -212,6 +212,12 @@ knobs come from `tortoise_ufh.config.ControllerConfig` (a frozen dataclass, `__p
 | `dew_ramp_k` | 2.0 | K | S2 graduated ramp width |
 | `cycle_seconds` | 300.0 | s | control cycle (= PID `dt`) |
 | `valve_write_threshold_pct` | 5.0 | % | HA write dead-zone |
+
+The optional heat-pump link reads its own global-only water knobs, never the room control law:
+`cooling_supply_base_c` (15 °C) and the heating-water curve `t = clip(heating_supply_base_c +
+heating_supply_slope · max(0, heating_curve_neutral_c − T_out), heating_supply_min_c,
+heating_supply_max_c)` (26 °C, 0.5 K/K, 15 °C, 20 °C, 40 °C; `core/hp_link.py::heating_curve`,
+evaluated for the panel preview by `heating_curve_points` at +15/+5/−5/−15 °C — issue #35).
 
 > **Why the 2026-07-09 retune (C1, DECISIONS §8):** the original `ki = 0.02` meant
 > Ti ≈ 7 min against a τ = 3–6 h slab — the integrator saturated during every approach and the
@@ -809,3 +815,4 @@ substitutes for the anticipatory value MPC would provide, at a fraction of the c
 | 2026-10-12 | S6 removed (DECISIONS §34, v0.22.3): the temperature-based no-flow watchdog (`loop_no_flow`, its integrator freeze, circulation gating, `binary_sensor.flow_fault`) and the `test_actuation` self-test are deleted — loop temperatures can prove flow but not its absence. Config migration v4→v5 strips `flow_epsilon_k`, `flow_open_threshold_pct`, `flow_response_window_min` (globals and per-room overrides). `RoomReport` drops the S6 fields and gains `loop_count`. |
 | 2026-10-22 | Tuning persisted as overrides (DECISIONS §35, issue #31): the global `ControllerConfig` was stored as a FULL snapshot (seeded into `entry.data` at setup, rewritten whole into `entry.options` by every save), so retuned defaults (§8 gains, the K2b write threshold) never reached existing installs — a live house ran kp 8 / ki 0.02 / kt 6 and a 2 pp threshold for months. Now only user-facing knobs differing from the library default are stored (`core/config.py::controller_overrides`), `null` resets a global knob to the default, and config migration v5→v6 drops non-knob fields and every value equal to a current or earlier shipped default (`SUPERSEDED_CONTROLLER_DEFAULTS`). The control law is unchanged. |
 | 2026-10-22 | Field-validated defaults (DECISIONS §36, issue #32; one house, a full cooling season + the start of heating): `boost_offset_c` 1.0→1.5 K, `fast_min_on/off_minutes` 10/10→30/31, `fast_target_offset_k` 1→0 (the split gets the plain setpoint), `dew_margin_k` 2→1.5 K (the local throttle ramp now ends 0.5 K BELOW the pump's unchanged 2 K global dew floor and starts at the dew point — ordinary water lag on a rising dew point no longer throttles; it stays the backstop), `cooling_supply_base_c` 18→15 °C, `dry_dew_max_c` 17→16 °C, flicker `band_k` 1.5→2.5, `stuck` 10→30 min, `min_off` 20→60 min, `max_starts_per_h` 2→1, `min_open_pct` 250→350. `dry_enabled`/`hp_flicker_enabled` stay opt-in; heating curve and FF untouched. The old values join `SUPERSEDED_CONTROLLER_DEFAULTS`, so the (still unreleased) v5→v6 migration drops a frozen copy. No contract change. |
+| 2026-10-22 | Heating-water curve knobs (DECISIONS §37, issue #35): the curve gets its own neutral point `heating_curve_neutral_c` (15 °C, it used to read the valve feedforward's `ff_neutral_c`) and its clamps become knobs `heating_supply_min_c` / `heating_supply_max_c` (20 / 40 °C, the former `HEATING_SUPPLY_MIN_C` / `MAX_C` constants, removed); `min < max` and `min ≤ base ≤ max` are validated. The slope UI step is 0.01 K/K. The (still unreleased) v5→v6 migration copies a stored global `ff_neutral_c` override into `heating_curve_neutral_c`, so no curve moves. New read-only WS `preview_heating_curve` + `heat_pump.heating.curve` in `get_live` feed the panel's curve preview. Fresh-install behaviour unchanged; room control law untouched. |

@@ -491,8 +491,11 @@ pompy (§8.10 w mocy). Sprzężenie jest w całości **opt-in** — bez skonfigu
   `max(cooling_supply_base_c, globalny bezpieczny punkt rosy)` — woda nigdy poniżej
   strefy kondensacji. Próg zapisu 0,5 K + okresowy re-assert (~45 min).
 - **Nastawa wody grzania** (opcjonalna encja number): prosta krzywa pogodowa
-  `heating_supply_base_c + heating_supply_slope · max(0, ff_neutral_c − T_zewn)`,
-  obcięta do 20–40 °C. Domyślnie NIEskonfigurowana — pompa jedzie na własnej krzywej
+  `heating_supply_base_c + heating_supply_slope · max(0, heating_curve_neutral_c − T_zewn)`,
+  obcięta do `[heating_supply_min_c, heating_supply_max_c]` (domyślnie 20–40 °C). Od
+  2026-10-22 (issue #35, DECISIONS §37) krzywa ma własny punkt neutralny (wcześniej
+  współdzielony `ff_neutral_c` członu pogodowego zaworów) i nastawialne granice; panel
+  pokazuje podgląd krzywej przy +15/+5/−5/−15 °C. Domyślnie NIEskonfigurowana — pompa jedzie na własnej krzywej
   (default właściciela, w pełni wspierany).
 - **Ręczny przełącznik CWU** (panel, WS `set_hp_dhw`): dokłada/zdejmuje człon `+DHW`;
   zdjęcie flagi z `DHW only` jest odmawiane (brak kierunku bazowego). Automatyka CWU może

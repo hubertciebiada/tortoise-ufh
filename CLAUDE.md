@@ -57,7 +57,11 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   you retune a `ControllerConfig` default, add the OLD value to
   `core/config.py::SUPERSEDED_CONTROLLER_DEFAULTS`: the v5→v6 migration drops a snapshot's
   frozen copy and the panel marks a stored one "old default" (issue #32, DECISIONS §36,
-  retuned the fast-source / dew-point / flicker defaults that way); the knob
+  retuned the fast-source / dew-point / flicker defaults that way). The heat-pump water knobs
+  are global-only (`HP_GLOBAL_ONLY_KNOBS`); the heating-water curve has its OWN neutral point
+  and clamps (`heating_curve_neutral_c`, `heating_supply_min_c`/`max_c`, issue #35, DECISIONS
+  §37 — never read `ff_neutral_c` for it), and the panel previews it via the read-only
+  `preview_heating_curve` WS (`core/hp_link.py::heating_curve_points`); the knob
   specs (`CONTROLLER_NUMBER_KNOBS`) and `CONF_CONTROLLER` live in `const.py`. Imports the
   core via `.core`; is imported by nothing.
 - **Panel** — `custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js`. Self-contained

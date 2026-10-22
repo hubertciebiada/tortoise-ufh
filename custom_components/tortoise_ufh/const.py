@@ -347,8 +347,14 @@ CONTROLLER_NUMBER_KNOBS: tuple[tuple[str, float, float, float], ...] = (
     # Heat-pump water setpoints (B2, 2026-07-12): building-level knobs read
     # only by the opt-in heat-pump link; see HP_GLOBAL_ONLY_KNOBS below.
     ("cooling_supply_base_c", 10.0, 25.0, 0.5),
+    # Heating-water curve (issue #35, 2026-10-22): its own neutral point and
+    # clamps; the slope steps by 0.01 so a pump curve such as 25 degC @ +15 /
+    # 32 degC @ -15 (7/30 = 0.23 K/K) can be matched.
+    ("heating_curve_neutral_c", -30.0, 40.0, 0.5),
     ("heating_supply_base_c", 20.0, 40.0, 0.5),
-    ("heating_supply_slope", 0.0, 2.0, 0.1),
+    ("heating_supply_slope", 0.0, 2.0, 0.01),
+    ("heating_supply_min_c", 20.0, 35.0, 0.5),
+    ("heating_supply_max_c", 25.0, 40.0, 0.5),
     # Cooling setpoint-flicker timing (issue #7, 2026-07-15): global-only knobs
     # read by the opt-in SetpointFlicker; see HP_GLOBAL_ONLY_KNOBS below.
     ("hp_flicker_band_k", 0.5, 3.0, 0.1),
@@ -408,6 +414,9 @@ CONTROLLER_KNOB_UNITS: dict[str, str] = {
     "cooling_supply_base_c": "°C",
     "heating_supply_base_c": "°C",
     "heating_supply_slope": "K/K",
+    "heating_curve_neutral_c": "°C",
+    "heating_supply_min_c": "°C",
+    "heating_supply_max_c": "°C",
     "hp_flicker_band_k": "K",
     "hp_flicker_min_open_pct": "%",
     "hp_flicker_stuck_minutes": "min",
@@ -424,6 +433,9 @@ HP_GLOBAL_ONLY_KNOBS: frozenset[str] = frozenset(
         "cooling_supply_base_c",
         "heating_supply_base_c",
         "heating_supply_slope",
+        "heating_curve_neutral_c",
+        "heating_supply_min_c",
+        "heating_supply_max_c",
         "hp_flicker_enabled",
         "hp_flicker_band_k",
         "hp_flicker_min_open_pct",
@@ -433,7 +445,8 @@ HP_GLOBAL_ONLY_KNOBS: frozenset[str] = frozenset(
     }
 )
 """Knobs that exist ONLY in the global tuning scope (B2, 2026-07-12; extended
-with the flicker timing, issue #7 2026-07-15).
+with the flicker timing, issue #7 2026-07-15, and the heating-curve neutral
+point and clamps, issue #35 2026-10-22).
 
 The heat-pump water setpoints and the setpoint-flicker timing are
 building-level physics — a per-room override could be set but would have zero

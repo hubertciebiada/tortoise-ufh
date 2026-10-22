@@ -55,8 +55,7 @@ from .dew_point import (
 )
 from .fast_source import FastSourceMachine, window_allows
 from .hp_link import (
-    HEATING_SUPPLY_MAX_C,
-    HEATING_SUPPLY_MIN_C,
+    HEATING_CURVE_PREVIEW_OUTDOOR_C,
     HEISHAMON_MODE_OPTIONS,
     FlickerDecision,
     SetpointFlicker,
@@ -65,6 +64,7 @@ from .hp_link import (
     dhw_option,
     direction_option,
     heating_curve,
+    heating_curve_points,
     round_to_step_c,
 )
 from .manifold import (
@@ -149,8 +149,7 @@ __all__ = [
     "DEFAULT_DT_HEATING",
     "DEFAULT_HOME_SETPOINT_C",
     "DEW_MARGIN_DEFAULT_K",
-    "HEATING_SUPPLY_MAX_C",
-    "HEATING_SUPPLY_MIN_C",
+    "HEATING_CURVE_PREVIEW_OUTDOOR_C",
     "HEISHAMON_MODE_OPTIONS",
     "K_PEX",
     "LOOP_ROOM_FLAGS",
@@ -234,6 +233,7 @@ __all__ = [
     "dhw_option",
     "direction_option",
     "heating_curve",
+    "heating_curve_points",
     "heavy_construction",
     "hot_july_floor_cooling",
     "leaky_old_house",

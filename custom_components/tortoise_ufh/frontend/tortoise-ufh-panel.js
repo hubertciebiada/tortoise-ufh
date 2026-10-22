@@ -104,6 +104,7 @@ const WS = {
   getTuning: "tortoise_ufh/get_tuning",
   setTuning: "tortoise_ufh/set_tuning",
   setHpDhw: "tortoise_ufh/set_hp_dhw",
+  previewHeatingCurve: "tortoise_ufh/preview_heating_curve",
   // Core recorder commands (read-only history for charts). These are HA
   // built-ins, not part of the tortoise_ufh contract.
   history: "history/history_during_period",
@@ -295,7 +296,8 @@ const STR = {
     tune_grp_weather: "Człon pogodowy (otwarcie zaworu)",
     tune_grp_fast: "Szybkie źródło (split/grzałka)",
     tune_grp_dew: "Ochrona przed kondensacją (chłodzenie)",
-    tune_grp_hp: "Pompa ciepła — woda (tylko globalnie)",
+    tune_grp_cooling_water: "Woda chłodzenia — pompa ciepła (globalne)",
+    tune_grp_heating_water: "Woda grzania — pompa ciepła (globalne)",
     tune_grp_other: "Pozostałe",
     tune_kp: "Wzmocnienie części proporcjonalnej (P)",
     tune_ki: "Wzmocnienie części całkującej (I)",
@@ -318,6 +320,9 @@ const STR = {
     tune_cooling_supply_base_c: "Bazowa temperatura wody chłodzenia",
     tune_heating_supply_base_c: "Bazowa temperatura wody grzania",
     tune_heating_supply_slope: "Nachylenie krzywej wody grzania",
+    tune_heating_curve_neutral_c: "Temperatura neutralna krzywej wody grzania",
+    tune_heating_supply_min_c: "Minimalna temperatura wody grzania",
+    tune_heating_supply_max_c: "Maksymalna temperatura wody grzania",
     val_th_command: "Komenda",
     val_th_raw: "Surowy",
     val_th_floor: "Podłoga",
@@ -449,7 +454,8 @@ const STR = {
     tip_knob_ff_neutral_c:
       "Temperatura zewnętrzna, przy której człon pogodowy wynosi zero; " +
       "poniżej niej każdy 1 K chłodniej dodaje otwarcie według wzmocnienia " +
-      "FF. Domyślnie 15 °C.",
+      "FF. Nie przesuwa krzywej wody grzania (ma ona własną temperaturę " +
+      "neutralną). Domyślnie 15 °C.",
     tip_knob_ff_gain_pct_per_k:
       "Ile procent otwarcia dodaje człon pogodowy za każdy 1 K poniżej " +
       "temperatury neutralnej. Domyślnie 1 %/K.",
@@ -463,16 +469,33 @@ const STR = {
       "nastawy chłodzenia (opcje → Pompa ciepła). Parametr globalny — nie da " +
       "się go nadpisać per pokój. Domyślnie 15 °C.",
     tip_knob_heating_supply_base_c:
-      "Zasilanie wody grzewczej przy neutralnej temperaturze zewnętrznej " +
-      "(parametr „Temperatura neutralna członu pogodowego”, domyślnie " +
+      "Zasilanie wody grzewczej przy temperaturze neutralnej krzywej " +
+      "(parametr „Temperatura neutralna krzywej wody grzania”, domyślnie " +
       "15 °C). Poniżej niej nastawa rośnie według nachylenia krzywej; całość " +
-      "obcinana do 20–40 °C. Pisana do pompy tylko przy skonfigurowanej " +
-      "encji nastawy grzania — domyślnie pompa jedzie na własnej krzywej. " +
-      "Parametr globalny. Domyślnie 26 °C.",
+      "obcinana do minimum i maksimum wody grzania (domyślnie 20–40 °C). " +
+      "Pisana do pompy tylko przy skonfigurowanej encji nastawy grzania — " +
+      "domyślnie pompa jedzie na własnej krzywej. Parametr globalny. " +
+      "Domyślnie 26 °C.",
     tip_knob_heating_supply_slope:
       "O ile kelwinów rośnie nastawa wody grzania na każdy 1 K temperatury " +
-      "zewnętrznej poniżej temperatury neutralnej. Domyślnie 0,5 K/K; " +
-      "typowo 0,3–0,8 dla dobrze ocieplonego domu z podłogówką.",
+      "zewnętrznej poniżej temperatury neutralnej krzywej. Krok 0,01, żeby " +
+      "odwzorować krzywą pompy: 25 °C przy +15 °C i 32 °C przy −15 °C to " +
+      "7/30 ≈ 0,23 K/K. Domyślnie 0,5 K/K; typowo 0,2–0,8 dla dobrze " +
+      "ocieplonego domu z podłogówką.",
+    tip_knob_heating_curve_neutral_c:
+      "Temperatura zewnętrzna, przy której krzywa wody grzania daje " +
+      "dokładnie bazę; poniżej niej nastawa rośnie według nachylenia. " +
+      "Własny parametr krzywej — zmiana temperatury neutralnej członu " +
+      "pogodowego (zawory) już jej nie przesuwa. Parametr globalny. " +
+      "Domyślnie 15 °C.",
+    tip_knob_heating_supply_min_c:
+      "Dolne ograniczenie krzywej wody grzania: nastawa nigdy nie spadnie " +
+      "poniżej. Musi być niższe od maksimum, a baza musi leżeć między nimi. " +
+      "Parametr globalny. Domyślnie 20 °C.",
+    tip_knob_heating_supply_max_c:
+      "Górne ograniczenie krzywej wody grzania: nastawa nigdy nie przekroczy " +
+      "tej wartości. Dla samej podłogówki często warto zejść poniżej 40 °C " +
+      "(wylewka). Parametr globalny. Domyślnie 40 °C.",
     // Tooltipy szczegółów pokoju (tip_dec_*) i nagłówków tabel (tip_val_* /
     // tip_ast_* / tip_th_*) — treść wspólna z docs/manual/pl.md: zmieniaj razem.
     tip_th_assist:
@@ -605,7 +628,17 @@ const STR = {
     hp_cool_target: "Nastawa wody chłodzenia",
     hp_cool_calc: "max(baza {base}, bezpieczny punkt rosy {dew})",
     hp_heat_target: "Nastawa wody grzania",
-    hp_heat_calc: "krzywa: {base} + {slope} · ({neutral} − T zewn. {tout})",
+    hp_heat_calc:
+      "krzywa: {base} + {slope} · ({neutral} − T zewn. {tout}), w granicach {min}–{max}",
+    hp_curve_cap: "Podgląd krzywej wody grzania",
+    hp_curve_tout: "T zewn.",
+    hp_curve_target: "Woda",
+    hp_curve_unsaved: "uwzględnia niezapisane zmiany",
+    hp_curve_invalid: "Niepoprawne wartości: {detail}",
+    tip_hp_curve:
+      "Nastawa wody grzania, którą Tortoise pisałby przy danej temperaturze " +
+      "zewnętrznej (z ograniczeniem do minimum i maksimum). Porównaj ją z " +
+      "krzywą własnej pompy, zanim podłączysz encję nastawy grzania.",
     hp_not_written: "nie zapisywana w tym trybie",
     hp_not_configured_entity: "encja nieskonfigurowana",
     tip_hp_cool:
@@ -617,8 +650,8 @@ const STR = {
     tip_hp_heat:
       "Opcjonalne: w trybie grzania Tortoise pisze nastawę wody z prostej " +
       "krzywej pogodowej (baza + nachylenie × niedobór względem temperatury " +
-      "neutralnej, obcięte do 20–40 °C). Jeśli encji nie skonfigurujesz, " +
-      "pompa jedzie na własnej krzywej — to domyślne i w pełni wspierane.",
+      "neutralnej krzywej, obcięte do minimum i maksimum — domyślnie " +
+      "20–40 °C). Jeśli encji nie skonfigurujesz, pompa jedzie na własnej krzywej — to domyślne i w pełni wspierane.",
     hp_active_cap: "Pompa dostępna dla podłogówki",
     hp_active_unknown: "nieznane",
     tip_hp_active:
@@ -628,7 +661,6 @@ const STR = {
     hp_writes_paused:
       "Zapisy wstrzymane — żaden pokój nie steruje (Steruje).",
     // Wymuszanie startu chłodzenia (issue #7, 2026-07-15).
-    tune_grp_flicker: "Wymuszanie startu chłodzenia (globalne)",
     tune_hp_flicker_enabled: "Wymuszanie startu chłodzenia",
     tune_hp_flicker_band_k: "Docelowa histereza chłodzenia",
     tune_hp_flicker_min_open_pct: "Min. odbiór: suma otwarcia pętli",
@@ -857,7 +889,8 @@ const STR = {
     tune_grp_weather: "Weather feedforward (valve opening)",
     tune_grp_fast: "Fast source (split/heater)",
     tune_grp_dew: "Condensation protection (cooling)",
-    tune_grp_hp: "Heat pump — water (global only)",
+    tune_grp_cooling_water: "Cooling water — heat pump (global)",
+    tune_grp_heating_water: "Heating water — heat pump (global)",
     tune_grp_other: "Other",
     tune_kp: "Proportional gain (P)",
     tune_ki: "Integral gain (I)",
@@ -880,6 +913,9 @@ const STR = {
     tune_cooling_supply_base_c: "Cooling water base temperature",
     tune_heating_supply_base_c: "Heating water base temperature",
     tune_heating_supply_slope: "Heating water curve slope",
+    tune_heating_curve_neutral_c: "Heating curve neutral outdoor temperature",
+    tune_heating_supply_min_c: "Heating water minimum temperature",
+    tune_heating_supply_max_c: "Heating water maximum temperature",
     val_th_command: "Command",
     val_th_raw: "Raw",
     val_th_floor: "Floor",
@@ -1009,7 +1045,8 @@ const STR = {
       "glazing and cold snaps. Off by default.",
     tip_knob_ff_neutral_c:
       "Outdoor temperature at which the weather term is zero; below it every " +
-      "1 K colder adds opening per the FF gain. Default 15 °C.",
+      "1 K colder adds opening per the FF gain. It does not move the heating " +
+      "water curve (that has its own neutral temperature). Default 15 °C.",
     tip_knob_ff_gain_pct_per_k:
       "How many percent of opening the weather term adds per 1 K below the " +
       "neutral temperature. Default 1 %/K.",
@@ -1023,16 +1060,32 @@ const STR = {
       "cooling-setpoint entity configured (options → Heat pump). Global " +
       "parameter — cannot be overridden per room. Default 15 °C.",
     tip_knob_heating_supply_base_c:
-      "Heating supply water at the neutral outdoor temperature (the " +
-      "“Feedforward neutral outdoor temperature” knob, default 15 °C). " +
+      "Heating supply water at the curve's neutral outdoor temperature (the " +
+      "“Heating curve neutral outdoor temperature” knob, default 15 °C). " +
       "Below it the setpoint rises along the curve slope; the result is " +
-      "clamped to 20–40 °C. Written to the pump only with the " +
-      "heating-setpoint entity configured — by default the pump follows its " +
-      "own curve. Global parameter. Default 26 °C.",
+      "clamped to the heating water minimum and maximum (default 20–40 °C). " +
+      "Written to the pump only with the heating-setpoint entity configured " +
+      "— by default the pump follows its own curve. Global parameter. " +
+      "Default 26 °C.",
     tip_knob_heating_supply_slope:
       "How many kelvins the heating-water setpoint rises per 1 K of outdoor " +
-      "temperature below the neutral point. Default 0.5 K/K; typically " +
-      "0.3–0.8 for a well-insulated UFH house.",
+      "temperature below the curve's neutral point. Steps of 0.01 so a pump " +
+      "curve can be matched: 25 °C at +15 °C and 32 °C at −15 °C is " +
+      "7/30 ≈ 0.23 K/K. Default 0.5 K/K; typically 0.2–0.8 for a " +
+      "well-insulated UFH house.",
+    tip_knob_heating_curve_neutral_c:
+      "The outdoor temperature at which the heating-water curve gives exactly " +
+      "the base; below it the setpoint rises along the slope. The curve's own " +
+      "knob — changing the feedforward neutral temperature (valves) no longer " +
+      "moves it. Global parameter. Default 15 °C.",
+    tip_knob_heating_supply_min_c:
+      "Lower clamp of the heating-water curve: the setpoint never goes below " +
+      "it. Must be below the maximum, and the base must lie between them. " +
+      "Global parameter. Default 20 °C.",
+    tip_knob_heating_supply_max_c:
+      "Upper clamp of the heating-water curve: the setpoint never exceeds it. " +
+      "A floor-only install often wants less than 40 °C (screed). Global " +
+      "parameter. Default 40 °C.",
     // Room-detail tooltips (tip_dec_*) and table-header tooltips (tip_val_* /
     // tip_ast_* / tip_th_*) — content shared with docs/manual/pl.md: change
     // together.
@@ -1166,7 +1219,17 @@ const STR = {
     hp_cool_target: "Cooling water setpoint",
     hp_cool_calc: "max(base {base}, safe dew point {dew})",
     hp_heat_target: "Heating water setpoint",
-    hp_heat_calc: "curve: {base} + {slope} · ({neutral} − outdoor {tout})",
+    hp_heat_calc:
+      "curve: {base} + {slope} · ({neutral} − outdoor {tout}), within {min}–{max}",
+    hp_curve_cap: "Heating curve preview",
+    hp_curve_tout: "Outdoor",
+    hp_curve_target: "Water",
+    hp_curve_unsaved: "includes unsaved changes",
+    hp_curve_invalid: "Invalid values: {detail}",
+    tip_hp_curve:
+      "The heating-water setpoint Tortoise would write at each outdoor " +
+      "temperature (clamped to the minimum and maximum). Compare it with the " +
+      "pump's own curve before you wire the heating-setpoint entity.",
     hp_not_written: "not written in this mode",
     hp_not_configured_entity: "entity not configured",
     tip_hp_cool:
@@ -1178,7 +1241,8 @@ const STR = {
     tip_hp_heat:
       "Optional: while heating, Tortoise writes the water setpoint from a " +
       "simple weather curve (base + slope × shortfall below the neutral " +
-      "temperature, clamped to 20–40 °C). If you leave the entity " +
+      "temperature of the curve, clamped to its minimum and maximum — " +
+      "20–40 °C by default). If you leave the entity " +
       "unconfigured, the pump follows its own curve — the default and fully " +
       "supported.",
     hp_active_cap: "Pump available for UFH",
@@ -1189,7 +1253,6 @@ const STR = {
       "while no water reaches the floor.",
     hp_writes_paused: "Writes paused — no room is in control (Live).",
     // Force cooling start (issue #7, 2026-07-15).
-    tune_grp_flicker: "Force cooling start (global)",
     tune_hp_flicker_enabled: "Force cooling start",
     tune_hp_flicker_band_k: "Target cooling deadband",
     tune_hp_flicker_min_open_pct: "Min demand: total loop opening",
@@ -1422,7 +1485,8 @@ const STR = {
     tune_grp_weather: "Wettervorsteuerung (Ventilöffnung)",
     tune_grp_fast: "Zusatzquelle (Split/Heizgerät)",
     tune_grp_dew: "Kondensationsschutz (Kühlung)",
-    tune_grp_hp: "Wärmepumpe — Wasser (nur global)",
+    tune_grp_cooling_water: "Kühlwasser — Wärmepumpe (global)",
+    tune_grp_heating_water: "Heizwasser — Wärmepumpe (global)",
     tune_grp_other: "Sonstige",
     tune_kp: "Proportionalverstärkung (P)",
     tune_ki: "Integralverstärkung (I)",
@@ -1445,6 +1509,9 @@ const STR = {
     tune_cooling_supply_base_c: "Basistemperatur Kühlwasser",
     tune_heating_supply_base_c: "Basistemperatur Heizwasser",
     tune_heating_supply_slope: "Kurvensteigung Heizwasser",
+    tune_heating_curve_neutral_c: "Neutrale Außentemperatur der Heizkurve",
+    tune_heating_supply_min_c: "Minimale Heizwassertemperatur",
+    tune_heating_supply_max_c: "Maximale Heizwassertemperatur",
     val_th_command: "Befehl",
     val_th_raw: "Rohwert",
     val_th_floor: "Minimum",
@@ -1579,7 +1646,8 @@ const STR = {
       "großen Glasflächen und Kälteeinbrüchen. Standardmäßig aus.",
     tip_knob_ff_neutral_c:
       "Außentemperatur, bei der das Wetterglied null ist; darunter fügt jede 1 K " +
-      "Kälte Öffnung gemäß der FF-Verstärkung hinzu. Standard 15 °C.",
+      "Kälte Öffnung gemäß der FF-Verstärkung hinzu. Verschiebt die Heizwasserkurve " +
+      "nicht (sie hat eine eigene neutrale Temperatur). Standard 15 °C.",
     tip_knob_ff_gain_pct_per_k:
       "Wie viel Prozent Öffnung das Wetterglied je 1 K unterhalb der neutralen " +
       "Temperatur hinzufügt. Standard 1 %/K.",
@@ -1593,16 +1661,32 @@ const STR = {
       "Kühl-Sollwert-Entität konfiguriert ist (Optionen → Wärmepumpe). Globaler " +
       "Parameter — kann nicht je Raum übersteuert werden. Standard 15 °C.",
     tip_knob_heating_supply_base_c:
-      "Heizungsvorlauf bei der neutralen Außentemperatur (Parameter „Neutrale " +
-      "Außentemperatur der Vorsteuerung“, Standard 15 °C). Darunter steigt der " +
-      "Sollwert entlang der Kurvensteigung; das Ergebnis wird auf 20–40 °C begrenzt. " +
-      "Nur an die Pumpe geschrieben, wenn die Heiz-Sollwert-Entität konfiguriert ist " +
+      "Heizungsvorlauf bei der neutralen Außentemperatur der Kurve (Parameter " +
+      "„Neutrale Außentemperatur der Heizkurve“, Standard 15 °C). Darunter " +
+      "steigt der Sollwert entlang der Kurvensteigung; das Ergebnis wird auf " +
+      "Minimum und Maximum des Heizwassers begrenzt (Standard 20–40 °C). Nur " +
+      "an die Pumpe geschrieben, wenn die Heiz-Sollwert-Entität konfiguriert ist " +
       "— standardmäßig folgt die Pumpe ihrer eigenen Kurve. Globaler Parameter. " +
       "Standard 26 °C.",
     tip_knob_heating_supply_slope:
       "Um wie viele Kelvin der Heizwasser-Sollwert je 1 K Außentemperatur unterhalb " +
-      "des Neutralpunkts steigt. Standard 0,5 K/K; typisch 0,3–0,8 für ein gut " +
-      "gedämmtes Fußbodenheizungshaus.",
+      "des Neutralpunkts der Kurve steigt. Schrittweite 0,01, damit sich eine " +
+      "Pumpenkurve nachbilden lässt: 25 °C bei +15 °C und 32 °C bei −15 °C ergibt " +
+      "7/30 ≈ 0,23 K/K. Standard 0,5 K/K; typisch 0,2–0,8 für ein gut gedämmtes " +
+      "Fußbodenheizungshaus.",
+    tip_knob_heating_curve_neutral_c:
+      "Außentemperatur, bei der die Heizwasserkurve genau die Basis liefert; " +
+      "darunter steigt der Sollwert entlang der Steigung. Ein eigener Parameter " +
+      "der Kurve — eine Änderung der neutralen Temperatur der Vorsteuerung " +
+      "(Ventile) verschiebt sie nicht mehr. Globaler Parameter. Standard 15 °C.",
+    tip_knob_heating_supply_min_c:
+      "Untere Grenze der Heizwasserkurve: Der Sollwert fällt nie darunter. Muss " +
+      "unter dem Maximum liegen, und die Basis muss dazwischen liegen. Globaler " +
+      "Parameter. Standard 20 °C.",
+    tip_knob_heating_supply_max_c:
+      "Obere Grenze der Heizwasserkurve: Der Sollwert überschreitet sie nie. Eine " +
+      "reine Fußbodenheizung will oft weniger als 40 °C (Estrich). Globaler " +
+      "Parameter. Standard 40 °C.",
     // Tooltips der Raumdetails (tip_dec_*) und der Tabellenköpfe (tip_val_* /
     // tip_ast_* / tip_th_*) — Inhalt gemeinsam mit docs/manual/de.md: zusammen
     // ändern.
@@ -1739,7 +1823,18 @@ const STR = {
     hp_cool_target: "Kühlwasser-Sollwert",
     hp_cool_calc: "max(Basis {base}, sicherer Taupunkt {dew})",
     hp_heat_target: "Heizwasser-Sollwert",
-    hp_heat_calc: "Kurve: {base} + {slope} · ({neutral} − Außen {tout})",
+    hp_heat_calc:
+      "Kurve: {base} + {slope} · ({neutral} − Außen {tout}), innerhalb {min}–{max}",
+    hp_curve_cap: "Vorschau der Heizwasserkurve",
+    hp_curve_tout: "Außen",
+    hp_curve_target: "Wasser",
+    hp_curve_unsaved: "enthält ungespeicherte Änderungen",
+    hp_curve_invalid: "Ungültige Werte: {detail}",
+    tip_hp_curve:
+      "Der Heizwasser-Sollwert, den Tortoise bei der jeweiligen Außentemperatur " +
+      "schreiben würde (auf Minimum und Maximum begrenzt). Vergleichen Sie ihn " +
+      "mit der eigenen Kurve der Pumpe, bevor Sie die Heiz-Sollwert-Entität " +
+      "verbinden.",
     hp_not_written: "in diesem Modus nicht geschrieben",
     hp_not_configured_entity: "Entität nicht konfiguriert",
     tip_hp_cool:
@@ -1751,7 +1846,8 @@ const STR = {
     tip_hp_heat:
       "Optional: Beim Heizen schreibt Tortoise den Wasser-Sollwert aus einer " +
       "einfachen Wetterkurve (Basis + Steigung × Unterschreitung der neutralen " +
-      "Temperatur, begrenzt auf 20–40 °C). Wenn Sie die Entität unkonfiguriert " +
+      "Temperatur der Kurve, begrenzt auf ihr Minimum und Maximum — standardmäßig " +
+      "20–40 °C). Wenn Sie die Entität unkonfiguriert " +
       "lassen, folgt die Pumpe ihrer eigenen Kurve — der Standard und vollständig " +
       "unterstützt.",
     hp_active_cap: "Pumpe für Fußbodenheizung verfügbar",
@@ -1762,7 +1858,6 @@ const STR = {
       "damit er nicht aufläuft, während kein Wasser den Boden erreicht.",
     hp_writes_paused: "Schreibvorgänge pausiert — kein Raum ist in Regelung (Aktiv).",
     // Kühlstart erzwingen (issue #7, 2026-07-15).
-    tune_grp_flicker: "Kühlstart erzwingen (global)",
     tune_hp_flicker_enabled: "Kühlstart erzwingen",
     tune_hp_flicker_band_k: "Angestrebtes Kühl-Totband",
     tune_hp_flicker_min_open_pct: "Min. Abnahme: Gesamtöffnung der Kreise",
@@ -2282,7 +2377,10 @@ const SEV_RANK = { ok: 0, info: 1, warn: 2, problem: 3, alarm: 4 };
  * lists falls into a trailing "other" group instead of silently vanishing.
  * `globalOnly` groups render only in the Global scope (the heat-pump water
  * setpoints are building-level physics; the backend rejects per-room
- * overrides too).
+ * overrides too). Issue #35 split the old mixed "hp" group: "Cooling water"
+ * (the base + the setpoint-flicker) and "Heating water" (the curve; later
+ * issues add the write gate and the compressor kick here). A `curvePreview`
+ * group gets the heating-curve preview table under its knobs.
  */
 const KNOB_GROUPS = [
   { key: "pid", labelKey: "tune_grp_pid", knobs: ["kp", "ki", "kt"] },
@@ -2320,19 +2418,23 @@ const KNOB_GROUPS = [
     knobs: ["dew_margin_k", "dew_ramp_k"],
   },
   {
-    key: "hp",
-    labelKey: "tune_grp_hp",
+    key: "heating_water",
+    labelKey: "tune_grp_heating_water",
     knobs: [
-      "cooling_supply_base_c",
+      "heating_curve_neutral_c",
       "heating_supply_base_c",
       "heating_supply_slope",
+      "heating_supply_min_c",
+      "heating_supply_max_c",
     ],
     globalOnly: true,
+    curvePreview: true,
   },
   {
-    key: "flicker",
-    labelKey: "tune_grp_flicker",
+    key: "cooling_water",
+    labelKey: "tune_grp_cooling_water",
     knobs: [
+      "cooling_supply_base_c",
       "hp_flicker_enabled",
       "hp_flicker_band_k",
       "hp_flicker_min_open_pct",
@@ -2343,6 +2445,14 @@ const KNOB_GROUPS = [
     globalOnly: true,
   },
 ];
+
+/** Knobs whose edit refreshes the heating-curve preview (issue #35). */
+const HEATING_CURVE_KNOBS = new Set(
+  KNOB_GROUPS.filter((g) => g.curvePreview).flatMap((g) => g.knobs),
+);
+
+/** Debounce [ms] of the heating-curve preview while a knob is being nudged. */
+const CURVE_PREVIEW_DEBOUNCE_MS = 250;
 
 /** Ordered wiring roles (config `entities` dict keys → i18n label keys). */
 const WIRING_ROLES = [
@@ -6503,6 +6613,8 @@ class TortoiseUfhPanel extends HTMLElement {
     P.coolCalc = h("span", { class: "hp-calc muted" });
     P.heatVal = h("span", { class: "kv-val" });
     P.heatCalc = h("span", { class: "hp-calc muted" });
+    // Issue #35: the curve at a few outdoor points, next to the setpoint.
+    P.heatCurve = h("table", { class: "curve-table", style: "display:none" });
     P.setpointsCard = h("div", { class: "hp-card" }, [
       h("div", { class: "hp-card-cap", text: this._t("hp_sec_setpoints") }),
       h("div", { class: "kv" }, [
@@ -6521,6 +6633,7 @@ class TortoiseUfhPanel extends HTMLElement {
         P.heatVal,
         P.heatCalc,
       ]),
+      P.heatCurve,
     ]);
 
     // Card: cooling setpoint-flicker diagnostics (issue #7). Hidden unless the
@@ -6666,10 +6779,13 @@ class TortoiseUfhPanel extends HTMLElement {
     }));
     setRow(P.heatVal, P.heatCalc, hp.heating, "hp_heat_calc", (hh) => ({
       base: fmt(hh.base_c, 1, " °C"),
-      slope: fmt(hh.slope, 1),
+      slope: fmt(hh.slope, 2),
       neutral: fmt(hh.neutral_c, 1, " °C"),
       tout: fmt(hh.t_out_c, 1, " °C"),
+      min: fmt(hh.min_c, 1, " °C"),
+      max: fmt(hh.max_c, 1, " °C"),
     }));
+    this._fillCurveTable(P.heatCurve, (hp.heating && hp.heating.curve) || []);
 
     // "Pump available for UFH" — only with a configured entity.
     P.activeCard.style.display = hp.hp_active_configured ? "" : "none";
@@ -7305,6 +7421,7 @@ class TortoiseUfhPanel extends HTMLElement {
     // group lists lands in a trailing "other" section — never silently lost.
     E.body.textContent = "";
     E.fields = new Map();
+    E.curve = null;
     const fields = (this._tuning && this._tuning.fields) || [];
     if (!this._tuningDraft || fields.length === 0) {
       E.body.appendChild(h("div", { class: "empty", text: this._t("loading") }));
@@ -7336,6 +7453,9 @@ class TortoiseUfhPanel extends HTMLElement {
       ]);
       for (const name of present) {
         section.appendChild(this._buildTuneCard(byName.get(name)));
+      }
+      if (group.curvePreview && !isRoom) {
+        section.appendChild(this._buildCurvePreview());
       }
       E.body.appendChild(section);
     }
@@ -7428,6 +7548,105 @@ class TortoiseUfhPanel extends HTMLElement {
     return card;
   }
 
+  /**
+   * Build the heating-curve preview (issue #35) shown under the Heating water
+   * knobs in the Global scope: the target water at a few outdoor
+   * temperatures, computed by the core (`preview_heating_curve`) from the
+   * current draft, so unsaved edits show before they are saved.
+   */
+  _buildCurvePreview() {
+    const table = h("table", { class: "curve-table", style: "display:none" });
+    const note = h("div", { class: "curve-note muted" });
+    const wrap = h("div", { class: "curve-preview" }, [
+      h("div", { class: "curve-cap" }, [
+        this._t("hp_curve_cap"),
+        this._infoIcon("tip_hp_curve"),
+      ]),
+      table,
+      note,
+    ]);
+    this._tuningEls.curve = { table, note };
+    this._scheduleCurvePreview();
+    return wrap;
+  }
+
+  /** Debounced refresh of the heating-curve preview (one call per burst). */
+  _scheduleCurvePreview() {
+    if (this._curveTimer) {
+      clearTimeout(this._curveTimer);
+    }
+    this._curveTimer = setTimeout(() => {
+      this._curveTimer = null;
+      this._refreshCurvePreview();
+    }, CURVE_PREVIEW_DEBOUNCE_MS);
+  }
+
+  /** Ask the core for the curve of the current draft and fill the preview. */
+  async _refreshCurvePreview() {
+    const E = this._tuningEls;
+    const C = E && E.curve;
+    if (!C || !this._tuningDraft || this._tuningScope !== "global") {
+      return;
+    }
+    if (!this._hass || typeof this._hass.callWS !== "function") {
+      return;
+    }
+    const saved = (this._tuning && this._tuning.global) || {};
+    const values = {};
+    let unsaved = false;
+    for (const name of HEATING_CURVE_KNOBS) {
+      if (name in this._tuningDraft.values) {
+        values[name] = this._tuningDraft.values[name];
+        if (!sameKnob(values[name], saved[name])) {
+          unsaved = true;
+        }
+      }
+    }
+    this._curveGen = (this._curveGen || 0) + 1;
+    const gen = this._curveGen;
+    let res = null;
+    let error = "";
+    try {
+      res = await this._hass.callWS({ type: WS.previewHeatingCurve, values });
+    } catch (err) {
+      error = err && err.message ? err.message : String(err);
+    }
+    // A newer request or a re-render superseded this one.
+    if (gen !== this._curveGen || !this._tuningEls || this._tuningEls.curve !== C) {
+      return;
+    }
+    if (!error && res && res.error) {
+      error = String(res.error);
+    }
+    const points = !error && res && Array.isArray(res.points) ? res.points : [];
+    this._fillCurveTable(C.table, points);
+    if (error) {
+      C.note.className = "curve-note hp-warn";
+      C.note.textContent = fmtStr(this._t("hp_curve_invalid"), { detail: error });
+    } else {
+      C.note.className = "curve-note muted";
+      C.note.textContent = unsaved ? this._t("hp_curve_unsaved") : "";
+    }
+  }
+
+  /**
+   * Fill a two-row curve table: outdoor temperatures over target water, one
+   * column per point (1 decimal; numbers only, set as text).
+   */
+  _fillCurveTable(table, points) {
+    table.textContent = "";
+    const list = Array.isArray(points) ? points : [];
+    const outRow = h("tr", null, [h("th", { text: this._t("hp_curve_tout") })]);
+    const waterRow = h("tr", null, [h("th", { text: this._t("hp_curve_target") })]);
+    for (const p of list) {
+      outRow.appendChild(h("td", { text: signed(p && p.t_out_c, 0, " °C") }));
+      waterRow.appendChild(h("td", { text: fmt(p && p.target_c, 1, " °C") }));
+    }
+    table.appendChild(outRow);
+    table.appendChild(waterRow);
+    table.style.display = list.length ? "" : "none";
+  }
+
   /** Update a single knob card's value + override affordances in place. */
   _applyTuneField(name) {
     const E = this._tuningEls;
@@ -7437,6 +7656,9 @@ class TortoiseUfhPanel extends HTMLElement {
     const refs = E.fields.get(name);
     if (!refs) {
       return;
+    }
+    if (HEATING_CURVE_KNOBS.has(name) && E.curve) {
+      this._scheduleCurvePreview();
     }
     const field = refs.field;
     const value = this._tuningDraft.values[name];
@@ -9079,6 +9301,23 @@ details.sub-fold > summary:focus-visible { outline: 2px solid var(--t-primary); 
 .chip-ok { background: color-mix(in srgb, var(--t-ok) 18%, transparent); color: var(--t-ok); }
 .chip-info { background: color-mix(in srgb, var(--t-info) 16%, transparent); color: var(--t-info); }
 .hp-flicker-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+/* Heating-curve preview (issue #35): Tuning tab + Heat-pump tab. */
+.curve-preview {
+  padding: 10px 14px; display: flex; flex-direction: column; gap: 8px;
+  border-top: 1px solid var(--t-line);
+}
+.curve-cap {
+  display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700;
+}
+.curve-table { border-collapse: collapse; font-size: 12px; max-width: 100%; }
+.curve-table th, .curve-table td {
+  padding: 4px 10px; text-align: right; border-bottom: 1px solid var(--t-line);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.curve-table th { text-align: left; font-weight: 600; color: var(--t-muted); }
+.curve-table tr:last-child th, .curve-table tr:last-child td { border-bottom: 0; }
+.curve-note { font-size: 12px; }
+.curve-note:empty { display: none; }
 
 /* Chart tooltip */
 .chart-tip {

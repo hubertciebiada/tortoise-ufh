@@ -36,6 +36,7 @@ from .core.config import (
     ControllerConfig,
     controller_overrides,
 )
+from .core.hp_link import heating_curve_points
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -46,6 +47,7 @@ __all__ = [
     "global_controller",
     "global_controller_dict",
     "global_overrides",
+    "heating_curve_preview",
     "persisted_global_overrides",
     "superseded_defaults",
     "knob_names",
@@ -276,6 +278,23 @@ def room_overrides(entry: ConfigEntry) -> dict[str, dict[str, Any]]:
         if clean:
             out[str(room)] = clean
     return out
+
+
+def heating_curve_preview(config: ControllerConfig) -> list[dict[str, float]]:
+    """The heating-water curve at the panel's preview points (issue #35).
+
+    Args:
+        config: The GLOBAL controller tuning.
+
+    Returns:
+        ``[{"t_out_c": ..., "target_c": ...}, ...]`` [degC] from
+        :func:`~tortoise_ufh.hp_link.heating_curve_points` — the same curve the
+        heat-pump link writes, clamped to its min/max — JSON-ready.
+    """
+    return [
+        {"t_out_c": t_out, "target_c": target}
+        for t_out, target in heating_curve_points(config)
+    ]
 
 
 def coerce_tuning_values(

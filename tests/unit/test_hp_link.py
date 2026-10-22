@@ -7,7 +7,9 @@ Exercises the pure decision logic of the B2 (2026-07-12) opt-in extension:
   ``"DHW only"`` skip and the never-write-blind rule.
 * ``dhw_option`` — every add/remove transition plus the refusals.
 * ``cooling_setpoint_c`` — the ``max(base, safe dew point)`` floor.
-* ``heating_curve`` — the knob-fed weather curve with its fixed 20/40 clamps.
+* ``heating_curve`` — the knob-fed weather curve: its own neutral point and
+  min/max clamps (issue #35), independent of the feedforward's ``ff_neutral_c``.
+* ``heating_curve_points`` — the panel's curve preview (issue #35).
 
 Units: temperatures in degC; curve slope in K/K. This module never imports
 ``homeassistant``.
@@ -19,13 +21,13 @@ import pytest
 
 from custom_components.tortoise_ufh.core.config import ControllerConfig
 from custom_components.tortoise_ufh.core.hp_link import (
-    HEATING_SUPPLY_MAX_C,
-    HEATING_SUPPLY_MIN_C,
+    HEATING_CURVE_PREVIEW_OUTDOOR_C,
     HEISHAMON_MODE_OPTIONS,
     cooling_setpoint_c,
     dhw_option,
     direction_option,
     heating_curve,
+    heating_curve_points,
     round_to_step_c,
 )
 from custom_components.tortoise_ufh.core.models import Mode
@@ -205,9 +207,11 @@ class TestHeatingCurve:
 
     @pytest.mark.unit
     def test_curve_uses_knobs_and_neutral(self) -> None:
-        """Base at neutral; slope per K below neutral; ff_neutral_c shared."""
+        """Base at neutral; slope per K below the curve's own neutral point."""
         cfg = ControllerConfig(
-            heating_supply_base_c=26.0, heating_supply_slope=0.5, ff_neutral_c=15.0
+            heating_supply_base_c=26.0,
+            heating_supply_slope=0.5,
+            heating_curve_neutral_c=15.0,
         )
         curve = heating_curve(cfg)
         assert curve.t_supply(15.0) == pytest.approx(26.0)
@@ -215,14 +219,70 @@ class TestHeatingCurve:
         assert curve.t_supply(5.0) == pytest.approx(26.0 + 0.5 * 10.0)
 
     @pytest.mark.unit
-    def test_curve_clamps_to_fixed_water_limits(self) -> None:
-        """The result is clamped to the fixed 20..40 degC water limits."""
+    def test_curve_ignores_the_feedforward_neutral(self) -> None:
+        """Issue #35: ff_neutral_c no longer moves the heating curve."""
+        base = heating_curve(ControllerConfig())
+        moved_ff = heating_curve(ControllerConfig(ff_neutral_c=5.0))
+        assert moved_ff == base
+        assert moved_ff.t_neutral == pytest.approx(15.0)
+        own = heating_curve(ControllerConfig(heating_curve_neutral_c=10.0))
+        assert own.t_neutral == pytest.approx(10.0)
+        assert own.t_supply(0.0) == pytest.approx(26.0 + 0.5 * 10.0)
+
+    @pytest.mark.unit
+    def test_curve_clamps_to_the_default_water_limits(self) -> None:
+        """With default knobs the result is clamped to 20..40 degC."""
+        cfg = ControllerConfig(heating_supply_base_c=38.0, heating_supply_slope=2.0)
+        curve = heating_curve(cfg)
+        assert curve.t_supply(-30.0) == pytest.approx(40.0)
+        low = ControllerConfig(heating_supply_base_c=20.0, heating_supply_slope=0.0)
+        assert heating_curve(low).t_supply(30.0) == pytest.approx(20.0)
+
+    @pytest.mark.unit
+    def test_curve_clamps_to_the_min_max_knobs(self) -> None:
+        """Issue #35: the clamps are the heating_supply_min/max_c knobs."""
         cfg = ControllerConfig(
-            heating_supply_base_c=38.0, heating_supply_slope=2.0, ff_neutral_c=15.0
+            heating_supply_base_c=26.0,
+            heating_supply_slope=1.0,
+            heating_supply_min_c=24.0,
+            heating_supply_max_c=33.0,
         )
         curve = heating_curve(cfg)
-        assert curve.t_supply(-30.0) == pytest.approx(HEATING_SUPPLY_MAX_C)
-        low = ControllerConfig(
-            heating_supply_base_c=20.0, heating_supply_slope=0.0, ff_neutral_c=15.0
+        assert curve.t_supply_min == pytest.approx(24.0)
+        assert curve.t_supply_max == pytest.approx(33.0)
+        assert curve.t_supply(-20.0) == pytest.approx(33.0)
+        assert curve.t_supply(10.0) == pytest.approx(31.0)
+
+
+class TestHeatingCurvePoints:
+    """The panel's heating-curve preview (issue #35)."""
+
+    @pytest.mark.unit
+    def test_default_points_are_the_preview_outdoor_temperatures(self) -> None:
+        """Defaults: 26 degC at +15, +0.5 K per K below, in display order."""
+        points = heating_curve_points(ControllerConfig())
+        assert [t_out for t_out, _ in points] == list(HEATING_CURVE_PREVIEW_OUTDOOR_C)
+        assert [t for _, t in points] == pytest.approx([26.0, 31.0, 36.0, 40.0])
+
+    @pytest.mark.unit
+    def test_matches_a_typical_pump_curve_with_a_0_01_step_slope(self) -> None:
+        """The issue's example: 25 degC at +15, ~32 degC at -15 with 0.23 K/K."""
+        cfg = ControllerConfig(heating_supply_base_c=25.0, heating_supply_slope=0.23)
+        points = dict(heating_curve_points(cfg))
+        assert points[15.0] == pytest.approx(25.0)
+        assert points[-15.0] == pytest.approx(31.9)
+        assert round(points[-15.0], 1) == pytest.approx(31.9)
+
+    @pytest.mark.unit
+    def test_points_follow_the_written_curve_and_custom_outdoor(self) -> None:
+        """Every point equals heating_curve().t_supply at that outdoor temp."""
+        cfg = ControllerConfig(
+            heating_supply_base_c=24.0,
+            heating_supply_slope=0.6,
+            heating_curve_neutral_c=12.0,
+            heating_supply_max_c=30.0,
         )
-        assert heating_curve(low).t_supply(30.0) == pytest.approx(HEATING_SUPPLY_MIN_C)
+        curve = heating_curve(cfg)
+        points = heating_curve_points(cfg, outdoor_c=(20.0, 0.0, -25.0))
+        assert points == tuple((t, curve.t_supply(t)) for t in (20.0, 0.0, -25.0))
+        assert points[-1][1] == pytest.approx(30.0)
