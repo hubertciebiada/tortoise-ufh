@@ -156,7 +156,11 @@ async def test_full_wizard_creates_entry(
     data = result["data"]
     assert data[CONF_LATITUDE] == _LAT
     assert data[CONF_LONGITUDE] == _LON
-    assert CONF_CONTROLLER in data
+    # Issue #31: no full tuning snapshot is seeded; the defaults accepted in
+    # the algorithm step are not stored at all.
+    assert CONF_CONTROLLER not in data
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    assert CONF_CONTROLLER not in entry.options
 
     rooms = data[CONF_ROOMS]
     assert [r[CONF_ROOM_NAME] for r in rooms] == ["Salon", "Lazienka"]
@@ -290,7 +294,38 @@ async def test_options_flow_saves_room_state_and_knobs(
         "Salon": ROOM_STATE_OFF,
         "Lazienka": ROOM_STATE_LIVE,
     }
-    assert CONF_CONTROLLER in entry.options
+    # Every knob was left at its default: nothing is frozen (issue #31).
+    assert CONF_CONTROLLER not in entry.options
+
+
+async def test_settings_save_stores_only_changed_knobs(
+    hass: HomeAssistant, setup_integration: MockConfigEntry
+) -> None:
+    """The settings leaf persists the global knobs as sparse overrides.
+
+    Issue #31: a knob equal to the library default is not stored, and a
+    tuning copy left in ``entry.data`` by an older setup is dropped (the form
+    showed the merged values, so the options now hold every override).
+    """
+    entry = setup_integration
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_CONTROLLER: {"kt": 9.0}}
+    )
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "settings"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"room_state_0": ROOM_STATE_OFF, "room_state_1": ROOM_STATE_OFF, "kp": 12.0},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options[CONF_CONTROLLER] == {"kp": 12.0, "kt": 9.0}
+    assert CONF_CONTROLLER not in entry.data
 
 
 async def test_settings_save_preserves_room_tuning(

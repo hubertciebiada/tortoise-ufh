@@ -12,6 +12,11 @@ two-state ``off`` / ``live``: every value that is not ``off`` or ``live``
 (notably the retired ``shadow``, but also corrupted values) becomes ``off`` —
 identical write behaviour, since neither shadow nor off ever wrote a command.
 
+v6 (issue #31, 2026-10-22; DECISIONS §35) reduces the global tuning — once a
+FULL ``ControllerConfig`` snapshot in ``data`` and ``options`` — to sparse
+overrides in ``options``: old shipped defaults, values equal to the current
+default and non-user-facing fields are dropped.
+
 These tests pin every ``participates × live_control`` combination through the
 FULL v1 -> v3 chain (one ``async_migrate_entry`` call), the standalone v2 -> v3
 conversion, the removal of the legacy keys and the retired switch entities, and
@@ -121,7 +126,7 @@ async def test_migrate_v1_chain_state_precedence(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 5
+    assert entry.version == 6
     assert entry.options[CONF_ROOM_STATE] == {"Salon": expected}
     # No shadow literal may survive the chain.
     assert ROOM_STATE_SHADOW not in entry.options[CONF_ROOM_STATE].values()
@@ -143,7 +148,7 @@ async def test_migrate_v1_no_options_defaults_every_room_to_off(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 5
+    assert entry.version == 6
     assert entry.options[CONF_ROOM_STATE] == {
         "Salon": ROOM_STATE_OFF,
         "Lazienka": ROOM_STATE_OFF,
@@ -227,7 +232,7 @@ async def test_migrate_v2_state_conversion(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 5
+    assert entry.version == 6
     assert entry.options[CONF_ROOM_STATE] == {"Salon": expected}
 
 
@@ -244,7 +249,7 @@ async def test_migrate_v2_without_state_map_does_not_invent_one(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 5
+    assert entry.version == 6
     assert CONF_ROOM_STATE not in entry.options
     assert entry.options.get("unrelated") is True
 
@@ -263,7 +268,7 @@ async def test_migrate_v3_drops_the_retired_mode_entity(hass: HomeAssistant) -> 
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 5
+    assert entry.version == 6
     assert "entity_mode" not in entry.data
     assert entry.data[CONF_ROOMS] == [{CONF_ROOM_NAME: "Salon"}]
 
@@ -277,7 +282,7 @@ async def test_migrate_v3_without_a_mode_entity_just_bumps(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 5
+    assert entry.version == 6
     assert dict(entry.data) == data_before
 
 
@@ -312,16 +317,121 @@ async def test_v4_to_v5_strips_the_retired_flow_watchdog_keys(
 
     assert await async_migrate_entry(hass, entry)
 
-    assert entry.version == 5
-    assert entry.data[CONF_CONTROLLER] == {}
+    assert entry.version == 6
+    # v5 -> v6 then folds the (emptied) data copy into the sparse options.
+    assert CONF_CONTROLLER not in entry.data
     assert entry.options[CONF_CONTROLLER] == {"kp": 12.0}
     assert entry.options[CONF_ROOM_TUNING] == {"Salon": {"ki": 0.5}}
+
+
+def _full_snapshot(**changes: Any) -> dict[str, Any]:
+    """A full v5-era ``asdict(ControllerConfig())`` snapshot with ``changes``."""
+    from dataclasses import asdict
+
+    from custom_components.tortoise_ufh.core.config import ControllerConfig
+
+    return {**asdict(ControllerConfig()), **changes}
+
+
+async def test_v5_to_v6_reduces_snapshots_to_overrides(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """v5 -> v6 keeps only genuine overrides of the global tuning (issue #31).
+
+    The live install's case: a setup-time snapshot in data carrying the
+    pre-§8 gains (kp 8 / ki 0.02 / kt 6) and the pre-K2b write threshold
+    (2 pp). Old shipped defaults, values equal to today's default and
+    non-user-facing fields are dropped from both data and options; a
+    genuinely user-set value survives; per-room overrides are untouched.
+    """
+    entry = _entry(
+        hass,
+        rooms=[{CONF_ROOM_NAME: "Salon"}],
+        options={
+            CONF_CONTROLLER: _full_snapshot(
+                kp=8.0,
+                ki=0.02,
+                kt=6.0,
+                valve_write_threshold_pct=2.0,
+                deadband_c=0.4,
+            ),
+            CONF_ROOM_TUNING: {"Salon": {"kp": 8.0}},
+        },
+        version=5,
+    )
+    hass.config_entries.async_update_entry(
+        entry,
+        data={
+            **entry.data,
+            CONF_CONTROLLER: _full_snapshot(
+                kp=8.0, ki=0.02, kt=6.0, valve_write_threshold_pct=2.0
+            ),
+        },
+    )
+
+    with caplog.at_level("INFO"):
+        assert await async_migrate_entry(hass, entry)
+
+    assert entry.version == 6
+    assert CONF_CONTROLLER not in entry.data
+    assert entry.options[CONF_CONTROLLER] == {"deadband_c": 0.4}
+    # A per-room override is already sparse and deliberate: kept as is.
+    assert entry.options[CONF_ROOM_TUNING] == {"Salon": {"kp": 8.0}}
+    assert "dropped stored defaults" in caplog.text
+    assert "valve_write_threshold_pct" in caplog.text
+
+
+async def test_v5_to_v6_keeps_user_set_values(hass: HomeAssistant) -> None:
+    """Values that are neither a current nor an old default survive v5 -> v6.
+
+    An options value wins over the data copy (the old ``data <- options``
+    merge), and an all-default snapshot leaves no controller key at all.
+    """
+    entry = _entry(
+        hass,
+        rooms=[{CONF_ROOM_NAME: "Salon"}],
+        options={CONF_CONTROLLER: {"kp": 16.0, "outdoor_ff_enabled": True}},
+        version=5,
+    )
+    hass.config_entries.async_update_entry(
+        entry,
+        data={**entry.data, CONF_CONTROLLER: _full_snapshot(kp=10.0, ki=0.003)},
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert entry.version == 6
+    assert CONF_CONTROLLER not in entry.data
+    assert entry.options[CONF_CONTROLLER] == {
+        "kp": 16.0,
+        "ki": 0.003,
+        "outdoor_ff_enabled": True,
+    }
+
+
+async def test_v5_to_v6_all_defaults_leaves_no_tuning(hass: HomeAssistant) -> None:
+    """A pure default snapshot migrates to no stored global tuning at all."""
+    entry = _entry(
+        hass,
+        rooms=[{CONF_ROOM_NAME: "Salon"}],
+        options={CONF_CONTROLLER: _full_snapshot()},
+        version=5,
+    )
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_CONTROLLER: _full_snapshot()}
+    )
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert entry.version == 6
+    assert CONF_CONTROLLER not in entry.data
+    assert CONF_CONTROLLER not in entry.options
 
 
 async def test_migrate_rejects_newer_version(hass: HomeAssistant) -> None:
     """A version newer than the code knows about is refused (no downgrade)."""
     entry = _entry(hass, rooms=[{CONF_ROOM_NAME: "Salon"}])
-    hass.config_entries.async_update_entry(entry, version=6)
+    hass.config_entries.async_update_entry(entry, version=7)
 
     assert await async_migrate_entry(hass, entry) is False
 
@@ -364,7 +474,7 @@ async def test_v1_entry_sets_up_and_migrates(
 
     # The entry loaded on the migrated (v3) schema.
     assert entry.state is ConfigEntryState.LOADED
-    assert entry.version == 5
+    assert entry.version == 6
 
     coordinator = entry.runtime_data.coordinator
     # participates=True + live=True -> live; the other room -> shadow -> off.

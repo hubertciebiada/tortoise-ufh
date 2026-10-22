@@ -50,7 +50,10 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   knob introspection shared by websocket + options flow lives in `tuning.py`. Entities
   (number/sensor/binary_sensor/select), config_flow + options flow (add/edit/remove room,
   settings), websocket (incl. `get_tuning`/`set_tuning`), services, panel registration.
-  Tuning: global knobs + sparse per-room overrides (`options[CONF_ROOM_TUNING]`); the knob
+  Tuning: sparse global overrides (`options[CONF_CONTROLLER]`) + sparse per-room overrides
+  (`options[CONF_ROOM_TUNING]`) — only knobs that differ from the library default are ever
+  stored, `None` clears (back to default / global), so retuned defaults reach existing installs
+  (issue #31, config migration v5→v6, DECISIONS §35; never persist an `asdict` snapshot); the knob
   specs (`CONTROLLER_NUMBER_KNOBS`) and `CONF_CONTROLLER` live in `const.py`. Imports the
   core via `.core`; is imported by nothing.
 - **Panel** — `custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js`. Self-contained

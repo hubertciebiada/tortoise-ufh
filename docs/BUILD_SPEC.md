@@ -630,6 +630,15 @@ class ControllerConfig:
     # heating_supply_slope in [0,2],
     # hp_flicker_band_k in [0.5,3.0], hp_flicker_stuck_minutes in [5,120], hp_flicker_min_off_minutes in [5,120], hp_flicker_max_starts_per_h in [1,6]
 
+# ADDITIVE (2026-10-22, issue #31, DECISIONS §35): sparse tuning persistence helpers.
+SUPERSEDED_CONTROLLER_DEFAULTS: Mapping[str, frozenset[float]]  # earlier shipped defaults:
+                                         # kp {8}, ki {0.02}, kt {6}, valve_write_threshold_pct {2}
+def is_superseded_default(field_name: str, value: object) -> bool: ...
+def controller_overrides(values: Mapping[str, object], *, fields: Iterable[str],
+                         drop_superseded: bool = False) -> dict[str, object]: ...
+    # keeps only `fields` whose value differs from ControllerConfig() (numbers within
+    # rel 1e-9, bools strictly); drop_superseded also drops the old defaults above
+
 @dataclass(frozen=True)
 class RoomConfig:
     name: str
@@ -793,6 +802,9 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   consumed by the config flow, the `get_tuning`/`set_tuning` range validation, and (via the
   `get_tuning` payload) the panel, so ranges are never duplicated in JS. `kd` is deliberately not
   exposed (Aneks §8.3); `cycle_seconds`/`valve_write_threshold_pct` are not user-facing.
+  The GLOBAL tuning `entry.options[CONF_CONTROLLER]` has the same sparse shape since issue #31
+  (2026-10-22, DECISIONS §35): only knobs differing from the library default are stored, so a
+  retuned default reaches existing installs; the non-user-facing fields are never stored.
 - **`coordinator.py`** (`TortoiseUfhCoordinator(DataUpdateCoordinator)`, 5-min): builds one
   `BuildingController` from the **merged tuning** — global `ControllerConfig`
   (`entry.data[CONF_CONTROLLER]` overlaid by `entry.options[CONF_CONTROLLER]`) plus, per room, the
@@ -898,12 +910,20 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   `domain=["sensor"], device_class=["temperature"]` (per loop, multiple); room temp sensor+temperature;
   humidity `device_class=["humidity"]`; fast source `domain=["climate"]`. Rooms can be seeded
   from HA areas but manual add is fine. Config
-  flow `VERSION = 4`; `async_migrate_entry` folds legacy v1 (`participates` + `live_control` +
+  flow `VERSION = 6`; `async_migrate_entry` folds legacy v1 (`participates` + `live_control` +
   `kill_switch`) into `CONF_ROOM_STATE` (safety precedence: `participates == false` ⇒ `off`),
   purges the retired switch entities from the registry, (v2 → v3, shadow removal
-  2026-07-12 — DECISIONS §13) maps every state ∉ {`off`, `live`} to `off`, and (v3 → v4,
-  2026-07-22 — DECISIONS §27) drops the retired `entity_mode` key; a v1 entry passes
-  every block in ONE call. The **options flow is a menu** with four
+  2026-07-12 — DECISIONS §13) maps every state ∉ {`off`, `live`} to `off`, (v3 → v4,
+  2026-07-22 — DECISIONS §27) drops the retired `entity_mode` key, (v4 → v5, 2026-10-12 —
+  DECISIONS §34) strips the retired S6 knobs, and (v5 → v6, 2026-10-22, issue #31 —
+  DECISIONS §35) reduces the global tuning (`data` ← `options`) to sparse overrides in
+  `entry.options[CONF_CONTROLLER]`: non-knob fields, values equal to the current default and
+  values equal to an earlier shipped default (`SUPERSEDED_CONTROLLER_DEFAULTS`) are dropped
+  and logged, `entry.data` loses the key; a v1 entry passes every block in ONE call. **The
+  global tuning is persisted as sparse overrides only** (issue #31): the wizard stores the
+  algorithm step's non-default knobs in `entry.options` (never a snapshot in `data`), and every
+  global write (settings leaf, `set_tuning`) stores only knobs differing from the library
+  default, so a later retune of a default reaches existing installs. The **options flow is a menu** with four
   leaves: `add_room` / `edit_room` (name immutable) / `remove_room` (with entity-registry and
   setpoint-Store cleanup) / `settings` — the settings form carries the per-room control-state
   selects (off/live) + the advanced global controller knobs, merged over existing options
@@ -930,10 +950,14 @@ Mirror blueprint §2 exactly, with these tortoise-specific choices:
   `tortoise_ufh/set_room_state` (`{room, state ∈ ROOM_STATES}`), `tortoise_ufh/set_mode`,
   `tortoise_ufh/get_tuning` (knob descriptors with ranges/units from
   `CONTROLLER_NUMBER_KNOBS`, effective global values, sparse per-room overrides, library
-  defaults) and `tortoise_ufh/set_tuning` (`{scope: "global"|room, values: {field: value}}`;
+  defaults, and — since issue #31 — `global_overrides` (the knobs stored as global overrides)
+  and `superseded_defaults` (`{knob: [old default, ...]}`)) and `tortoise_ufh/set_tuning`
+  (`{scope: "global"|room, values: {field: value}}`;
   range-checked, cross-validated by constructing a `ControllerConfig`, persisted to
-  `entry.options[CONF_CONTROLLER]` / `[CONF_ROOM_TUNING]`; a `None` value clears a room's field
-  override and an emptied room map is pruned; the write reloads the entry). The retired
+  `entry.options[CONF_CONTROLLER]` (sparse: only knobs differing from the default; a setup-time
+  copy in `entry.data` is dropped) / `[CONF_ROOM_TUNING]`; a `None` value clears a room's field
+  override (an emptied room map is pruned) or, in the global scope, resets the knob to the
+  library default; the write reloads the entry). The retired
   `set_room_enabled` / `set_kill_switch` commands do not exist.
   Each `@websocket_api.websocket_command` + `@callback`, admin-guarded.
 - **`panel.py`** + `__init__.py`: serve `frontend/tortoise-ufh-panel.js` via
@@ -976,7 +1000,10 @@ Must render:
   by `get_config`.
 - **Strojenie**: rendered entirely from the `get_tuning` payload (knob descriptors + units +
   ranges, global values, sparse per-room overrides, defaults); edits go through `set_tuning`
-  (global scope or per-room override; clearing a field reverts to global).
+  (global scope or per-room override; clearing a field reverts to global). Global scope (issue
+  #31): a knob off its default shows a "custom" badge and a per-knob **reset to default** (saved
+  as `null`); a value equal to an entry of `superseded_defaults` is marked "old default"; the save
+  sends only non-default knobs (plus `null` for stored overrides put back on the default).
 - Poll `get_live` every ~5 s (or subscribe if you add an event).
 - Light/dark aware via `hass.themes`; degrade gracefully if a WS command errors (show message, never
   throw). Keep it dependency-free and defensive.

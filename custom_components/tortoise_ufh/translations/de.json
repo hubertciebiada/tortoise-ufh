@@ -116,7 +116,7 @@
       },
       "settings": {
         "title": "Regelung & Abstimmung",
-        "description": "Legen Sie den Regelungszustand jedes Raums fest — Aus (von der Regelung ausgenommen, es wird nichts an die Hardware geschrieben) oder Aktiv (steuert seine Ventile und die Zusatzquelle) — und passen Sie die erweiterten Reglerverstärkungen an. Das Panel und die Regelungszustands-Select-Entitäten je Raum sind die primäre Oberfläche; dieses Formular ist ein Notfall-/automatisierungsfreier Rückfall.",
+        "description": "Legen Sie den Regelungszustand jedes Raums fest — Aus (von der Regelung ausgenommen, es wird nichts an die Hardware geschrieben) oder Aktiv (steuert seine Ventile und die Zusatzquelle) — und passen Sie die erweiterten Reglerverstärkungen an. Das Panel und die Regelungszustands-Select-Entitäten je Raum sind die primäre Oberfläche; dieses Formular ist ein Notfall-/automatisierungsfreier Rückfall. Gespeichert werden nur Verstärkungen, die vom Standard abweichen; eine auf den Standard zurückgesetzte Verstärkung folgt künftigen Änderungen des Standards.",
         "data": {
           "kp": "Proportionalverstärkung kp (%/K)",
           "ki": "Integralverstärkung ki (%/(K·s))",

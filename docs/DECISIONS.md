@@ -1985,3 +1985,44 @@ re-assert and `valve_mismatch` are unchanged.
 The loop still protects itself through S1/S2 and the cooling dew-point layers; actuation
 faults must be caught by the actuator's own diagnostics or by the owner noticing a room
 that does not follow its setpoint.
+
+## 35. Global tuning persisted as overrides only (2026-10-22, issue #31)
+
+**Incident.** A live install ran `kp 8 / ki 0.02 / kt 6` for three months while the library
+defaults have been `kp 14 / ki 0.0015 / kt 12` since §8, and wrote valves with a 2 pp
+threshold although the default has been 5 pp since K2b (§11). The cause was the storage
+shape, not the control law: the setup wizard seeded `entry.data[controller]` with
+`asdict(ControllerConfig())`, and the options flow and `set_tuning` (global scope) wrote
+`asdict(validated)` — every field — into `entry.options[controller]`. A snapshot freezes the
+defaults of the day it was taken, so no later retune could reach the house, and
+`valve_write_threshold_pct` (not a knob) could not even be fixed from the UI.
+
+**Decision.** The global tuning gets the shape the per-room tuning already had: sparse
+overrides.
+
+- **Persist overrides only.** The wizard, the settings leaf and `set_tuning` store in
+  `entry.options[controller]` only the user-facing knobs whose value differs from the
+  library default (`core/config.py::controller_overrides`, numbers compared within a relative
+  1e-9, booleans strictly). A knob set back to its default is not stored and follows future
+  retunes. `null` in a global `set_tuning` resets the knob to the default (before it was
+  rejected). `kd`, `cycle_seconds` and `valve_write_threshold_pct` are never stored. The
+  wizard no longer writes `entry.data[controller]`; a global save drops a copy left there,
+  since `data ← options` merging would let it shadow a reset.
+- **Migration v5 → v6.** The stored global tuning (`data ← options`, the old merge rule) is
+  reduced to genuine overrides and moved to `options`; `data` loses the key. Dropped: fields
+  that are not knobs, values equal to the current default, and values equal to an earlier
+  shipped default from `SUPERSEDED_CONTROLLER_DEFAULTS` — `kp {8}`, `ki {0.02}`, `kt {6}`,
+  `valve_write_threshold_pct {2}`. The decision log is the source for that table (the git
+  history before v0.21.0 is not available); it records no other change to a knob's
+  default. Everything dropped is logged at INFO. Per-room overrides were always sparse
+  and deliberate, so they are left alone even when they equal an old default.
+- **Panel.** In the global scope a knob off its default shows a "custom" badge and a
+  per-knob **reset to default** button; a value equal to an old shipped default is marked
+  "old default" (`get_tuning` now carries `global_overrides` and `superseded_defaults`). The
+  global save sends only the non-default knobs, plus `null` for a stored override put back
+  on its default.
+
+**Trade-off.** A user who deliberately chose exactly `kp 8`, `ki 0.02` or `kt 6` loses that
+value in the migration (it is indistinguishable from the frozen default) and sees the log
+line; one who deliberately keeps a knob AT today's default follows the next retune of that
+default. Both are the intended reading of "default".
