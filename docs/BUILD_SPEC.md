@@ -300,6 +300,23 @@ restores the dew-safe target. The four `hp_flicker_*` knobs above are the only n
 optional pump entities (return + compressor-frequency drive it, outlet is diagnostic-only). OFF by
 default; Panasonic-specific.
 
+**Amendment 2026-10-22 (heating-setpoint write gate, DECISIONS §38, issue #33):** ADDITIVE —
+**no change to the three-output contract, no `RoomReport` field, no config migration.** The
+pure-core `HeatingSetpointGate` (`core/hp_link.py`, frozen `HeatingGateDecision`, reason
+vocabulary `HEATING_GATE_REASONS`) sits between the heating curve and the ONE existing
+heating-setpoint write: play operator (`heating_curve_hysteresis_k`) on the raw curve value →
+round to the entity's `step` → optional `offset_k` (the #34 kick hook) → clamp to the entity's
+`min`/`max`. With the compressor frequency AND outlet readable and `heating_gate_enabled`, a
+target different from the pump's CURRENT setpoint (entity state; else the last write) is
+written only if: running → increase always, decrease iff `outlet < q + heating_stop_offset_k`;
+idle → increase iff `outlet < q − restart_band`, decrease iff `outlet ≥ q`; otherwise held and
+re-evaluated every cycle. An unchanged setpoint is never re-asserted while the gate is active.
+`restart_band` = the optional entity `entity_hp_restart_band` when it reads [1, 10] K, else
+`heating_restart_band_k`. Missing input or gate off ⇒ the pre-#33 write (0.5 K threshold +
+45-min re-assert), hysteresis still applied. The heating write passes `confirm=True` to
+`CommandWriter.write_hp_setpoint`: a cached write the entity state does not show after 120 s
+is written again. Cooling path (incl. flicker) unchanged.
+
 **Report must be JSON-serializable** (provide `to_dict()` helpers on `RoomOutputs`/`RoomReport`/
 `BuildingOutputs` returning plain dict/list/str/float/bool; enums -> their `.value`). The HA websocket
 and the panel consume these dicts.
@@ -622,6 +639,10 @@ class ControllerConfig:
     heating_curve_neutral_c: float = 15.0  # ADDITIVE (2026-10-22, #35, DECISIONS §37): the curve's own neutral outdoor temp, GLOBAL-only, [-30,40]
     heating_supply_min_c: float = 20.0   # ADDITIVE (#35): curve lower clamp (was HEATING_SUPPLY_MIN_C), GLOBAL-only, [20,35]
     heating_supply_max_c: float = 40.0   # ADDITIVE (#35): curve upper clamp (was HEATING_SUPPLY_MAX_C), GLOBAL-only, [25,40]
+    heating_gate_enabled: bool = True    # ADDITIVE (2026-10-22, #33, DECISIONS §38): heating-setpoint write gate on/off, GLOBAL-only
+    heating_curve_hysteresis_k: float = 0.5  # ADDITIVE (#33): play on the raw curve value before quantization, GLOBAL-only, [0,2]
+    heating_restart_band_k: float = 3.0  # ADDITIVE (#33): pump's restart band ("ΔT for heating ON"), fallback of entity_hp_restart_band, GLOBAL-only, [1,10]
+    heating_stop_offset_k: float = 2.0   # ADDITIVE (#33): pump's stop offset above target (decrease-while-running rule), GLOBAL-only, [0.5,5]
     hp_flicker_band_k: float = 2.5       # ADDITIVE (2026-07-15, #7): flicker target cooling deadband, GLOBAL-only, [0.5,3.0]; #32: 1.5 -> 2.5
     hp_flicker_stuck_minutes: float = 30.0   # ADDITIVE (2026-07-15, #7): stuck&armed time before a pulse, GLOBAL-only, [5,120]; #32: 10 -> 30
     hp_flicker_min_off_minutes: float = 60.0  # ADDITIVE (2026-07-15, #7): forced-start cooldown, GLOBAL-only, [5,120]; #32: 20 -> 60
@@ -640,6 +661,7 @@ class ControllerConfig:
     # heating_supply_slope in [0,2], heating_curve_neutral_c in [-30,40], heating_supply_min_c in [20,35],
     # heating_supply_max_c in [25,40], heating_supply_min_c < heating_supply_max_c,
     # heating_supply_min_c <= heating_supply_base_c <= heating_supply_max_c (#35),
+    # heating_curve_hysteresis_k in [0,2], heating_restart_band_k in [1,10], heating_stop_offset_k in [0.5,5] (#33),
     # hp_flicker_band_k in [0.5,3.0], hp_flicker_stuck_minutes in [5,120], hp_flicker_min_off_minutes in [5,120], hp_flicker_max_starts_per_h in [1,6]
 
 # ADDITIVE (2026-10-22, issue #31, DECISIONS §35): sparse tuning persistence helpers.
@@ -1031,10 +1053,17 @@ Must render:
   Issue #35: the global-only water knobs form two groups, "Cooling water"
   (`cooling_supply_base_c` + the setpoint-flicker) and "Heating water" (the curve:
   `heating_curve_neutral_c`, `heating_supply_base_c`, `heating_supply_slope`,
-  `heating_supply_min_c`, `heating_supply_max_c`; later issues add the write gate and the
-  compressor kick there); under the latter a curve preview table (outdoor → water, 1 decimal)
-  is refreshed from `preview_heating_curve` with the unsaved draft, and the Heat-pump tab
-  shows the live `heating.curve` next to the heating setpoint.
+  `heating_supply_min_c`, `heating_supply_max_c`, then the issue #33 write gate:
+  `heating_curve_hysteresis_k`, `heating_gate_enabled`, `heating_restart_band_k`,
+  `heating_stop_offset_k`; issue #34 adds the compressor kick there); under the latter a curve
+  preview table (outdoor → water, 1 decimal) is refreshed from `preview_heating_curve` with the
+  unsaved draft, and the Heat-pump tab shows the live `heating.curve` next to the heating
+  setpoint. Issue #33: the Heat-pump tab has a "Heating setpoint gate" card from
+  `get_live.heat_pump.heating.gate` (reason as a localised `hp_gate_r_<reason>` label, desired
+  vs pump setpoint, raw curve, compressor, outlet, restart band + source, stop offset, held
+  for); `heating` also carries `curve_c`, `pump_setpoint_c`, `held`, and `target_c` is the
+  quantized target. A global diagnostic sensor `hp_heating_gate` publishes the reason, and the
+  diagnostics download includes the whole `heat_pump` view.
 - Poll `get_live` every ~5 s (or subscribe if you add an event).
 - Light/dark aware via `hass.themes`; degrade gracefully if a WS command errors (show message, never
   throw). Keep it dependency-free and defensive.

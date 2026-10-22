@@ -66,6 +66,10 @@
           "heating_curve_neutral_c": "Neutrale Außentemperatur der Heizkurve (°C, global)",
           "heating_supply_min_c": "Minimale Heizwassertemperatur (°C, global)",
           "heating_supply_max_c": "Maximale Heizwassertemperatur (°C, global)",
+          "heating_gate_enabled": "Heizsollwert: auf sicheren Verdichterzustand warten (global)",
+          "heating_curve_hysteresis_k": "Hysterese der Heizwasserkurve (K, global)",
+          "heating_restart_band_k": "Wiederanlaufband der Pumpe, ΔT für Heizen EIN (K, global)",
+          "heating_stop_offset_k": "Abschaltschwelle der Pumpe über dem Sollwert (K, global)",
           "hp_flicker_enabled": "Kühlstart erzwingen (Panasonic Aquarea)",
           "hp_flicker_band_k": "Kühlstart erzwingen: angestrebtes Totband (K, global)",
           "hp_flicker_min_open_pct": "Kühlstart erzwingen: min. Gesamtöffnung der Kreise (%, global)",
@@ -141,6 +145,10 @@
           "heating_curve_neutral_c": "Neutrale Außentemperatur der Heizkurve (°C, global)",
           "heating_supply_min_c": "Minimale Heizwassertemperatur (°C, global)",
           "heating_supply_max_c": "Maximale Heizwassertemperatur (°C, global)",
+          "heating_gate_enabled": "Heizsollwert: auf sicheren Verdichterzustand warten (global)",
+          "heating_curve_hysteresis_k": "Hysterese der Heizwasserkurve (K, global)",
+          "heating_restart_band_k": "Wiederanlaufband der Pumpe, ΔT für Heizen EIN (K, global)",
+          "heating_stop_offset_k": "Abschaltschwelle der Pumpe über dem Sollwert (K, global)",
           "hp_flicker_enabled": "Kühlstart erzwingen (Panasonic Aquarea)",
           "hp_flicker_band_k": "Kühlstart erzwingen: angestrebtes Totband (K, global)",
           "hp_flicker_min_open_pct": "Kühlstart erzwingen: min. Gesamtöffnung der Kreise (%, global)",
@@ -229,15 +237,17 @@
           "entity_hp_cooling_setpoint": "Entität für Kühlwasser-Sollwert (number, optional)",
           "entity_hp_active": "Entität „Pumpe für Fußbodenheizung verfügbar“ (optional)",
           "entity_hp_return_temp": "Rücklauf-/Eintrittswassertemperatur-Sensor (optional, für das Kühlstart-Erzwingen)",
-          "entity_hp_outlet_temp": "Vorlauf-/Austrittswassertemperatur-Sensor (optional, Diagnose)",
-          "entity_hp_compressor_freq": "Verdichterfrequenz-Sensor (optional, für das Kühlstart-Erzwingen)"
+          "entity_hp_outlet_temp": "Vorlauf-/Austrittswassertemperatur-Sensor (optional, für die Heizsollwert-Sperre)",
+          "entity_hp_compressor_freq": "Verdichterfrequenz-Sensor (optional, für das Kühlstart-Erzwingen und die Heizsollwert-Sperre)",
+          "entity_hp_restart_band": "Entität Wiederanlaufband, „ΔT für Heizen EIN“ (optional, K)"
         },
         "data_description": {
           "entity_hp_mode": "Select im HeishaMon-Stil mit Optionen wie „Heat only“ / „Cool only“ / „Heat+DHW“. Tortoise schreibt nur die Richtung und entfernt niemals das WW-Flag.",
           "entity_hp_active": "Aus, während die Pumpe WW-Bereitung/Abtauung durchführt — die Raumregler frieren dann ihre Integratoren ein.",
           "entity_hp_return_temp": "Rücklauf-/Eintrittswassersonde der Pumpe. Hauptsignal des Kühlstart-Erzwingens: In langen Stillständen bleibt der Rücklauf nahe Kühl-Sollwert + 3 K stehen. Panasonic-Beispiel: sensor.panasonic_heat_pump_main_main_inlet_temp.",
-          "entity_hp_outlet_temp": "Vorlauf-/Austrittswassersonde der Pumpe. In dieser Version nur Diagnose — im Wärmepumpen-Tab angezeigt; noch keine Logik nutzt sie (reserviert für einen künftigen vorlaufseitigen Kondensationsschutz).",
-          "entity_hp_compressor_freq": "Verdichterfrequenz in Hz (0 = aus). Dient zur Erkennung, dass die Pumpe in ihrem Totband stillsteht. Panasonic-Beispiel: sensor.panasonic_heat_pump_main_compressor_freq."
+          "entity_hp_outlet_temp": "Vorlauf-/Austrittswassersonde der Pumpe. Zusammen mit der Verdichterfrequenz hält Tortoise eine Änderung des Heizsollwerts zurück, solange der Verdichter steht und die Änderung seinen Wiederanlauf blockieren könnte (Panasonic). Wird auch im Wärmepumpen-Tab angezeigt. Panasonic-Beispiel: sensor.panasonic_heat_pump_main_main_outlet_temp.",
+          "entity_hp_compressor_freq": "Verdichterfrequenz in Hz (0 = aus). Dient zur Erkennung, dass die Pumpe steht — für das Kühlstart-Erzwingen und die Heizsollwert-Sperre. Panasonic-Beispiel: sensor.panasonic_heat_pump_main_compressor_freq.",
+          "entity_hp_restart_band": "Das eigene Wiederanlaufband der Pumpe in K: Der Verdichter startet, sobald der Vorlauf so weit unter den Heizsollwert fällt. Ist die Entität gesetzt und liefert 1–10 K, ersetzt sie den Parameter „Wiederanlaufband der Pumpe“."
         }
       },
       "manifolds": {
@@ -433,6 +443,9 @@
       },
       "hp_flicker_state": {
         "name": "Kühlstart erzwingen – Status"
+      },
+      "hp_heating_gate": {
+        "name": "Heizsollwert-Sperre"
       }
     },
     "binary_sensor": {

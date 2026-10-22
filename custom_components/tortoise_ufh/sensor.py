@@ -32,6 +32,10 @@ Global (``EntityCategory.DIAGNOSTIC``):
       ``pulse`` / ``cooldown``); its recorder history is the durable source the
       panel counts forced starts from (the in-memory hourly counter resets on
       every reload).
+    * ``hp_heating_gate`` — the heating-setpoint write gate's reason of the
+      cycle (``in_sync``, ``hold_increase_idle``, ``write_decrease_running``,
+      ``ungated_no_input``, ...; issue #33), ``None`` without a heating
+      setpoint entity. Its history shows when and why a target was held.
 
 Units: temperatures in degrees Celsius, valve position in percent, trend in
 kelvin per hour.
@@ -169,6 +173,20 @@ def _global_hp_flicker_state(data: CoordinatorData, _room: str | None) -> str:
     return str(hp.flicker.get("state", "idle"))
 
 
+def _global_hp_heating_gate(data: CoordinatorData, _room: str | None) -> str | None:
+    """Return the heating-setpoint write gate's reason of the cycle (#33).
+
+    ``None`` (unknown) when the heat-pump link has no heating setpoint entity.
+    """
+    hp = data.heat_pump
+    if hp is None or hp.heating is None:
+        return None
+    gate = hp.heating.get("gate")
+    if not isinstance(gate, dict):
+        return None
+    return str(gate.get("reason", "no_target"))
+
+
 # ---------------------------------------------------------------------------
 # Sensor descriptions
 # ---------------------------------------------------------------------------
@@ -303,6 +321,12 @@ GLOBAL_SENSORS: tuple[TortoiseUfhSensorEntityDescription, ...] = (
         translation_key="hp_flicker_state",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_global_hp_flicker_state,
+    ),
+    TortoiseUfhSensorEntityDescription(
+        key="hp_heating_gate",
+        translation_key="hp_heating_gate",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_global_hp_heating_gate,
     ),
 )
 

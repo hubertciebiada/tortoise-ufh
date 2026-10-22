@@ -18,6 +18,7 @@ seconds (monotonic).
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -81,6 +82,18 @@ Used only when the entity's own ``step`` attribute cannot be read (entity
 unavailable). Matches Home Assistant's own default number step and the common
 A2W pump resolution, so a rare missing-attribute read still lands the value on
 a plausible grid instead of writing a raw curve/dew artefact.
+"""
+
+_HP_CONFIRM_SETTLE_S: float = 120.0
+"""Time a written heat-pump setpoint gets to show up in the entity state [s].
+
+Issue #33 (related, same class as #11): ``number.set_value`` is issued with
+``blocking=False``, so an entity-side rejection (a value outside the number's
+range, a pump that ignores the request) used to look delivered until the
+45-min re-assert. With ``confirm=True`` a cached value older than this that
+the entity state still does not show is written again on the next cycle. Two
+minutes covers an MQTT round trip (HeishaMon) and keeps an off-cycle
+debounced recompute seconds after a write from repeating it.
 """
 
 # FastSourceMode -> Home Assistant climate HVAC mode string.
@@ -182,6 +195,9 @@ class CommandWriter:
         # (value_c, monotonic). Same re-assert philosophy as the splits (S3).
         self._last_written_hp_mode: dict[str, tuple[str, float]] = {}
         self._last_written_hp_setpoint: dict[str, tuple[float, float]] = {}
+        # Setpoint value per entity whose missing confirmation was already
+        # logged (issue #33): one warning per value, not one per retry.
+        self._hp_unconfirmed_logged: dict[str, float] = {}
 
     def last_written_valve(self, entity_id: str) -> float | None:
         """Return the last position written to a valve entity, if any.
@@ -493,8 +509,99 @@ class CommandWriter:
         except (TypeError, ValueError):
             return _DEFAULT_HP_STEP_C
 
+    def hp_setpoint_state(self, entity_id: str) -> float | None:
+        """Read a setpoint ``number`` entity's current value [degC] (#33).
+
+        The heating-setpoint write gate compares a new target with what the
+        pump actually holds (not with what Tortoise last sent), so a manual
+        change or a rejected write is seen on the next cycle.
+
+        Args:
+            entity_id: The setpoint ``number`` entity id.
+
+        Returns:
+            The numeric state [degC], or ``None`` when missing, unavailable or
+            not a finite number.
+        """
+        state = self._hass.states.get(entity_id)
+        if state is None:
+            return None
+        try:
+            value = float(state.state)
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) else None
+
+    def hp_setpoint_limits(self, entity_id: str) -> tuple[float | None, float | None]:
+        """Read a setpoint ``number`` entity's ``min`` / ``max`` [degC] (#33).
+
+        Used to clamp the heating target into the entity's own range, so
+        ``number.set_value`` never rejects it as out of range.
+
+        Args:
+            entity_id: The setpoint ``number`` entity id.
+
+        Returns:
+            ``(min, max)``, each ``None`` when missing or not a number.
+        """
+        state = self._hass.states.get(entity_id)
+        if state is None:
+            return None, None
+
+        def _attr(key: str) -> float | None:
+            try:
+                value = float(state.attributes[key])
+            except (KeyError, TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) else None
+
+        return _attr("min"), _attr("max")
+
+    def last_written_hp_setpoint(self, entity_id: str) -> float | None:
+        """Return the last value written to a setpoint entity, if any.
+
+        Args:
+            entity_id: The setpoint ``number`` entity id.
+
+        Returns:
+            The last written value [degC], or ``None`` when never written.
+        """
+        cached = self._last_written_hp_setpoint.get(entity_id)
+        return None if cached is None else cached[0]
+
+    def _hp_write_unconfirmed(
+        self, entity_id: str, cached: tuple[float, float], now_monotonic: float
+    ) -> bool:
+        """Whether a cached setpoint write is not (yet) shown by the entity.
+
+        ``True`` only when the write is older than :data:`_HP_CONFIRM_SETTLE_S`
+        and the entity reports a numeric value more than half a grid step
+        away from it. An unreadable state never counts as unconfirmed (the
+        threshold / re-assert behaviour applies as before).
+
+        Args:
+            entity_id: The setpoint ``number`` entity id.
+            cached: The ``(value_c, monotonic)`` cache entry.
+            now_monotonic: The current monotonic time [s].
+
+        Returns:
+            Whether the cached value should be written again.
+        """
+        if now_monotonic - cached[1] < _HP_CONFIRM_SETTLE_S:
+            return False
+        state_c = self.hp_setpoint_state(entity_id)
+        if state_c is None:
+            return False
+        tolerance = max(self.hp_setpoint_step(entity_id) / 2.0, 0.05)
+        return abs(state_c - cached[0]) >= tolerance
+
     async def write_hp_setpoint(
-        self, entity_id: str, value_c: float, *, threshold_k: float = 0.5
+        self,
+        entity_id: str,
+        value_c: float,
+        *,
+        threshold_k: float = 0.5,
+        confirm: bool = False,
     ) -> None:
         """Write a water setpoint via ``number.set_value``, rarely (B2).
 
@@ -518,10 +625,18 @@ class CommandWriter:
         dew-point floor, so it must not look delivered while the pump is
         offline — the first cycle that reaches it again writes it.
 
+        With ``confirm=True`` (the heating path, issue #33) the cache is
+        checked against the entity state: a value written more than
+        :data:`_HP_CONFIRM_SETTLE_S` ago that the entity still does not show
+        (rejected, or ignored by the pump) is written again instead of being
+        skipped until the re-assert — logged once per value. The cooling path
+        keeps ``confirm=False`` (unchanged behaviour).
+
         Args:
             entity_id: The setpoint ``number`` entity id.
             value_c: The setpoint to write [degC].
             threshold_k: Minimum change that triggers a fresh write [K].
+            confirm: Retry a cached value the entity state does not confirm.
         """
         if _unreachable(self._hass, entity_id):
             return
@@ -529,6 +644,22 @@ class CommandWriter:
         value_c = round_to_step_c(value_c, step_c)
         cached = self._last_written_hp_setpoint.get(entity_id)
         now_monotonic = time.monotonic()
+        if (
+            confirm
+            and cached is not None
+            and abs(value_c - cached[0]) < threshold_k
+            and self._hp_write_unconfirmed(entity_id, cached, now_monotonic)
+        ):
+            if self._hp_unconfirmed_logged.get(entity_id) != cached[0]:
+                self._hp_unconfirmed_logged[entity_id] = cached[0]
+                _LOGGER.warning(
+                    "Heat-pump setpoint %.1f degC written to %s is not shown by "
+                    "the entity (state %s); writing it again",
+                    cached[0],
+                    entity_id,
+                    self.hp_setpoint_state(entity_id),
+                )
+            cached = None
         if (
             cached is not None
             and abs(value_c - cached[0]) < threshold_k

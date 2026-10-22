@@ -131,7 +131,12 @@ rename. The controller I/O contract lives in `models.py` and is frozen (implemen
   **cooling setpoint-flicker** (`SetpointFlicker` + `cooling_demand` in `hp_link.py`): when the
   Panasonic pump idles in its fixed 3 K return deadband with real demand, drop the written cooling
   setpoint to the raw dew point for ONE cycle to trip the compressor, then restore — colder average
-  water, return stays dew-safe; 4 global knobs, Panasonic-specific, OFF by default (v0.13.0, §21).
+  water, return stays dew-safe; 4 global knobs, Panasonic-specific, OFF by default (v0.13.0, §21);
+  and the **heating-setpoint write gate** (`HeatingSetpointGate` in `hp_link.py`, issue #33,
+  DECISIONS §38): hysteresis on the raw curve value, then a heating-target step is written only
+  in a compressor state where it cannot block the Panasonic restart (reads compressor frequency
+  + outlet; held otherwise; no idle re-assert; ungated fallback without inputs), ON by default,
+  4 global knobs + an optional restart-band entity; `offset_k` is the hook for #34's kick.
 
 ---
 

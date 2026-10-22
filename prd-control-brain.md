@@ -497,6 +497,14 @@ pompy (§8.10 w mocy). Sprzężenie jest w całości **opt-in** — bez skonfigu
   współdzielony `ff_neutral_c` członu pogodowego zaworów) i nastawialne granice; panel
   pokazuje podgląd krzywej przy +15/+5/−5/−15 °C. Domyślnie NIEskonfigurowana — pompa jedzie na własnej krzywej
   (default właściciela, w pełni wspierany).
+  Od 2026-10-22 (issue #33, DECISIONS §38) zapis nastawy grzania przechodzi przez **bramkę
+  stanu sprężarki** (`HeatingSetpointGate`): histereza `heating_curve_hysteresis_k` na surowej
+  wartości krzywej przed zaokrągleniem do kroku encji; przy podłączonych encjach częstotliwości
+  sprężarki i temperatury wylotu — praca: podwyżka od razu, obniżka gdy wylot < nowa + 2 K
+  (`heating_stop_offset_k`); postój: podwyżka gdy wylot < nowa − 3 K (`heating_restart_band_k`
+  lub opcjonalna encja pasma pompy), obniżka gdy wylot ≥ nowa; inaczej trzymana poprzednia
+  nastawa. Bez wejść (lub z wyłączonym `heating_gate_enabled`) zapis jak dotąd. Powód: na
+  Panasonic Aquarea krok nastawy przy stojącej sprężarce potrafi zablokować jej ponowny start.
 - **Ręczny przełącznik CWU** (panel, WS `set_hp_dhw`): dokłada/zdejmuje człon `+DHW`;
   zdjęcie flagi z `DHW only` jest odmawiane (brak kierunku bazowego). Automatyka CWU może
   przełącznik w każdej chwili nadpisać — to jej prawo (ostrzeżenie na stałe w UI).

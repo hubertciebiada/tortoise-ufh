@@ -199,7 +199,8 @@ Reiter:
   „abstimmen“.
 - **Wärmepumpe** — Status der optionalen Anbindung an die Pumpe (§11): Tortoise-Modus
   vs. Pumpenmodus (synchron/abweichend), Schalter des WW-Flags, Wasser-Sollwerte mit
-  ihren Bestandteilen und das Signal „Pumpe für Fußbodenheizung verfügbar“. Ohne
+  ihren Bestandteilen, die **Heizsollwert-Sperre** (Zielsollwert vs. Sollwert in der Pumpe
+  und Grund des Zurückhaltens — Issue #33) und das Signal „Pumpe für Fußbodenheizung verfügbar“. Ohne
   Konfiguration wird eine Anleitung angezeigt, wo man sie aktiviert.
 - **Verteiler** (seit v0.21.0) — eine Karte je Verteiler: Kopfzeile (Name, „KAN-therm
   InoxFlow UFST · n Heizkreise“, Temperatur von Hauptvorlauf und -rücklauf aus den
@@ -244,7 +245,10 @@ Globale Entitäten (Gerät „UFH controller“):
   möchten den Modus aus einem eigenen `input_select` steuern? Dann eine
   Automatisierung mit `select.select_option` anlegen),
 - `sensor.*_global_safe_dew_point` — globaler sicherer Taupunkt (§9),
-- `sensor.*_algorithm_status`, `sensor.*_last_update`, `sensor.*_watchdog_status`.
+- `sensor.*_algorithm_status`, `sensor.*_last_update`, `sensor.*_watchdog_status`,
+- `sensor.*_hp_flicker_state` (Zustand von „Kühlstart erzwingen“) und
+  `sensor.*_hp_heating_gate` (Entscheidung der Heizsollwert-Sperre, z. B.
+  `hold_increase_idle` — Issue #33; §11).
 
 Entitäten je Raum (jeder Raum ist ein Gerät, kann einem HA-Bereich zugewiesen
 werden):
@@ -401,6 +405,10 @@ Pumpe, bevor Sie die Heiz-Sollwert-Entität verbinden. Beispiel: Die Pumpe liefe
 | **Kurvensteigung Heizwasser** (`heating_supply_slope`) | K/K | 0,5 | Um wie viele Kelvin der Heizwasser-Sollwert je 1 K Außentemperatur unterhalb des Neutralpunkts der Kurve steigt. Schrittweite **0,01** (seit Issue #35, vorher 0,1). Standard 0,5 K/K; typisch 0,2–0,8 für ein gut gedämmtes Fußbodenheizungshaus. |
 | **Minimale Heizwassertemperatur** (`heating_supply_min_c`) | °C | 20 | Untere Grenze der Kurve (20–35 °C). Muss unter dem Maximum liegen. Standard 20 °C. |
 | **Maximale Heizwassertemperatur** (`heating_supply_max_c`) | °C | 40 | Obere Grenze der Kurve (25–40 °C). Eine reine Fußbodenheizung will oft weniger (Estrich). Standard 40 °C. |
+| **Hysterese der Heizwasserkurve** (`heating_curve_hysteresis_k`) | K | 0,5 | Spiel auf dem rohen Kurvenwert, bevor er auf die Schrittweite der Pumpen-Entität gerundet wird: Der Sollwert ändert sich erst, wenn die Kurve so weit über eine Rundungsgrenze gewandert ist — ein Schwanken der Außentemperatur um 0,1 K schaltet nicht mehr jeden Zyklus 30 ↔ 31 °C um. 0 schaltet es ab. Gilt immer (auch ohne Sperre). Seit Issue #33. |
+| **Auf sicheren Verdichterzustand warten** (`heating_gate_enabled`) | — | ein | Heizsollwert-Sperre (§11, Issue #33): Mit verbundenen Entitäten für Verdichterfrequenz und Vorlauftemperatur wird ein neuer Sollwert nur geschrieben, wenn er den Wiederanlauf des Verdichters nicht blockieren kann (Panasonic); sonst behält die Pumpe den bisherigen Sollwert. Für eine Pumpe, die das nicht braucht, ausschalten — dann geht jeder Sollwert sofort hinaus. |
+| **Wiederanlaufband der Pumpe** (`heating_restart_band_k`) | K | 3 | „ΔT für Heizen EIN“ der Pumpe: Der Verdichter startet, sobald der Vorlauf so weit unter den Sollwert fällt. Bei stehendem Verdichter wird eine Erhöhung nur geschrieben, wenn der Vorlauf unter dem neuen Sollwert minus diesem Band liegt. Eine Band-Entität der Pumpe (Optionen → Wärmepumpe) hat Vorrang, wenn sie 1–10 K liefert. |
+| **Abschaltschwelle der Pumpe** (`heating_stop_offset_k`) | K | 2 | Ein laufender Verdichter stoppt, sobald der Vorlauf den Sollwert um so viel überschreitet. Eine Absenkung bei laufendem Verdichter wird erst geschrieben, wenn der Vorlauf unter dem neuen Sollwert plus dieser Schwelle liegt — sonst würde der Schreibvorgang den Lauf sofort beenden. |
 
 **Kühlwasser — Wärmepumpe (nur global; wirkt ausschließlich mit konfigurierter Anbindung —
 §11)**
@@ -596,7 +604,11 @@ vor.
 - **Entität für den Kühlwasser-Sollwert** (`number`, z. B.
   `number.z1_cool_request_temp`),
 - **Entität „Pumpe für Fußbodenheizung verfügbar“** — wenn ausgeschaltet
-  (WW-Bereitung/Abtauung), frieren die Raumregler den Integralanteil ein.
+  (WW-Bereitung/Abtauung), frieren die Raumregler den Integralanteil ein,
+- Sensoren für **Rücklauftemperatur**, **Vorlauftemperatur** und **Verdichterfrequenz**
+  (Kühlstart erzwingen; Vorlauf und Frequenz speisen auch die Heizsollwert-Sperre) sowie die
+  Entität für das **Wiederanlaufband** der Pumpe („ΔT für Heizen EIN“, K — optional,
+  Issue #33).
 
 **Synchronisierung der Modusrichtung:** Tortoise-Modus „Heizung“ → Variante „Heat“,
 „Kühlung“ → Variante „Cool“, stets **unter Beibehaltung des Teils „+DHW“** — das
@@ -629,6 +641,38 @@ Ihrer eigenen Pumpe — die Vorschau steht im Reiter **Abstimmung** unter der Gr
 „Heizwasser“ und bei konfigurierter Entität auch im Reiter **Wärmepumpe** neben dem
 Heizwasser-Sollwert.
 
+**Heizsollwert-Sperre (Issue #33):** Bei einer Panasonic Aquarea kann eine Änderung des
+Heizwasser-Sollwerts bei stehendem Verdichter **dessen Wiederanlauf blockieren** — der
+Verdichter bleibt aus, obwohl der Vorlauf mehrere Kelvin unter dem Sollwert liegt (auf einer
+Anlage 4-mal in 11 Tagen, jedes Mal nach einem Sollwertschritt im Stillstand, der den Vorlauf
+1,5–3 K unter dem neuen Sollwert ließ). Deshalb:
+
+- der rohe Kurvenwert bekommt eine **Hysterese** (Standard 0,5 K), bevor er auf die
+  Schrittweite der Entität gerundet wird, und der Sollwert wird auf ihr Minimum/Maximum
+  begrenzt;
+- mit verbundenen Sensoren für **Verdichterfrequenz** und **Vorlauf** vergleicht Tortoise den
+  neuen Sollwert mit dem, den **die Pumpe tatsächlich hat** (Zustand der Entität): bei
+  **laufendem** Verdichter eine Erhöhung sofort, eine Absenkung erst, wenn Vorlauf < neuer
+  Sollwert + 2 K (sonst würde die Pumpe sofort abschalten); bei **stehendem** Verdichter
+  eine Erhöhung nur, wenn Vorlauf < neuer Sollwert − 3 K (der Verdichter startet sofort),
+  eine Absenkung nur, wenn Vorlauf ≥ neuer Sollwert. Sonst behält die Pumpe den bisherigen
+  Sollwert, und die Entscheidung wird jeden Zyklus neu geprüft;
+- ein unveränderter Sollwert wird **nicht erneut gesendet** (kein 45-Minuten-Re-Assert bei
+  aktiver Sperre);
+- ohne Frequenz- oder Vorlaufsensor (oder mit ausgeschaltetem Parameter „Auf sicheren
+  Verdichterzustand warten“) ist die Sperre inaktiv, und der Sollwert wird wie bisher sofort
+  geschrieben — das Panel zeigt dann „Sperre inaktiv“.
+
+Band 3 K und Schwelle 2 K sind Parameter der Gruppe „Heizwasser“ (§8); das Band kann auch eine
+Entität der Pumpe liefern. Die Karte **„Heizsollwert-Sperre“** im Reiter Wärmepumpe zeigt die
+Entscheidung (z. B. „Erhöhung zurückgehalten: Verdichter steht, Vorlauf im
+Wiederanlaufband“), den Zielsollwert, den Sollwert in der Pumpe, die rohe Kurve, Verdichter,
+Vorlauf, Band (von der Pumpe oder Parameter), Schwelle und die Dauer des Zurückhaltens;
+dieselbe Entscheidung steht im globalen Diagnosesensor **„Heizsollwert-Sperre“**
+(`hp_heating_gate`) und in der herunterladbaren Diagnose. Übernimmt die Pumpe einen
+Schreibvorgang nicht (der Zustand der Entität zeigt weiter den alten Wert), wiederholt
+Tortoise ihn nach 2 Minuten statt nach 45.
+
 **WW-Schalter (Reiter Wärmepumpe):** fügt den Teil „+DHW“ der Modus-Entität hinzu oder
 entfernt ihn (z. B. „Heat only“ ↔ „Heat+DHW“) — das ist eine manuelle Anforderung
 „Wasser jetzt aufheizen / stopp“, keine Sperre. **Die externe WW-Automatik ist
@@ -657,8 +701,8 @@ Start wird erzwungen: Er würde den Puffer nur um 1–2 K herunterkühlen und de
 lassen. Die aktuelle Summe neben der Schwelle zeigt der Reiter Wärmepumpe (Zeile „Abnahme“),
 auch bei deaktiviertem Erzwingen — so lässt sich die Schwelle vor dem Einschalten abstimmen.
 Geben Sie zuvor die Entitäten für **Rücklauftemperatur** und
-**Verdichterfrequenz** unter Optionen → **Wärmepumpe** an (die **Vorlauf**-Entität ist dort rein
-diagnostisch). Standardmäßig **deaktiviert**; Panasonic-spezifisch. Den Zustand (Impuls / Ruhe /
+**Verdichterfrequenz** unter Optionen → **Wärmepumpe** an (die **Vorlauf**-Entität ist für das
+Erzwingen rein diagnostisch; seit Issue #33 nutzt sie die Heizsollwert-Sperre). Standardmäßig **deaktiviert**; Panasonic-spezifisch. Den Zustand (Impuls / Ruhe /
 Sperrzeit, Schwelle, Messwerte) sehen Sie im Reiter Wärmepumpe. Neben dem flüchtigen Zähler
 „Erzwungene Starts (letzte h)" gibt es dort auch den dauerhaften **„Erzwungene Starts
 (letzte 24 h)"** — gezählt aus der Recorder-Historie des globalen Zustandssensors
@@ -770,6 +814,20 @@ für das ganze Haus.
 
 **Versionsverlauf / Migrationen**
 
+- **Nächste Version (Issue #33)** — **Heizwasser-Sollwert wartet auf den Verdichterzustand**
+  (Panasonic): Ein Sollwertschritt bei stehendem Verdichter konnte dessen Wiederanlauf
+  blockieren. Mit verbundenen Sensoren für Verdichterfrequenz und Vorlauf wird ein neuer
+  Sollwert jetzt nur in einem sicheren Zustand geschrieben (läuft: Erhöhung sofort, Absenkung
+  wenn Vorlauf < neu + 2 K; steht: Erhöhung wenn Vorlauf < neu − 3 K, Absenkung wenn Vorlauf
+  ≥ neu), sonst zurückgehalten; ein unveränderter Sollwert wird nicht erneut gesendet. Eine
+  Hysterese von 0,5 K vor dem Runden auf die Schrittweite beendet das Umschalten 30 ↔ 31 °C bei
+  schwankender Außentemperatur. Neue Parameter in der Gruppe „Heizwasser“: Hysterese, „Auf
+  sicheren Verdichterzustand warten“ (ein), Wiederanlaufband (3 K; optional aus einer
+  Pumpen-Entität) und Abschaltschwelle (2 K). Karte „Heizsollwert-Sperre“ im Reiter Wärmepumpe,
+  Sensor `hp_heating_gate`; das Feld „Heizwasser-Sollwert“ zeigt jetzt den auf die
+  Schrittweite gerundeten Wert. Der Sollwert wird auf den Bereich der Entität begrenzt, und ein
+  vom Entitätszustand nicht bestätigter Schreibvorgang wird nach 2 min wiederholt. Ohne
+  Sensoren — Schreiben wie bisher. Keine Migration.
 - **Nächste Version (Issue #35)** — **Heizwasserkurve mit eigenen Parametern und
   Vorschau**: Die Kurvensteigung hat die Schrittweite **0,01 K/K** (vorher 0,1 — z. B.
   0,23 K/K für eine Pumpe mit 25 °C bei +15 °C / 32 °C bei −15 °C). Die Kurve hat eine

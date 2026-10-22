@@ -2158,3 +2158,89 @@ the curve now has two knobs to change. That coupling is exactly what the owner a
 remove. A development build that already migrated to v6 before this change gets no copy:
 if it had a non-default `ff_neutral_c`, its curve goes back to the 15 °C neutral point until
 the new knob is set. v6 was never released, so no released install is affected.
+
+## 38. Heating-setpoint write gate on the compressor state (2026-10-22, issue #33)
+
+**Context.** One install (Panasonic Aquarea K via HeishaMon), 11 days, 4 lockouts: the
+compressor stayed off with the outlet ≥ 3.5 K below the heating water target for ≥ 10 min
+(71–571 min in total). The mechanism is undocumented, but the data is consistent:
+
+- all 4 lockouts followed a target step made while the compressor was IDLE that left the
+  outlet 1.5–3.0 K below the new target;
+- ~30 idle periods WITHOUT a target change restarted normally at outlet 3.0–3.5 K below the
+  target (the pump's own "ΔT for heating ON" = 3 K);
+- a step leaving the outlet more than 3 K below the new target started the compressor in the
+  same minute (10/10);
+- steps leaving the outlet at or above the new target never locked out. The 0.5–1.5 K band is
+  untested.
+
+Tortoise produced exactly those steps: in HEATING `_sync_heat_pump` wrote `curve.t_supply(T_out)`
+every cycle (0.5 K threshold + 45-min re-assert) regardless of the compressor, and with a 1 K
+entity step and 0.1 K outdoor resolution the quantized target toggled at rounding boundaries.
+
+**Decision.** A pure-core state machine `HeatingSetpointGate` (`core/hp_link.py`, mirroring
+`SetpointFlicker`: `tick(dt)` once per cycle, then `step(...)`; frozen `HeatingGateDecision`
+with a closed `reason` vocabulary) sits between the curve and the ONE heating-setpoint write.
+
+1. **Hysteresis before quantization** (item 3). A play (backlash) operator of half-width
+   `heating_curve_hysteresis_k` (0.5 K, [0, 2]) on the raw curve value, then round to the
+   entity's live `step`. With 0.5 K and a 1 K grid the 30 → 31 boundary is crossed at a raw
+   31.0 and back at 30.0, so a 0.1 K outdoor wobble cannot toggle the target. It applies also
+   when the gate is off or inactive. The target is then clamped to the entity's `min`/`max`.
+2. **Rules** (items 1, 2), with `q` the new target, `c` the pump's current setpoint and `o` the
+   outlet:
+   - running (frequency > 0): increase → write at once; decrease → write once
+     `o < q + heating_stop_offset_k` (2 K, [0.5, 5]) — the pump stops when the outlet exceeds the
+     target by 2 K for 3 min, so an earlier write would end the run;
+   - idle: increase → write only if `o < q − band` (it starts the compressor, observed 10/10);
+     decrease → write only if `o ≥ q` (observed safe); otherwise hold `c` and re-evaluate every
+     cycle. For increases the owner's literal rule is kept: an idle increase that leaves the
+     outlet ABOVE the new target would, by the evidence, also be safe, but it is held until the
+     band is crossed or the compressor runs — conservative, at most a delayed increase.
+   - `c` unknown (no numeric entity state and nothing written yet): only a write that is safe
+     either way (running: `o < q + offset`; idle: `o < q − band`).
+3. **Restart band source.** `band` = the optional `entity_hp_restart_band` (options → Heat
+   pump; on HeishaMon the "ΔT for heating ON" is a pump setting with its own entity) while it
+   reads a plausible 1–10 K, else the knob `heating_restart_band_k` (3 K, [1, 10]).
+4. **No idle re-assert** (item 4). The reference `c` is the entity's STATE, not Tortoise's write
+   cache, so the gate writes only when `q ≠ c` (within half a step). An unchanged setpoint is
+   never re-sent while the gate is active — running or idle (a re-send of the value the pump
+   already shows would be a no-op anyway). The entity state as reference also makes a manual
+   change visible: it is treated as the pump's current setpoint and the rules apply to the next
+   step.
+5. **Fallback.** Compressor-frequency or outlet entity unconfigured or unavailable, or the knob
+   `heating_gate_enabled` (default ON) off: the target (with hysteresis) is written as before
+   #33 (0.5 K threshold + 45-min re-assert); the reason says so (`ungated_no_input` /
+   `ungated_disabled`).
+6. **Visibility** (item 5). `get_live.heat_pump.heating` carries `target_c` (now the quantized
+   target), `curve_c`, `pump_setpoint_c`, `held` and `gate` (reason, gate active, compressor,
+   outlet, band + source, stop offset, held-for). The Heat-pump tab shows a "Heating setpoint
+   gate" card; a global diagnostic sensor `hp_heating_gate` publishes the reason (its history
+   shows when targets were held); the diagnostics download now includes the `heat_pump` view.
+7. **#34 hook.** `step(offset_k=...)` adds a temporary offset after the hysteresis and
+   quantization, so a +1 K compressor kick goes through the same rules and its restore is an
+   ordinary decrease that obeys the decrease rule.
+
+**Write rejection (related, same class as #11).** `write_hp_setpoint` records a value as
+written right after a `blocking=False` call, so an entity-side rejection stayed invisible until
+the 45-min re-assert. Fixed for the heating path, which is contained: (a) the target is clamped
+to the entity's `min`/`max` and quantized to its `step`, so a range rejection cannot happen;
+(b) the heating write passes `confirm=True`: a cached value older than 120 s that the entity
+state does not show (more than half a step off) is written again on the next cycle, logged
+once per value; (c) in the gated path the reference is the entity state anyway, so a lost
+write is simply re-decided next cycle. The cooling path keeps `confirm=False` — it was out of
+scope (flicker pulse/restore semantics untouched) and can adopt it later.
+
+**Knobs.** Four global-only knobs in the "Heating water" group (`HP_GLOBAL_ONLY_KNOBS`):
+`heating_gate_enabled` (bool, on), `heating_curve_hysteresis_k` (0.5), `heating_restart_band_k`
+(3), `heating_stop_offset_k` (2). Fixed, not knobs: the setpoint step (read live from the
+entity) and "no re-assert while gated". New defaults reach every install through the overrides
+scheme (§35); no migration.
+
+**Trade-off.** A held step costs comfort only briefly: a held increase is written as soon as the
+compressor runs (the pump restarts on its own 3 K band below the OLD target) or the outlet
+falls below `q − band`; a held decrease is written once the run cools the outlet or the
+compressor stops with the outlet at the new target. The hysteresis delays a genuine 1 K step
+by up to `heating_curve_hysteresis_k / slope` of outdoor change (1 K outdoor at 0.5 K/K).
+The rules encode one install's evidence on one pump family; other pumps can switch the gate
+off.

@@ -54,6 +54,7 @@ from .const import (
     CONF_ENTITY_HP_HEATING_SETPOINT,
     CONF_ENTITY_HP_MODE,
     CONF_ENTITY_HP_OUTLET_TEMP,
+    CONF_ENTITY_HP_RESTART_BAND,
     CONF_ENTITY_HP_RETURN_TEMP,
     CONF_ENTITY_HUMIDITY,
     CONF_ENTITY_RETURN,
@@ -89,6 +90,7 @@ from .core.fast_source import window_allows
 from .core.hp_link import (
     CoolingDemand,
     FlickerDecision,
+    HeatingSetpointGate,
     SetpointFlicker,
     cooling_demand,
     cooling_setpoint_c,
@@ -296,10 +298,16 @@ class HeatPumpRuntime:
         dhw_only: Whether the pump is currently in ``"DHW only"``.
         cooling: Cooling-setpoint payload ``{entity_id, target_c, base_c,
             safe_dew_c}`` or ``None`` when the entity is not configured.
-        heating: Heating-setpoint payload ``{entity_id, target_c, t_out_c,
-            base_c, slope, neutral_c, min_c, max_c, curve}`` or ``None``
-            (``curve`` is :func:`~tortoise_ufh.tuning.heating_curve_preview`,
-            issue #35).
+        heating: Heating-setpoint payload ``{entity_id, target_c, curve_c,
+            pump_setpoint_c, held, t_out_c, base_c, slope, neutral_c, min_c,
+            max_c, curve, gate}`` or ``None`` (``curve`` is
+            :func:`~tortoise_ufh.tuning.heating_curve_preview`, issue #35;
+            ``target_c`` is the desired target after hysteresis and
+            quantization, ``curve_c`` the raw curve value, ``pump_setpoint_c``
+            what the pump holds, ``gate`` the
+            :meth:`~tortoise_ufh.hp_link.HeatingGateDecision.to_dict` view plus
+            ``enabled``, ``compressor_freq_hz``, ``restart_band_entity_id``,
+            ``restart_band_entity_k`` and ``hysteresis_k`` — issue #33).
         hp_active: The "pump serves the UFH" reading, or ``None`` (unknown /
             unconfigured).
         hp_active_configured: Whether an hp-active entity is configured.
@@ -591,6 +599,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         # global timing knobs off the effective global tuning (the §23 demand
         # threshold is read per cycle in _sync_heat_pump).
         self._flicker: SetpointFlicker = SetpointFlicker(self._global_config)
+        # Heating-setpoint write gate (issue #33, 2026-10-22): same lifecycle
+        # as the flicker — rebuilt on a reload (knob change), its hysteresis
+        # memory and hold timer persist across cycles.
+        self._heating_gate: HeatingSetpointGate = HeatingSetpointGate(
+            self._global_config
+        )
 
         # Source-entity read path (stale cache + plausibility gates) and the
         # actuator write path (thresholds + command caches), each with its own
@@ -1456,7 +1470,8 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
         while HEATING (skipped without an outdoor reading — the pump keeps
         its last setpoint, bounded by its own firmware limits). Both go
         through :meth:`CommandWriter.write_hp_setpoint` (0.5 K threshold +
-        45-min re-assert).
+        45-min re-assert); the heating target first passes the write gate
+        (issue #33, :meth:`_sync_heating_setpoint`).
 
         Cooling setpoint-flicker (issue #7): when enabled AND the cooling
         setpoint entity is configured, the :class:`~tortoise_ufh.hp_link.
@@ -1613,28 +1628,12 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
                     decision, flicker_enabled, return_c, freq_hz, outlet_c, demand_gate
                 )
 
-        # -- Heating water setpoint --------------------------------------------
+        # -- Heating water setpoint (+ write gate, issue #33) -------------------
         heating: dict[str, Any] | None = None
         if heat_entity:
-            curve = heating_curve(self._global_config)
-            t_out = self._reader.read_float_state(self._outdoor_entity())
-            heat_target: float | None = None
-            if self._mode is Mode.HEATING and t_out is not None:
-                heat_target = curve.t_supply(t_out)
-                if writes_enabled:
-                    await self._writer.write_hp_setpoint(heat_entity, heat_target)
-            heating = {
-                "entity_id": heat_entity,
-                "target_c": heat_target,
-                "t_out_c": t_out,
-                "base_c": curve.t_supply_base,
-                "slope": curve.slope,
-                "neutral_c": curve.t_neutral,
-                "min_c": curve.t_supply_min,
-                "max_c": curve.t_supply_max,
-                # Issue #35: the curve at a few outdoor points, for the panel.
-                "curve": heating_curve_preview(self._global_config),
-            }
+            heating = await self._sync_heating_setpoint(
+                heat_entity, writes_enabled=writes_enabled, dt_seconds=dt_seconds
+            )
 
         hp_active = (
             self._reader.read_hp_active_for_ufh(active_entity)
@@ -1655,6 +1654,103 @@ class TortoiseUfhCoordinator(DataUpdateCoordinator[CoordinatorData]):
             writes_enabled=writes_enabled,
             flicker=flicker_payload,
         )
+
+    async def _sync_heating_setpoint(
+        self, heat_entity: str, *, writes_enabled: bool, dt_seconds: float
+    ) -> dict[str, Any]:
+        """Compute, gate and (when allowed) write the heating setpoint (#33).
+
+        The curve value goes through the :class:`~tortoise_ufh.hp_link.
+        HeatingSetpointGate`: hysteresis on the raw value, quantization to the
+        entity's step and clamping to its ``min`` / ``max`` (so the write is
+        never rejected as out of range), then the compressor-state rules. The
+        reference is the pump's CURRENT setpoint (entity state, else the last
+        written value), so a rejected or overridden write is seen next cycle.
+
+        * Gate active (compressor frequency + outlet readable, knob on): the
+          target is written only when the gate says ``write_*`` — never an
+          unchanged setpoint, so nothing is re-asserted while idle.
+        * Gate inactive: the target is written as before #33 (0.5 K threshold
+          + 45-min re-assert), with the hysteresis applied.
+
+        Both paths write with ``confirm=True``: a cached write the entity
+        state does not show after the settle time is written again.
+
+        Args:
+            heat_entity: The heating-setpoint ``number`` entity id.
+            writes_enabled: Whether the link may write this cycle.
+            dt_seconds: The real control-step interval [s] (one gate tick).
+
+        Returns:
+            The ``heat_pump.heating`` payload dict.
+        """
+        cfg = self._hp_options
+        curve = heating_curve(self._global_config)
+        t_out = self._reader.read_float_state(self._outdoor_entity())
+        curve_c: float | None = None
+        if self._mode is Mode.HEATING and t_out is not None:
+            curve_c = curve.t_supply(t_out)
+        freq_entity = str(cfg.get(CONF_ENTITY_HP_COMPRESSOR_FREQ) or "")
+        outlet_entity = str(cfg.get(CONF_ENTITY_HP_OUTLET_TEMP) or "")
+        band_entity = str(cfg.get(CONF_ENTITY_HP_RESTART_BAND) or "")
+        freq_hz = self._reader.read_float_state(freq_entity or None)
+        outlet_c = self._reader.read_float_state(outlet_entity or None)
+        band_value_k = self._reader.read_float_state(band_entity or None)
+        pump_c = self._writer.hp_setpoint_state(heat_entity)
+        if pump_c is None:
+            pump_c = self._writer.last_written_hp_setpoint(heat_entity)
+        entity_min_c, entity_max_c = self._writer.hp_setpoint_limits(heat_entity)
+
+        self._heating_gate.tick(dt_seconds)
+        decision = self._heating_gate.step(
+            curve_c=curve_c,
+            step_c=self._writer.hp_setpoint_step(heat_entity),
+            pump_setpoint_c=pump_c,
+            compressor_freq_hz=freq_hz,
+            outlet_c=outlet_c,
+            restart_band_k=band_value_k,
+            entity_min_c=entity_min_c,
+            entity_max_c=entity_max_c,
+        )
+        if writes_enabled and decision.write_c is not None:
+            await self._writer.write_hp_setpoint(
+                heat_entity, decision.write_c, confirm=True
+            )
+        if decision.held:
+            _LOGGER.debug(
+                "Heating setpoint %.1f held (%s): pump %s, outlet %s",
+                decision.target_c,
+                decision.reason,
+                decision.pump_setpoint_c,
+                decision.outlet_c,
+            )
+        gate = decision.to_dict()
+        gate.update(
+            {
+                "enabled": self._global_config.heating_gate_enabled,
+                "compressor_freq_hz": freq_hz,
+                "restart_band_entity_id": band_entity or None,
+                "restart_band_entity_k": band_value_k,
+                "hysteresis_k": self._global_config.heating_curve_hysteresis_k,
+            }
+        )
+        return {
+            "entity_id": heat_entity,
+            "target_c": decision.target_c,
+            "curve_c": curve_c,
+            "pump_setpoint_c": decision.pump_setpoint_c,
+            "held": decision.held,
+            "t_out_c": t_out,
+            "base_c": curve.t_supply_base,
+            "slope": curve.slope,
+            "neutral_c": curve.t_neutral,
+            "min_c": curve.t_supply_min,
+            "max_c": curve.t_supply_max,
+            # Issue #35: the curve at a few outdoor points, for the panel.
+            "curve": heating_curve_preview(self._global_config),
+            # Issue #33: the write gate's cycle view.
+            "gate": gate,
+        }
 
     @staticmethod
     def _flicker_payload(

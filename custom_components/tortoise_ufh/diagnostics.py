@@ -73,6 +73,9 @@ def _serialize_coordinator_data(
         # Issue #16: learned still-water baseline + latest deviation + flag
         # of every loop probe, keyed by entity id.
         "probe_health": data.probe_health,
+        # Issue #33: the heat-pump link's cycle view — incl. the heating
+        # write gate (held target + reason) and the cooling flicker.
+        "heat_pump": (data.heat_pump.to_dict() if data.heat_pump is not None else None),
     }
 
 
