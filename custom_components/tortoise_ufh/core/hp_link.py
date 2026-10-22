@@ -9,7 +9,8 @@ global Tortoise :class:`~tortoise_ufh.models.Mode` onto a HeishaMon-style
 two bounded water setpoints (cooling = ``max(base, safe dew point)``; heating
 = a simple weather curve reusing :class:`~tortoise_ufh.weather_comp.
 WeatherCompCurve`), the opt-in cooling setpoint-flicker (issue #7) and the
-heating-setpoint write gate (issue #33, :class:`HeatingSetpointGate`).
+heating-setpoint write gate (issue #33, :class:`HeatingSetpointGate`) and the
+opt-in heating compressor kick (issue #34, :class:`HeatingCompressorKick`).
 
 The HeishaMon mode vocabulary (public HeishaMon firmware standard) is::
 
@@ -56,12 +57,18 @@ __all__ = [
     "HEATING_CURVE_PREVIEW_OUTDOOR_C",
     "HEATING_GATE_BAND_SOURCES",
     "HEATING_GATE_REASONS",
+    "HEATING_KICK_REASONS",
+    "HEATING_KICK_RESULTS",
+    "HEATING_KICK_STATES",
+    "HEATING_KICK_STEP_K",
     "HEATING_RESTART_BAND_MAX_K",
     "HEATING_RESTART_BAND_MIN_K",
     "HEISHAMON_MODE_OPTIONS",
     "CoolingDemand",
     "FlickerDecision",
+    "HeatingCompressorKick",
     "HeatingGateDecision",
+    "HeatingKickDecision",
     "HeatingSetpointGate",
     "SetpointFlicker",
     "cooling_demand",
@@ -70,6 +77,8 @@ __all__ = [
     "direction_option",
     "heating_curve",
     "heating_curve_points",
+    "kick_step_k",
+    "resolve_restart_band",
     "round_to_step_c",
 ]
 
@@ -883,6 +892,35 @@ def _valid_restart_band(value_k: float | None) -> bool:
     )
 
 
+def resolve_restart_band(entity_k: float | None, knob_k: float) -> tuple[float, str]:
+    """The restart band in force and where it came from (issue #33).
+
+    Args:
+        entity_k: The band read from the pump entity [K], or ``None``.
+        knob_k: The ``heating_restart_band_k`` knob [K].
+
+    Returns:
+        ``(band_k, "entity")`` while the entity reads a plausible value in
+        [:data:`HEATING_RESTART_BAND_MIN_K`, :data:`HEATING_RESTART_BAND_MAX_K`],
+        else ``(knob_k, "knob")``.
+    """
+    if _valid_restart_band(entity_k):
+        assert entity_k is not None  # narrowed by the check
+        return entity_k, "entity"
+    return knob_k, "knob"
+
+
+def _clamp_target(
+    target_c: float, entity_min_c: float | None, entity_max_c: float | None
+) -> float:
+    """Clamp a heating target to the setpoint entity's ``min`` / ``max``."""
+    if entity_max_c is not None:
+        target_c = min(target_c, entity_max_c)
+    if entity_min_c is not None:
+        target_c = max(target_c, entity_min_c)
+    return target_c
+
+
 class HeatingSetpointGate:
     """Stateful heating-setpoint write gate (issue #33, 2026-10-22).
 
@@ -911,9 +949,11 @@ class HeatingSetpointGate:
     ``heating_gate_enabled`` off, the gate is inactive and the target is
     written as before #33. The hysteresis applies in every case.
 
-    Issue #34 hook: ``offset_k`` is added to the quantized target (after the
-    hysteresis), so a temporary kick (e.g. +1 K) goes through the same rules
-    — its restore is an ordinary decrease and obeys the decrease rule.
+    Issue #34: ``offset_k`` is added to the quantized target (after the
+    hysteresis), so the :class:`HeatingCompressorKick` (+1 K) goes through
+    the same rules — its restore is an ordinary decrease and obeys the
+    decrease rule. :meth:`preview_target_c` gives the kick the normal target
+    before the step, without touching the hysteresis memory.
     """
 
     def __init__(self, config: ControllerConfig) -> None:
@@ -940,6 +980,23 @@ class HeatingSetpointGate:
         if self._holding:
             self._held_s += dt_seconds
 
+    def _play(self, curve_c: float) -> float:
+        """Play operator, pure: where the backlash would put ``curve_c``.
+
+        Args:
+            curve_c: The raw curve value this cycle [degC].
+
+        Returns:
+            The curve value after the play operator [degC] (the memory is
+            NOT updated — see :meth:`_hysteresis`).
+        """
+        if self._play_c is None:
+            return curve_c
+        return min(
+            max(self._play_c, curve_c - self._hysteresis_k),
+            curve_c + self._hysteresis_k,
+        )
+
     def _hysteresis(self, curve_c: float) -> float:
         """Play operator: follow the curve with a backlash of the hysteresis.
 
@@ -949,14 +1006,39 @@ class HeatingSetpointGate:
         Returns:
             The curve value after the play operator [degC].
         """
-        if self._play_c is None:
-            self._play_c = curve_c
-        else:
-            self._play_c = min(
-                max(self._play_c, curve_c - self._hysteresis_k),
-                curve_c + self._hysteresis_k,
-            )
+        self._play_c = self._play(curve_c)
         return self._play_c
+
+    def preview_target_c(
+        self,
+        *,
+        curve_c: float | None,
+        step_c: float,
+        entity_min_c: float | None = None,
+        entity_max_c: float | None = None,
+    ) -> float | None:
+        """The target :meth:`step` would derive without an offset — pure.
+
+        Hysteresis -> quantization -> entity limits, exactly as in
+        :meth:`step` with ``offset_k = 0``, but the hysteresis memory is not
+        touched, so it may be called before :meth:`step` in the same cycle
+        (the issue #34 kick sizes its ``offset_k`` from it).
+
+        Args:
+            curve_c: The raw heating-curve value [degC], or ``None``.
+            step_c: The setpoint entity's grid step [degC / K].
+            entity_min_c: The setpoint entity's ``min`` [degC], or ``None``.
+            entity_max_c: The setpoint entity's ``max`` [degC], or ``None``.
+
+        Returns:
+            The quantized, clamped target [degC], or ``None`` without a curve
+            value.
+        """
+        if curve_c is None:
+            return None
+        return _clamp_target(
+            round_to_step_c(self._play(curve_c), step_c), entity_min_c, entity_max_c
+        )
 
     def step(
         self,
@@ -991,16 +1073,13 @@ class HeatingSetpointGate:
             entity_min_c: The setpoint entity's ``min`` [degC], or ``None``.
             entity_max_c: The setpoint entity's ``max`` [degC], or ``None``.
             offset_k: A temporary offset added after quantization [K]
-                (issue #34 hook; ``0`` today).
+                (the :class:`HeatingCompressorKick` offset, issue #34; ``0``
+                otherwise).
 
         Returns:
             The :class:`HeatingGateDecision` for this cycle.
         """
-        if _valid_restart_band(restart_band_k):
-            assert restart_band_k is not None  # narrowed by the check
-            band_k, band_source = restart_band_k, "entity"
-        else:
-            band_k, band_source = self._restart_band_k, "knob"
+        band_k, band_source = resolve_restart_band(restart_band_k, self._restart_band_k)
         running = None if compressor_freq_hz is None else compressor_freq_hz > 0.0
 
         def decide(
@@ -1037,11 +1116,9 @@ class HeatingSetpointGate:
             return decide("no_target")
 
         play_c = self._hysteresis(curve_c)
-        target = round_to_step_c(play_c, step_c) + offset_k
-        if entity_max_c is not None:
-            target = min(target, entity_max_c)
-        if entity_min_c is not None:
-            target = max(target, entity_min_c)
+        target = _clamp_target(
+            round_to_step_c(play_c, step_c) + offset_k, entity_min_c, entity_max_c
+        )
 
         if not self._enabled or running is None or outlet_c is None:
             return decide(
@@ -1080,4 +1157,455 @@ class HeatingSetpointGate:
             write_c=write_c,
             hysteresis_c=play_c,
             gate_active=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Heating compressor kick (issue #34, 2026-10-22) — pure decision logic
+# ---------------------------------------------------------------------------
+#
+# The heating counterpart of the cooling setpoint-flicker. Panasonic documents
+# a second heating restart condition (Service Information K-series,
+# PAPAMY2306062CE p.159): thermo OFF once outlet - internal target > 2 degC
+# for 3 min; restart after 3 min once outlet - (inlet captured at thermo OFF)
+# < -3 degC. After a DHW cycle the captured inlet is the cooled floor return,
+# which can delay the restart for hours. The only release seen in the data
+# (one install, 11 days): a target step that left the outlet more than 3 K
+# below the new target — the compressor started in the same minute, 10/10.
+# The kick produces exactly that step, once per idle period, and only in a
+# shape the #33 write gate allows; its restore is an ordinary gated decrease.
+
+HEATING_KICK_STEP_K: float = 1.0
+"""The kick's target raise [K] (issue #34; one grid step if that is larger)."""
+
+HEATING_KICK_STATES: frozenset[str] = frozenset(
+    {"off", "ready", "waiting", "kick", "done"}
+)
+"""The :class:`HeatingCompressorKick` states (issue #34).
+
+* ``off`` — the kick cannot act this cycle (disabled, gate off, not heating /
+  no writes, or an input missing).
+* ``ready`` — the compressor runs; no idle period in progress.
+* ``waiting`` — an idle period is in progress and no kick has been made in it.
+* ``kick`` — the raised target is in force; waiting for the compressor start.
+* ``done`` — this idle period's one kick is spent; nothing more until the
+  compressor runs again.
+"""
+
+HEATING_KICK_REASONS: frozenset[str] = frozenset(
+    {
+        "disabled",
+        "gate_disabled",
+        "inactive",
+        "no_input",
+        "running",
+        "idle_wait",
+        "no_deficit",
+        "gate_increase",
+        "blocked_limit",
+        "blocked_band",
+        "fired",
+        "kicking",
+        "started",
+        "timeout",
+        "cancelled",
+        "done",
+    }
+)
+"""The ``reason`` vocabulary of a :class:`HeatingKickDecision` (issue #34).
+
+* ``disabled`` / ``gate_disabled`` — the kick or the #33 write gate is off.
+* ``inactive`` — not HEATING, no curve target, or the link may not write.
+* ``no_input`` — compressor frequency, outlet or the pump's setpoint unknown.
+* ``running`` — the compressor runs: nothing to release.
+* ``idle_wait`` — idle, but not yet for ``kick_idle_minutes``.
+* ``no_deficit`` — idle long enough, but the outlet is less than
+  ``kick_deficit_k`` below the pump's target (e.g. a hot outlet in DHW).
+* ``gate_increase`` — the gate writes a release-shaped increase of the
+  normal target this cycle by itself; no kick is needed.
+* ``blocked_limit`` — the raised target would pass the entity max or
+  ``heating_supply_max_c``.
+* ``blocked_band`` — the raised target would leave the outlet inside the
+  restart band, a step shape the gate holds; no kick.
+* ``fired`` — the kick is written this cycle; ``kicking`` — waiting for the
+  start; ``started`` — the compressor started (the restore is now the gate's
+  ordinary decrease); ``timeout`` — no start within
+  ``kick_start_timeout_minutes`` (offset removed, the gate decides when the
+  lower target is written); ``cancelled`` — the kick lost its conditions
+  mid-way (offset removed); ``done`` — the idle period's one kick is spent.
+"""
+
+HEATING_KICK_RESULTS: frozenset[str] = frozenset({"started", "timeout", "cancelled"})
+"""How a kick ended — the ``last_result`` of a :class:`HeatingKickDecision`."""
+
+_KICK_WINDOW_S: float = 86400.0
+"""Rolling window of the in-memory kick counter [s] (24 h)."""
+
+
+@dataclass(frozen=True)
+class HeatingKickDecision:
+    """One cycle's heating compressor-kick verdict + diagnostics (issue #34).
+
+    JSON-friendly (primitives or ``None``): the adapter maps it into the
+    heat-pump runtime payload, the panel and the diagnostics sensors.
+
+    Attributes:
+        state: The machine state AFTER this step (see
+            :data:`HEATING_KICK_STATES`).
+        reason: Why (see :data:`HEATING_KICK_REASONS`).
+        offset_k: The offset to pass to
+            :meth:`HeatingSetpointGate.step` this cycle [K] (``>= 0``; non-zero
+            only in state ``kick``).
+        kick_target_c: The raised target in force [degC] while kicking, else
+            ``None``.
+        idle_s: How long the current idle period has lasted [s], or ``None``
+            outside an idle period.
+        idle_remaining_s: Idle time still needed before a kick [s], or
+            ``None`` when not counting.
+        deficit_k: The pump's target minus the outlet [K], or ``None`` when
+            either is unknown.
+        timeout_remaining_s: Time left for the compressor to start [s] while
+            kicking, else ``None``.
+        kicks_last_24h: Kicks made in the last rolling 24 h (in memory since
+            the last reload).
+        last_result: How the most recent kick ended (see
+            :data:`HEATING_KICK_RESULTS`), or ``None`` when none has ended.
+        last_kick_target_c: The raised target of the most recent kick
+            [degC], or ``None``.
+        last_kick_deficit_k: The deficit that triggered the most recent kick
+            [K], or ``None``.
+
+    Raises:
+        ValueError: If ``state``, ``reason`` or ``last_result`` is outside its
+            vocabulary, or ``offset_k`` is negative, or non-zero outside state
+            ``kick``.
+    """
+
+    state: str
+    reason: str
+    offset_k: float = 0.0
+    kick_target_c: float | None = None
+    idle_s: float | None = None
+    idle_remaining_s: float | None = None
+    deficit_k: float | None = None
+    timeout_remaining_s: float | None = None
+    kicks_last_24h: int = 0
+    last_result: str | None = None
+    last_kick_target_c: float | None = None
+    last_kick_deficit_k: float | None = None
+
+    def __post_init__(self) -> None:
+        """Validate the vocabularies and the offset."""
+        if self.state not in HEATING_KICK_STATES:
+            msg = (
+                f"state must be one of {sorted(HEATING_KICK_STATES)}, "
+                f"got {self.state!r}"
+            )
+            raise ValueError(msg)
+        if self.reason not in HEATING_KICK_REASONS:
+            msg = (
+                f"reason must be one of {sorted(HEATING_KICK_REASONS)}, "
+                f"got {self.reason!r}"
+            )
+            raise ValueError(msg)
+        if self.last_result is not None and self.last_result not in (
+            HEATING_KICK_RESULTS
+        ):
+            msg = (
+                f"last_result must be one of {sorted(HEATING_KICK_RESULTS)} "
+                f"or None, got {self.last_result!r}"
+            )
+            raise ValueError(msg)
+        if self.offset_k < 0.0:
+            msg = f"offset_k must be >= 0, got {self.offset_k}"
+            raise ValueError(msg)
+        if self.offset_k > 0.0 and self.state != "kick":
+            msg = f"offset_k={self.offset_k} is only allowed in state 'kick'"
+            raise ValueError(msg)
+
+    def to_dict(self) -> dict[str, object]:
+        """Return a JSON-serializable dict for the runtime / panel."""
+        return {
+            "state": self.state,
+            "reason": self.reason,
+            "offset_k": self.offset_k,
+            "kick_target_c": self.kick_target_c,
+            "idle_s": self.idle_s,
+            "idle_remaining_s": self.idle_remaining_s,
+            "deficit_k": self.deficit_k,
+            "timeout_remaining_s": self.timeout_remaining_s,
+            "kicks_last_24h": self.kicks_last_24h,
+            "last_result": self.last_result,
+            "last_kick_target_c": self.last_kick_target_c,
+            "last_kick_deficit_k": self.last_kick_deficit_k,
+        }
+
+
+def kick_step_k(step_c: float) -> float:
+    """The kick's raise on the pump's grid [K] (issue #34).
+
+    The smallest grid multiple of at least :data:`HEATING_KICK_STEP_K` — so
+    +1 K on a 1 K or 0.5 K grid, one step on a coarser grid (2 K -> 2 K) and
+    never off the grid (0.3 K -> 1.2 K).
+
+    Args:
+        step_c: The setpoint entity's grid step [K] (``<= 0`` = no grid).
+
+    Returns:
+        The raise [K].
+    """
+    if step_c <= 0.0:
+        return HEATING_KICK_STEP_K
+    return math.ceil(HEATING_KICK_STEP_K / step_c - 1e-9) * step_c
+
+
+class HeatingCompressorKick:
+    """Stateful heating compressor kick (issue #34, 2026-10-22).
+
+    Pure: no wall clock. Like :class:`SetpointFlicker` and
+    :class:`HeatingSetpointGate`, time advances only via :meth:`tick`,
+    exactly once per control step, BEFORE the gate step it feeds::
+
+        kick.tick(dt_seconds)
+        base_c = gate.preview_target_c(...)
+        decision = kick.step(..., base_target_c=base_c)
+        gate.tick(dt_seconds)
+        gate.step(..., offset_k=decision.offset_k)
+
+    Trigger (all at once), with ``c`` the pump's current setpoint, ``q`` the
+    gate's normal target and ``o`` the outlet: the link may write in HEATING,
+    the kick and the write gate are enabled, frequency, outlet and ``c`` are
+    known; the compressor has been idle (frequency 0) for at least
+    ``kick_idle_minutes`` since the first idle sample; ``c - o >=
+    kick_deficit_k``; no kick yet in this idle period. The raised target is
+    ``K = max(c, q) + kick_step_k(step)``; it must stay within the entity max
+    and ``heating_supply_max_c`` and must clear the restart band (``o < K -
+    band``, the gate's idle-increase rule), else no kick. ``offset_k = K - q``
+    makes the gate see ``K`` and write it as an ordinary
+    ``write_increase_idle``.
+
+    End of a kick: frequency ``> 0`` -> ``started`` (offset removed; the gate
+    writes the normal target back under its decrease-while-running rule);
+    no start within ``kick_start_timeout_minutes`` -> ``timeout`` (offset
+    removed; the gate's idle-decrease rule decides when the lower target is
+    written — usually only once the compressor runs, so the pump keeps ``K``
+    meanwhile); conditions lost -> ``cancelled``. Either way no second kick
+    until the compressor has run again.
+    """
+
+    def __init__(self, config: ControllerConfig) -> None:
+        """Read the kick knobs (and the gate switch) off the global config.
+
+        Args:
+            config: The GLOBAL controller tuning (the kick knobs are
+                global-only).
+        """
+        self._enabled: bool = config.heat_kick_enabled
+        self._gate_enabled: bool = config.heating_gate_enabled
+        self._idle_threshold_s: float = config.kick_idle_minutes * 60.0
+        self._deficit_k: float = config.kick_deficit_k
+        self._timeout_s: float = config.kick_start_timeout_minutes * 60.0
+        self._restart_band_k: float = config.heating_restart_band_k
+        self._supply_max_c: float = config.heating_supply_max_c
+        self._state: str = "off"
+        self._elapsed_s: float = 0.0
+        # Length of the current idle period [s]; None = no idle period.
+        self._idle_s: float | None = None
+        self._kicked: bool = False
+        # Time since the kick was fired [s]; None = no kick in flight.
+        self._kick_s: float | None = None
+        self._kick_target_c: float | None = None
+        self._kick_times_s: list[float] = []
+        self._last_result: str | None = None
+        self._last_kick_target_c: float | None = None
+        self._last_kick_deficit_k: float | None = None
+
+    @property
+    def state(self) -> str:
+        """Current machine state (see :data:`HEATING_KICK_STATES`)."""
+        return self._state
+
+    def tick(self, dt_seconds: float) -> None:
+        """Advance the timers by ``dt_seconds`` — once per step.
+
+        Args:
+            dt_seconds: Elapsed time since the previous control step [s].
+        """
+        self._elapsed_s += dt_seconds
+        if self._idle_s is not None:
+            self._idle_s += dt_seconds
+        if self._kick_s is not None:
+            self._kick_s += dt_seconds
+        cutoff = self._elapsed_s - _KICK_WINDOW_S
+        self._kick_times_s = [t for t in self._kick_times_s if t > cutoff]
+
+    def _end_kick(self, result: str) -> None:
+        """Close the running kick with ``result``."""
+        self._last_result = result
+        self._kick_target_c = None
+        self._kick_s = None
+
+    def step(
+        self,
+        *,
+        heating_active: bool,
+        compressor_freq_hz: float | None,
+        outlet_c: float | None,
+        pump_setpoint_c: float | None,
+        base_target_c: float | None,
+        step_c: float,
+        restart_band_k: float | None = None,
+        entity_max_c: float | None = None,
+    ) -> HeatingKickDecision:
+        """Decide this cycle's kick and advance the state machine.
+
+        Args:
+            heating_active: Whether the link may write a heating target this
+                cycle (HEATING with a curve target, writes enabled).
+            compressor_freq_hz: Compressor frequency [Hz] (``0`` = idle), or
+                ``None`` when unreadable.
+            outlet_c: Pump outlet water temperature [degC], or ``None``.
+            pump_setpoint_c: The pump's current heating setpoint [degC]
+                (entity state, else the last write), or ``None``.
+            base_target_c: The gate's normal target this cycle
+                (:meth:`HeatingSetpointGate.preview_target_c`) [degC], or
+                ``None``.
+            step_c: The setpoint entity's grid step [degC / K].
+            restart_band_k: The restart band read from the pump [K], or
+                ``None`` (resolved exactly like the gate does).
+            entity_max_c: The setpoint entity's ``max`` [degC], or ``None``.
+
+        Returns:
+            The :class:`HeatingKickDecision` for this cycle.
+        """
+        deficit_k = (
+            None
+            if pump_setpoint_c is None or outlet_c is None
+            else pump_setpoint_c - outlet_c
+        )
+
+        def decide(
+            state: str,
+            reason: str,
+            *,
+            offset_k: float = 0.0,
+            idle_remaining_s: float | None = None,
+            timeout_remaining_s: float | None = None,
+        ) -> HeatingKickDecision:
+            self._state = state
+            return HeatingKickDecision(
+                state=state,
+                reason=reason,
+                offset_k=offset_k,
+                kick_target_c=self._kick_target_c,
+                idle_s=self._idle_s,
+                idle_remaining_s=idle_remaining_s,
+                deficit_k=deficit_k,
+                timeout_remaining_s=timeout_remaining_s,
+                kicks_last_24h=len(self._kick_times_s),
+                last_result=self._last_result,
+                last_kick_target_c=self._last_kick_target_c,
+                last_kick_deficit_k=self._last_kick_deficit_k,
+            )
+
+        inputs_ok = (
+            compressor_freq_hz is not None
+            and outlet_c is not None
+            and pump_setpoint_c is not None
+        )
+        usable = (
+            self._enabled
+            and self._gate_enabled
+            and heating_active
+            and base_target_c is not None
+            and inputs_ok
+        )
+
+        # 1. A kick in flight ends on a start, a timeout or lost conditions.
+        if self._kick_s is not None:
+            if not usable:
+                self._end_kick("cancelled")
+                self._idle_s = None
+                return decide("off", "cancelled")
+            assert compressor_freq_hz is not None  # narrowed by usable
+            assert base_target_c is not None
+            if compressor_freq_hz > 0.0:
+                self._end_kick("started")
+                self._idle_s = None
+                self._kicked = False
+                return decide("ready", "started")
+            if self._kick_s >= self._timeout_s:
+                self._end_kick("timeout")
+                return decide("done", "timeout")
+            assert self._kick_target_c is not None  # set when fired
+            return decide(
+                "kick",
+                "kicking",
+                offset_k=max(0.0, self._kick_target_c - base_target_c),
+                timeout_remaining_s=self._timeout_s - self._kick_s,
+            )
+
+        # 2. Nothing to watch: no idle period can be tracked.
+        #    (Both switches are fixed for the machine's life: a knob change
+        #    reloads the entry and rebuilds it.)
+        if not self._enabled:
+            return decide("off", "disabled")
+        if not self._gate_enabled:
+            return decide("off", "gate_disabled")
+        if not heating_active or base_target_c is None:
+            self._idle_s = None
+            return decide("off", "inactive")
+        if not inputs_ok:
+            self._idle_s = None
+            return decide("off", "no_input")
+        assert compressor_freq_hz is not None  # narrowed by inputs_ok
+        assert outlet_c is not None
+        assert pump_setpoint_c is not None
+        assert deficit_k is not None
+        if compressor_freq_hz > 0.0:
+            self._idle_s = None
+            self._kicked = False
+            return decide("ready", "running")
+
+        # 3. Idle: one idle period starts at its first idle sample.
+        if self._idle_s is None:
+            self._idle_s = 0.0
+        if self._kicked:
+            return decide("done", "done")
+        if self._idle_s < self._idle_threshold_s:
+            return decide(
+                "waiting",
+                "idle_wait",
+                idle_remaining_s=self._idle_threshold_s - self._idle_s,
+            )
+        if deficit_k < self._deficit_k:
+            return decide("waiting", "no_deficit", idle_remaining_s=0.0)
+        band_k, _source = resolve_restart_band(restart_band_k, self._restart_band_k)
+        tolerance = max(step_c / 2.0, _SYNC_TOLERANCE_MIN_K)
+        if base_target_c - pump_setpoint_c >= tolerance and (
+            outlet_c < base_target_c - band_k
+        ):
+            return decide("waiting", "gate_increase", idle_remaining_s=0.0)
+        raise_k = kick_step_k(step_c)
+        target_c = max(pump_setpoint_c, base_target_c) + raise_k
+        ceiling_c = self._supply_max_c
+        if entity_max_c is not None:
+            ceiling_c = min(ceiling_c, entity_max_c)
+        if target_c > ceiling_c:
+            return decide("waiting", "blocked_limit", idle_remaining_s=0.0)
+        if not outlet_c < target_c - band_k:
+            return decide("waiting", "blocked_band", idle_remaining_s=0.0)
+
+        # 4. Fire: the raised target goes through the gate as an increase.
+        self._kicked = True
+        self._kick_s = 0.0
+        self._kick_target_c = target_c
+        self._kick_times_s.append(self._elapsed_s)
+        self._last_kick_target_c = target_c
+        self._last_kick_deficit_k = deficit_k
+        return decide(
+            "kick",
+            "fired",
+            offset_k=target_c - base_target_c,
+            timeout_remaining_s=self._timeout_s,
         )

@@ -223,7 +223,7 @@ def test_every_knob_has_label_and_tooltip_in_both_languages() -> None:
     """Each exposed knob has tune_<name> and tip_knob_<name> in pl AND en."""
     sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
     knobs = _knob_names()
-    assert len(knobs) == 34, f"expected 34 exposed knobs, parsed {knobs}"
+    assert len(knobs) == 38, f"expected 38 exposed knobs, parsed {knobs}"
     missing: list[str] = []
     for knob in knobs:
         for key in (f"tune_{knob}", f"tip_knob_{knob}"):
@@ -492,8 +492,8 @@ def test_issue35_surfaces_have_their_str_keys() -> None:
 def test_issue35_water_groups_split_cooling_from_heating() -> None:
     """Heating water = curve + write gate; cooling water = base + flicker.
 
-    Issue #35 split the groups; issue #33 appended the write-gate knobs to
-    "Heating water".
+    Issue #35 split the groups; issue #33 appended the write-gate knobs and
+    issue #34 the compressor-kick knobs to "Heating water".
     """
     source = _PANEL_JS.read_text(encoding="utf-8")
     groups = dict(_knob_groups(source))
@@ -507,6 +507,10 @@ def test_issue35_water_groups_split_cooling_from_heating() -> None:
         "heating_gate_enabled",
         "heating_restart_band_k",
         "heating_stop_offset_k",
+        "heat_kick_enabled",
+        "kick_idle_minutes",
+        "kick_deficit_k",
+        "kick_start_timeout_minutes",
     ]
     cooling = groups["tune_grp_cooling_water"]
     assert cooling[0] == "cooling_supply_base_c"
@@ -560,6 +564,51 @@ def test_issue33_gate_card_has_its_str_keys_and_every_reason() -> None:
     # The Heat-pump render reads the payload's gate view.
     assert "hp.heating.gate" in source
     assert '"hp_gate_r_" + reason' in source
+
+
+_REQUIRED_ISSUE34_KEYS: tuple[str, ...] = (
+    "hp_sec_heat_kick",
+    "tip_hp_heat_kick",
+    "hp_kick_state",
+    "hp_kick_reason",
+    "hp_kick_idle",
+    "hp_kick_deficit",
+    "hp_kick_target",
+    "hp_kick_timeout",
+    "hp_kick_24h",
+    "hp_kick_last",
+)
+
+
+@pytest.mark.unit
+def test_issue34_kick_card_has_its_str_keys_and_every_vocabulary() -> None:
+    """The kick card keys + one label per core state/reason/result (#34)."""
+    from custom_components.tortoise_ufh.core.hp_link import (
+        HEATING_KICK_REASONS,
+        HEATING_KICK_RESULTS,
+        HEATING_KICK_STATES,
+    )
+
+    source = _PANEL_JS.read_text(encoding="utf-8")
+    sections = _str_language_keys(source)
+    keys = (
+        list(_REQUIRED_ISSUE34_KEYS)
+        + [f"hp_kick_st_{state}" for state in sorted(HEATING_KICK_STATES)]
+        + [f"hp_kick_r_{reason}" for reason in sorted(HEATING_KICK_REASONS)]
+        + [f"hp_kick_res_{result}" for result in sorted(HEATING_KICK_RESULTS)]
+    )
+    missing = [
+        f"{lang}:{key}"
+        for key in keys
+        for lang in ("pl", "en", "de")
+        if key not in sections[lang]
+    ]
+    assert not missing, f"missing STR keys: {missing}"
+    # The Heat-pump render reads the payload's kick view and counts kicks
+    # from the kick-state sensor's history.
+    assert "hp.heating.kick" in source
+    assert '"hp_kick_r_" + reason' in source
+    assert "hp_heating_kick_entity_id" in source
 
 
 _REQUIRED_TUNING_RESET_KEYS: tuple[str, ...] = (

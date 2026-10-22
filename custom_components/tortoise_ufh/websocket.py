@@ -143,6 +143,7 @@ _DIAGNOSTIC_SENSOR_KEYS: tuple[str, ...] = (
 # carry no room segment.
 _GLOBAL_DEW_POINT_KEY: str = "global_safe_dew_point"
 _GLOBAL_FLICKER_STATE_KEY: str = "hp_flicker_state"
+_GLOBAL_HEATING_KICK_KEY: str = "hp_heating_kick"
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +253,10 @@ class ConfigResult:
             force-cooling-start state ``sensor`` (``idle``/``pulse``/
             ``cooldown``) — the panel counts forced starts over the last 24 h
             from its recorder history — or ``None`` when unregistered.
+        hp_heating_kick_entity_id: Registered entity id of the global
+            heating compressor-kick state ``sensor`` (issue #34) — the panel
+            counts kicks over the last 24 h from its recorder history — or
+            ``None`` when unregistered.
         heat_pump: The configured heat-pump-link entity ids (B2, 2026-07-12)
             keyed by their ``CONF_ENTITY_HP_*`` names, or ``None`` when the
             section is not configured (the panel shows the empty state).
@@ -266,6 +271,7 @@ class ConfigResult:
     rooms: tuple[RoomConfigView, ...]
     global_safe_dew_point_entity_id: str | None = None
     hp_flicker_state_entity_id: str | None = None
+    hp_heating_kick_entity_id: str | None = None
     heat_pump: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
@@ -285,6 +291,7 @@ class ConfigResult:
             "rooms": [room.to_dict() for room in self.rooms],
             "global_safe_dew_point_entity_id": self.global_safe_dew_point_entity_id,
             "hp_flicker_state_entity_id": self.hp_flicker_state_entity_id,
+            "hp_heating_kick_entity_id": self.hp_heating_kick_entity_id,
             "heat_pump": dict(self.heat_pump) if self.heat_pump is not None else None,
         }
 
@@ -861,6 +868,9 @@ def ws_get_config(
         ),
         hp_flicker_state_entity_id=_resolve_global_sensor_entity(
             registry, entry_id, _GLOBAL_FLICKER_STATE_KEY
+        ),
+        hp_heating_kick_entity_id=_resolve_global_sensor_entity(
+            registry, entry_id, _GLOBAL_HEATING_KICK_KEY
         ),
         heat_pump=heat_pump or None,
     )

@@ -70,6 +70,10 @@
           "heating_curve_hysteresis_k": "Hysterese der Heizwasserkurve (K, global)",
           "heating_restart_band_k": "Wiederanlaufband der Pumpe, ΔT für Heizen EIN (K, global)",
           "heating_stop_offset_k": "Abschaltschwelle der Pumpe über dem Sollwert (K, global)",
+          "heat_kick_enabled": "Verdichter-Anstoß Heizen: blockierten Wiederanlauf lösen (Panasonic Aquarea, global)",
+          "kick_idle_minutes": "Anstoß: Verdichter-Stillstand vor dem Anstoß (min, global)",
+          "kick_deficit_k": "Anstoß: Vorlauf unter dem Pumpensollwert (K, global)",
+          "kick_start_timeout_minutes": "Anstoß: Wartezeit auf den Verdichterstart (min, global)",
           "hp_flicker_enabled": "Kühlstart erzwingen (Panasonic Aquarea)",
           "hp_flicker_band_k": "Kühlstart erzwingen: angestrebtes Totband (K, global)",
           "hp_flicker_min_open_pct": "Kühlstart erzwingen: min. Gesamtöffnung der Kreise (%, global)",
@@ -149,6 +153,10 @@
           "heating_curve_hysteresis_k": "Hysterese der Heizwasserkurve (K, global)",
           "heating_restart_band_k": "Wiederanlaufband der Pumpe, ΔT für Heizen EIN (K, global)",
           "heating_stop_offset_k": "Abschaltschwelle der Pumpe über dem Sollwert (K, global)",
+          "heat_kick_enabled": "Verdichter-Anstoß Heizen: blockierten Wiederanlauf lösen (Panasonic Aquarea, global)",
+          "kick_idle_minutes": "Anstoß: Verdichter-Stillstand vor dem Anstoß (min, global)",
+          "kick_deficit_k": "Anstoß: Vorlauf unter dem Pumpensollwert (K, global)",
+          "kick_start_timeout_minutes": "Anstoß: Wartezeit auf den Verdichterstart (min, global)",
           "hp_flicker_enabled": "Kühlstart erzwingen (Panasonic Aquarea)",
           "hp_flicker_band_k": "Kühlstart erzwingen: angestrebtes Totband (K, global)",
           "hp_flicker_min_open_pct": "Kühlstart erzwingen: min. Gesamtöffnung der Kreise (%, global)",
@@ -446,6 +454,12 @@
       },
       "hp_heating_gate": {
         "name": "Heizsollwert-Sperre"
+      },
+      "hp_heating_kick": {
+        "name": "Zustand Verdichter-Anstoß Heizen"
+      },
+      "hp_heating_kick_last": {
+        "name": "Verdichter-Anstoß Heizen: letztes Ergebnis"
       }
     },
     "binary_sensor": {

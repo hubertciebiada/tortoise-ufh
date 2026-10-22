@@ -796,6 +796,76 @@ const STR = {
       "obniżka wstrzymana: sprężarka stoi, wylot poniżej nowej nastawy",
     hp_gate_r_hold_unknown_running: "wstrzymana: nastawa pompy nieznana, wylot za wysoki",
     hp_gate_r_hold_unknown_idle: "wstrzymana: nastawa pompy nieznana, sprężarka stoi",
+    tune_heat_kick_enabled: "Kopnięcie sprężarki grzania",
+    tune_kick_idle_minutes: "Postój sprężarki przed kopnięciem",
+    tune_kick_deficit_k: "Wylot poniżej nastawy pompy",
+    tune_kick_start_timeout_minutes: "Czas na start sprężarki",
+    tip_knob_heat_kick_enabled:
+      "Panasonic: po cyklu CWU sprężarka grzania potrafi stać godzinami, " +
+      "choć wylot jest kilka kelwinów poniżej nastawy (zablokowany " +
+      "ponowny start). Gdy sprężarka stoi co najmniej „Postój sprężarki " +
+      "przed kopnięciem”, a wylot jest co najmniej „Wylot poniżej nastawy " +
+      "pompy” niżej niż nastawa pompy, Tortoise podnosi nastawę grzania o " +
+      "1 K (o jeden krok encji, jeśli jest większy) — taki krok " +
+      "uruchamiał sprężarkę w tej samej minucie. Po starcie normalna " +
+      "nastawa wraca przez bramkę nastawy grzania (obniżka przy pracy). " +
+      "Najwyżej jedno kopnięcie na postój; bez startu w „Czas na start " +
+      "sprężarki” Tortoise rezygnuje do następnej pracy sprężarki. Wymaga " +
+      "bramki nastawy grzania i jej encji. Parametr globalny. Domyślnie " +
+      "wyłączone.",
+    tip_knob_kick_idle_minutes:
+      "Jak długo sprężarka musi stać (częstotliwość 0), zanim nastąpi " +
+      "kopnięcie [min]. Parametr globalny. Domyślnie 15 min.",
+    tip_knob_kick_deficit_k:
+      "O ile wylot musi być niżej niż nastawa grzania pompy, zanim " +
+      "nastąpi kopnięcie [K]. Wyklucza też cykl CWU — wylot jest wtedy " +
+      "gorący. Parametr globalny. Domyślnie 3,5 K.",
+    tip_knob_kick_start_timeout_minutes:
+      "Ile czekać na start sprężarki po kopnięciu [min]. Bez startu " +
+      "Tortoise zdejmuje kopnięcie i do następnej pracy sprężarki już nie " +
+      "próbuje; podniesioną nastawę bramka obniży dopiero wtedy, gdy " +
+      "będzie to bezpieczne (zwykle po starcie sprężarki). Parametr " +
+      "globalny. Domyślnie 5 min.",
+    hp_sec_heat_kick: "Kopnięcie sprężarki grzania",
+    tip_hp_heat_kick:
+      "Panasonic: zablokowany ponowny start sprężarki grzania (np. po " +
+      "CWU) zwalnia krok nastawy, po którym wylot jest ponad 3 K poniżej " +
+      "nowej nastawy. Kopnięcie robi taki krok (+1 K) najwyżej raz na " +
+      "postój, a gdy sprężarka ruszy, bramka nastawy grzania przywraca " +
+      "normalną nastawę. Licznik 24 godz. pochodzi z historii sensora " +
+      "stanu kopnięcia.",
+    hp_kick_state: "Stan",
+    hp_kick_reason: "Decyzja",
+    hp_kick_idle: "Postój sprężarki",
+    hp_kick_deficit: "Wylot poniżej nastawy pompy",
+    hp_kick_target: "Nastawa kopnięcia",
+    hp_kick_timeout: "Czas na start",
+    hp_kick_24h: "Kopnięcia (ost. 24 godz.)",
+    hp_kick_last: "Ostatnie kopnięcie",
+    hp_kick_st_off: "nieaktywne",
+    hp_kick_st_ready: "czuwa",
+    hp_kick_st_waiting: "postój",
+    hp_kick_st_kick: "kopnięcie",
+    hp_kick_st_done: "wykorzystane",
+    hp_kick_r_disabled: "wyłączone",
+    hp_kick_r_gate_disabled: "bramka nastawy grzania wyłączona",
+    hp_kick_r_inactive: "brak zapisu nastawy grzania w tym cyklu",
+    hp_kick_r_no_input: "brak odczytu sprężarki, wylotu lub nastawy pompy",
+    hp_kick_r_running: "sprężarka pracuje",
+    hp_kick_r_idle_wait: "sprężarka stoi — odliczanie postoju",
+    hp_kick_r_no_deficit: "wylot za mało poniżej nastawy (np. CWU)",
+    hp_kick_r_gate_increase: "bramka sama zapisuje podwyżkę, która uruchomi sprężarkę",
+    hp_kick_r_blocked_limit: "podniesiona nastawa przekroczyłaby maksimum",
+    hp_kick_r_blocked_band: "podniesiona nastawa zostawiłaby wylot w paśmie startu",
+    hp_kick_r_fired: "kopnięcie zapisane",
+    hp_kick_r_kicking: "czekam na start sprężarki",
+    hp_kick_r_started: "sprężarka ruszyła — normalna nastawa wraca przez bramkę",
+    hp_kick_r_timeout: "brak startu — kopnięcie zdjęte",
+    hp_kick_r_cancelled: "kopnięcie przerwane",
+    hp_kick_r_done: "kopnięcie w tym postoju już wykorzystane",
+    hp_kick_res_started: "start",
+    hp_kick_res_timeout: "brak startu",
+    hp_kick_res_cancelled: "przerwane",
     // Zakładka Rozdzielacze (v0.21.0) — rysunek KAN-therm InoxFlow UFST.
     mf_empty:
       "Brak skonfigurowanych rozdzielaczy. Dodaj je w opcjach integracji: " +
@@ -1472,6 +1542,79 @@ const STR = {
       "decrease held: compressor idle, outlet below the new target",
     hp_gate_r_hold_unknown_running: "held: pump setpoint unknown, outlet too high",
     hp_gate_r_hold_unknown_idle: "held: pump setpoint unknown, compressor idle",
+    tune_heat_kick_enabled: "Heating compressor kick",
+    tune_kick_idle_minutes: "Compressor idle before a kick",
+    tune_kick_deficit_k: "Outlet below the pump target",
+    tune_kick_start_timeout_minutes: "Wait for the compressor start",
+    tip_knob_heat_kick_enabled:
+      "Panasonic: after a DHW cycle the heating compressor can stay off " +
+      "for hours although the outlet is several kelvin below the setpoint " +
+      "(a locked-out restart). Once the compressor has been idle for at " +
+      "least “Compressor idle before a kick” and the outlet is at least " +
+      "“Outlet below the pump target” below the pump’s setpoint, Tortoise " +
+      "raises the heating setpoint by 1 K (one entity step if larger) — a " +
+      "step like that started the compressor in the same minute. After " +
+      "the start the normal setpoint returns through the heating setpoint " +
+      "gate (a decrease while running). At most one kick per idle period; " +
+      "without a start within “Wait for the compressor start” Tortoise " +
+      "gives up until the compressor has run again. Needs the heating " +
+      "setpoint gate and its entities. Global parameter. Default off.",
+    tip_knob_kick_idle_minutes:
+      "How long the compressor must have been idle (frequency 0) before a " +
+      "kick [min]. Global parameter. Default 15 min.",
+    tip_knob_kick_deficit_k:
+      "How far the outlet must be below the pump’s heating setpoint " +
+      "before a kick [K]. Also keeps the kick out of a DHW cycle — the " +
+      "outlet is hot then. Global parameter. Default 3.5 K.",
+    tip_knob_kick_start_timeout_minutes:
+      "How long to wait for the compressor start after a kick [min]. " +
+      "Without a start Tortoise removes the kick and does not try again " +
+      "until the compressor has run; the gate lowers the raised setpoint " +
+      "only once that is safe (usually after the compressor starts). " +
+      "Global parameter. Default 5 min.",
+    hp_sec_heat_kick: "Heating compressor kick",
+    tip_hp_heat_kick:
+      "Panasonic: a locked-out heating restart (e.g. after DHW) is " +
+      "released by a setpoint step that leaves the outlet more than 3 K " +
+      "below the new setpoint. The kick makes such a step (+1 K) at most " +
+      "once per idle period, and once the compressor starts the heating " +
+      "setpoint gate restores the normal setpoint. The 24 h count comes " +
+      "from the history of the kick state sensor.",
+    hp_kick_state: "State",
+    hp_kick_reason: "Decision",
+    hp_kick_idle: "Compressor idle",
+    hp_kick_deficit: "Outlet below pump target",
+    hp_kick_target: "Kick setpoint",
+    hp_kick_timeout: "Start wait left",
+    hp_kick_24h: "Kicks (last 24 h)",
+    hp_kick_last: "Last kick",
+    hp_kick_st_off: "inactive",
+    hp_kick_st_ready: "ready",
+    hp_kick_st_waiting: "idle",
+    hp_kick_st_kick: "kick",
+    hp_kick_st_done: "spent",
+    hp_kick_r_disabled: "disabled",
+    hp_kick_r_gate_disabled: "heating setpoint gate off",
+    hp_kick_r_inactive: "no heating setpoint write this cycle",
+    hp_kick_r_no_input: "no compressor, outlet or pump setpoint reading",
+    hp_kick_r_running: "compressor running",
+    hp_kick_r_idle_wait: "compressor idle — counting the idle time",
+    hp_kick_r_no_deficit: "outlet not far enough below the setpoint (e.g. DHW)",
+    hp_kick_r_gate_increase:
+      "the gate writes an increase that starts the compressor by itself",
+    hp_kick_r_blocked_limit: "the raised setpoint would exceed the maximum",
+    hp_kick_r_blocked_band:
+      "the raised setpoint would leave the outlet inside the restart band",
+    hp_kick_r_fired: "kick written",
+    hp_kick_r_kicking: "waiting for the compressor start",
+    hp_kick_r_started:
+      "compressor started — the normal setpoint returns through the gate",
+    hp_kick_r_timeout: "no start — kick removed",
+    hp_kick_r_cancelled: "kick cancelled",
+    hp_kick_r_done: "this idle period's kick is already spent",
+    hp_kick_res_started: "started",
+    hp_kick_res_timeout: "no start",
+    hp_kick_res_cancelled: "cancelled",
     test_running_min: "~{m} min",
     // Manifolds tab (v0.21.0) — the KAN-therm InoxFlow UFST drawing.
     mf_empty:
@@ -2177,6 +2320,85 @@ const STR = {
       "zurückgehalten: Pumpensollwert unbekannt, Vorlauf zu hoch",
     hp_gate_r_hold_unknown_idle:
       "zurückgehalten: Pumpensollwert unbekannt, Verdichter steht",
+    tune_heat_kick_enabled: "Verdichter-Anstoß Heizen",
+    tune_kick_idle_minutes: "Verdichter-Stillstand vor dem Anstoß",
+    tune_kick_deficit_k: "Vorlauf unter dem Pumpensollwert",
+    tune_kick_start_timeout_minutes: "Wartezeit auf den Verdichterstart",
+    tip_knob_heat_kick_enabled:
+      "Panasonic: Nach einem WW-Zyklus kann der Heizverdichter " +
+      "stundenlang stehen, obwohl der Vorlauf einige Kelvin unter dem " +
+      "Sollwert liegt (blockierter Wiederanlauf). Steht der Verdichter " +
+      "mindestens „Verdichter-Stillstand vor dem Anstoß“ lang und liegt " +
+      "der Vorlauf mindestens „Vorlauf unter dem Pumpensollwert“ unter " +
+      "dem Sollwert der Pumpe, hebt Tortoise den Heizsollwert um 1 K an " +
+      "(um einen Entitätsschritt, falls größer) — ein solcher Schritt " +
+      "startete den Verdichter in derselben Minute. Nach dem Start kehrt " +
+      "der normale Sollwert über die Heizsollwert-Sperre zurück " +
+      "(Absenkung im Lauf). Höchstens ein Anstoß pro Stillstand; ohne " +
+      "Start innerhalb von „Wartezeit auf den Verdichterstart“ gibt " +
+      "Tortoise bis zum nächsten Verdichterlauf auf. Benötigt die " +
+      "Heizsollwert-Sperre und ihre Entitäten. Globaler Parameter. " +
+      "Standard aus.",
+    tip_knob_kick_idle_minutes:
+      "Wie lange der Verdichter stehen muss (Frequenz 0), bevor " +
+      "angestoßen wird [min]. Globaler Parameter. Standard 15 min.",
+    tip_knob_kick_deficit_k:
+      "Wie weit der Vorlauf unter dem Heizsollwert der Pumpe liegen muss, " +
+      "bevor angestoßen wird [K]. Hält den Anstoß auch aus einem " +
+      "WW-Zyklus heraus — der Vorlauf ist dann heiß. Globaler Parameter. " +
+      "Standard 3,5 K.",
+    tip_knob_kick_start_timeout_minutes:
+      "Wie lange nach einem Anstoß auf den Verdichterstart gewartet wird " +
+      "[min]. Ohne Start nimmt Tortoise den Anstoß zurück und versucht es " +
+      "erst nach dem nächsten Verdichterlauf wieder; den angehobenen " +
+      "Sollwert senkt die Sperre erst, wenn es sicher ist (meist nach dem " +
+      "Verdichterstart). Globaler Parameter. Standard 5 min.",
+    hp_sec_heat_kick: "Verdichter-Anstoß Heizen",
+    tip_hp_heat_kick:
+      "Panasonic: Ein blockierter Wiederanlauf beim Heizen (z. B. nach " +
+      "WW) wird durch einen Sollwertschritt gelöst, nach dem der Vorlauf " +
+      "mehr als 3 K unter dem neuen Sollwert liegt. Der Anstoß macht " +
+      "einen solchen Schritt (+1 K) höchstens einmal pro Stillstand; " +
+      "sobald der Verdichter startet, stellt die Heizsollwert-Sperre den " +
+      "normalen Sollwert wieder her. Die 24-h-Zahl stammt aus dem Verlauf " +
+      "des Anstoß-Zustandssensors.",
+    hp_kick_state: "Zustand",
+    hp_kick_reason: "Entscheidung",
+    hp_kick_idle: "Verdichter-Stillstand",
+    hp_kick_deficit: "Vorlauf unter Pumpensollwert",
+    hp_kick_target: "Anstoß-Sollwert",
+    hp_kick_timeout: "Wartezeit übrig",
+    hp_kick_24h: "Anstöße (letzte 24 h)",
+    hp_kick_last: "Letzter Anstoß",
+    hp_kick_st_off: "inaktiv",
+    hp_kick_st_ready: "bereit",
+    hp_kick_st_waiting: "Stillstand",
+    hp_kick_st_kick: "Anstoß",
+    hp_kick_st_done: "verbraucht",
+    hp_kick_r_disabled: "ausgeschaltet",
+    hp_kick_r_gate_disabled: "Heizsollwert-Sperre aus",
+    hp_kick_r_inactive: "kein Heizsollwert-Schreiben in diesem Zyklus",
+    hp_kick_r_no_input: "kein Verdichter-, Vorlauf- oder Pumpensollwert",
+    hp_kick_r_running: "Verdichter läuft",
+    hp_kick_r_idle_wait: "Verdichter steht — Stillstand wird gezählt",
+    hp_kick_r_no_deficit: "Vorlauf nicht weit genug unter dem Sollwert (z. B. WW)",
+    hp_kick_r_gate_increase:
+      "die Sperre schreibt selbst eine Erhöhung, die den Verdichter " +
+      "startet",
+    hp_kick_r_blocked_limit: "der angehobene Sollwert läge über dem Maximum",
+    hp_kick_r_blocked_band:
+      "der angehobene Sollwert ließe den Vorlauf im Wiederanlaufband",
+    hp_kick_r_fired: "Anstoß geschrieben",
+    hp_kick_r_kicking: "warte auf den Verdichterstart",
+    hp_kick_r_started:
+      "Verdichter gestartet — der normale Sollwert kehrt über die Sperre " +
+      "zurück",
+    hp_kick_r_timeout: "kein Start — Anstoß zurückgenommen",
+    hp_kick_r_cancelled: "Anstoß abgebrochen",
+    hp_kick_r_done: "der Anstoß dieses Stillstands ist verbraucht",
+    hp_kick_res_started: "Start",
+    hp_kick_res_timeout: "kein Start",
+    hp_kick_res_cancelled: "abgebrochen",
     test_running_min: "~{m} min",
     // Reiter Verteiler (v0.21.0) — die Zeichnung des KAN-therm InoxFlow UFST.
     mf_empty:
@@ -2641,7 +2863,8 @@ const SEV_RANK = { ok: 0, info: 1, warn: 2, problem: 3, alarm: 4 };
  * overrides too). Issue #35 split the old mixed "hp" group: "Cooling water"
  * (the base + the setpoint-flicker) and "Heating water" (the curve, plus the
  * issue #33 write gate: hysteresis, gate switch, restart band, stop offset;
- * issue #34 adds the compressor kick here). A `curvePreview`
+ * and the issue #34 compressor kick: switch, idle time, deficit, start
+ * timeout). A `curvePreview`
  * group gets the heating-curve preview table under its knobs.
  */
 const KNOB_GROUPS = [
@@ -2692,6 +2915,10 @@ const KNOB_GROUPS = [
       "heating_gate_enabled",
       "heating_restart_band_k",
       "heating_stop_offset_k",
+      "heat_kick_enabled",
+      "kick_idle_minutes",
+      "kick_deficit_k",
+      "kick_start_timeout_minutes",
     ],
     globalOnly: true,
     curvePreview: true,
@@ -6938,6 +7165,33 @@ class TortoiseUfhPanel extends HTMLElement {
       ]),
     ]);
 
+    // Card: heating compressor kick (issue #34). Hidden unless the link
+    // exposes heating.kick (the opt-in kick is enabled).
+    P.kickBadge = h("span", { class: "chip", style: "display:none" });
+    P.kickReason = h("span", { class: "kv-val" });
+    P.kickIdle = h("span", { class: "kv-val" });
+    P.kickDeficit = h("span", { class: "kv-val" });
+    P.kickTarget = h("span", { class: "kv-val" });
+    P.kickTimeout = h("span", { class: "kv-val" });
+    P.kick24h = h("span", { class: "kv-val" });
+    P.kickLast = h("span", { class: "kv-val" });
+    P.kickCard = h("div", { class: "hp-card", style: "display:none" }, [
+      h("div", { class: "hp-card-cap" }, [
+        this._t("hp_sec_heat_kick"),
+        this._infoIcon("tip_hp_heat_kick"),
+        P.kickBadge,
+      ]),
+      h("div", { class: "kv-grid hp-grid" }, [
+        gateKv("hp_kick_reason", P.kickReason),
+        gateKv("hp_kick_idle", P.kickIdle),
+        gateKv("hp_kick_deficit", P.kickDeficit),
+        gateKv("hp_kick_target", P.kickTarget),
+        gateKv("hp_kick_timeout", P.kickTimeout),
+        gateKv("hp_kick_24h", P.kick24h),
+        gateKv("hp_kick_last", P.kickLast),
+      ]),
+    ]);
+
     // Card: cooling setpoint-flicker diagnostics (issue #7). Hidden unless the
     // link exposes a flicker payload (enabled, or its diagnostic sensors set).
     P.flickerBadge = h("span", { class: "chip", style: "display:none" });
@@ -7003,6 +7257,7 @@ class TortoiseUfhPanel extends HTMLElement {
       P.dhwCard,
       P.setpointsCard,
       P.gateCard,
+      P.kickCard,
       P.flickerCard,
       P.activeCard,
     ]);
@@ -7093,6 +7348,8 @@ class TortoiseUfhPanel extends HTMLElement {
     // Heating-setpoint write gate (issue #33): the desired vs the pump's
     // setpoint and why a step is held.
     this._renderHeatGate((hp.heating && hp.heating.gate) || null);
+    // Heating compressor kick (issue #34): only while the opt-in is enabled.
+    this._renderHeatKick((hp.heating && hp.heating.kick) || null);
 
     // "Pump available for UFH" — only with a configured entity.
     P.activeCard.style.display = hp.hp_active_configured ? "" : "none";
@@ -7217,6 +7474,94 @@ class TortoiseUfhPanel extends HTMLElement {
         : fmtStr(this._t("test_running_min"), {
             m: Math.max(0, Math.round(num(gate.held_for_s) / 60)),
           });
+  }
+
+  /** Fill the heating compressor-kick card (issue #34) from `kick`. */
+  _renderHeatKick(kick) {
+    const P = this._hpEls;
+    if (!P || !P.kickCard) {
+      return;
+    }
+    P.kickCard.style.display = kick ? "" : "none";
+    if (!kick) {
+      return;
+    }
+    const st = String(kick.state || "off");
+    const stKey = "hp_kick_st_" + st;
+    const stLabel = this._t(stKey);
+    P.kickBadge.style.display = "";
+    P.kickBadge.className =
+      "chip " +
+      (st === "kick" || st === "done"
+        ? "chip-warn"
+        : st === "ready" || st === "waiting"
+          ? "chip-ok"
+          : "");
+    P.kickBadge.textContent = stLabel === stKey ? st : stLabel;
+    const reason = String(kick.reason || "disabled");
+    const reasonKey = "hp_kick_r_" + reason;
+    const label = this._t(reasonKey);
+    P.kickReason.textContent = label === reasonKey ? reason : label;
+    const mins = (s) =>
+      num(s) === null
+        ? "—"
+        : fmtStr(this._t("test_running_min"), {
+            m: Math.max(0, Math.round(num(s) / 60)),
+          });
+    P.kickIdle.textContent =
+      num(kick.idle_s) === null
+        ? "—"
+        : `${mins(kick.idle_s)} / ${fmt(kick.idle_minutes, 0, " min")}`;
+    P.kickDeficit.textContent =
+      num(kick.deficit_k) === null
+        ? "—"
+        : `${fmt(kick.deficit_k, 1, " K")} / ${fmt(kick.deficit_threshold_k, 1, " K")}`;
+    P.kickTarget.textContent = fmt(kick.kick_target_c, 1, " °C");
+    P.kickTimeout.textContent = mins(kick.timeout_remaining_s);
+    const res = kick.last_result;
+    if (res === null || res === undefined) {
+      P.kickLast.textContent = "—";
+    } else {
+      const resKey = "hp_kick_res_" + res;
+      const resLabel = this._t(resKey);
+      P.kickLast.textContent =
+        `${resLabel === resKey ? res : resLabel} · ` +
+        `${fmt(kick.last_kick_target_c, 1, " °C")} (Δ ${fmt(kick.last_kick_deficit_k, 1, " K")})`;
+    }
+    this._refreshKicks24h();
+  }
+
+  /**
+   * Count heating compressor kicks over the last 24 h (issue #34): rising
+   * edges into "kick" in the recorder history of the global
+   * `hp_heating_kick` sensor — durable across reloads, like the flicker's
+   * forced-start count. Cache-gated by `_series`; fails soft to an em dash.
+   */
+  _refreshKicks24h() {
+    const P = this._hpEls;
+    if (!P || !P.kick24h) {
+      return;
+    }
+    const id = this._config && this._config.hp_heating_kick_entity_id;
+    if (!id) {
+      P.kick24h.textContent = "—";
+      return;
+    }
+    this._series(id, "24h", true).then((entry) => {
+      const Pn = this._hpEls;
+      if (!Pn || !Pn.kick24h) {
+        return;
+      }
+      let count = 0;
+      let prev = null;
+      for (const p of entry.data || []) {
+        if (p.v === "kick" && prev !== "kick") {
+          count += 1;
+        }
+        prev = p.v;
+      }
+      Pn.kick24h.textContent = String(count);
+    });
   }
 
   /**

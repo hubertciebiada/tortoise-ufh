@@ -191,6 +191,25 @@ class ControllerConfig:
             (in [0.5, 5]; default 2; issue #33). A lower target is written
             while running only once the outlet is below the new target plus
             this offset, so the write cannot end the run at once. GLOBAL knob.
+        heat_kick_enabled: Master on/off of the opt-in heating compressor kick
+            (default ``False``; issue #34, 2026-10-22) — the heating
+            counterpart of the cooling setpoint-flicker. When the compressor
+            has idled for ``kick_idle_minutes`` with the outlet at least
+            ``kick_deficit_k`` below the pump's heating target, the target is
+            raised by +1 K (one grid step if larger) through the write gate
+            until the compressor starts — see
+            :class:`~tortoise_ufh.hp_link.HeatingCompressorKick`. Needs the
+            write gate (``heating_gate_enabled``) and its inputs. GLOBAL
+            boolean knob.
+        kick_idle_minutes: How long the compressor must have been idle before
+            a kick [min] (in [5, 120]; default 15; issue #34). GLOBAL knob.
+        kick_deficit_k: How far the outlet must sit below the pump's heating
+            target before a kick [K] (in [1, 10]; default 3.5; issue #34).
+            Also what keeps the kick out of a DHW cycle: the outlet is hot
+            then. GLOBAL knob.
+        kick_start_timeout_minutes: How long a kick waits for the compressor
+            to start before it gives up for that idle period [min] (in
+            [1, 60]; default 5; issue #34). GLOBAL knob.
         hp_flicker_enabled: Master on/off for the opt-in, Panasonic-specific
             cooling setpoint-flicker (default ``False``; issue #7, 2026-07-15).
             A GLOBAL boolean knob read only by the adapter — it gates whether
@@ -287,6 +306,14 @@ class ControllerConfig:
     heating_curve_hysteresis_k: float = 0.5
     heating_restart_band_k: float = 3.0
     heating_stop_offset_k: float = 2.0
+    # Heating compressor kick (issue #34, 2026-10-22): opt-in, Panasonic-
+    # specific heating counterpart of the cooling flicker; a +1 K step through
+    # the write gate to release a locked-out restart. Global-only; read by
+    # HeatingCompressorKick.
+    heat_kick_enabled: bool = False
+    kick_idle_minutes: float = 15.0
+    kick_deficit_k: float = 3.5
+    kick_start_timeout_minutes: float = 5.0
     # Cooling setpoint-flicker knobs (2026-07-15, issue #7): global-only timing
     # of the opt-in, Panasonic-specific flicker that trips the cooling
     # compressor out of its fixed 3 K return-water deadband; read only by the
@@ -327,7 +354,9 @@ class ControllerConfig:
                 outside them, a heating write-gate knob is out of range
                 (``heating_curve_hysteresis_k`` [0, 2],
                 ``heating_restart_band_k`` [1, 10], ``heating_stop_offset_k``
-                [0.5, 5]), a flicker knob is
+                [0.5, 5]), a heating-kick knob is out of range
+                (``kick_idle_minutes`` [5, 120], ``kick_deficit_k`` [1, 10],
+                ``kick_start_timeout_minutes`` [1, 60]), a flicker knob is
                 out of range (``hp_flicker_band_k`` [0.5, 3.0],
                 ``hp_flicker_stuck_minutes`` [5, 120],
                 ``hp_flicker_min_off_minutes`` [5, 120],
@@ -416,6 +445,7 @@ class ControllerConfig:
             raise ValueError(msg)
         self._validate_heating_curve()
         self._validate_heating_gate()
+        self._validate_heating_kick()
         if not 0.5 <= self.hp_flicker_band_k <= 3.0:
             msg = (
                 f"hp_flicker_band_k must be in [0.5, 3.0], got {self.hp_flicker_band_k}"
@@ -479,6 +509,26 @@ class ControllerConfig:
             msg = (
                 "heating_stop_offset_k must be in [0.5, 5], got "
                 f"{self.heating_stop_offset_k}"
+            )
+            raise ValueError(msg)
+
+    def _validate_heating_kick(self) -> None:
+        """Validate the heating compressor-kick knobs (issue #34).
+
+        Raises:
+            ValueError: If ``kick_idle_minutes``, ``kick_deficit_k`` or
+                ``kick_start_timeout_minutes`` is outside its range.
+        """
+        if not 5.0 <= self.kick_idle_minutes <= 120.0:
+            msg = f"kick_idle_minutes must be in [5, 120], got {self.kick_idle_minutes}"
+            raise ValueError(msg)
+        if not 1.0 <= self.kick_deficit_k <= 10.0:
+            msg = f"kick_deficit_k must be in [1, 10], got {self.kick_deficit_k}"
+            raise ValueError(msg)
+        if not 1.0 <= self.kick_start_timeout_minutes <= 60.0:
+            msg = (
+                "kick_start_timeout_minutes must be in [1, 60], got "
+                f"{self.kick_start_timeout_minutes}"
             )
             raise ValueError(msg)
 
