@@ -792,7 +792,7 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
-- **Następne wydanie (issue #34)** — **opcjonalne kopnięcie sprężarki grzania** (Panasonic):
+- **0.23.0 (2026-10-23, #34)** — **opcjonalne kopnięcie sprężarki grzania** (Panasonic):
   gdy sprężarka stoi co najmniej 15 min, a wylot jest co najmniej 3,5 K poniżej nastawy pompy
   (zablokowany ponowny start, np. po CWU), nastawa grzania rośnie o 1 K przez bramkę nastawy
   grzania; po starcie sprężarki bramka przywraca normalną nastawę, bez startu w 5 min
@@ -801,7 +801,7 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
   poniżej nastawy pompy i czas na start. Karta „Kopnięcie sprężarki grzania" w zakładce Pompa
   ciepła, sensory `hp_heating_kick` i `hp_heating_kick_last`. Wyłączone — zachowanie bez
   zmian. Bez migracji.
-- **Następne wydanie (issue #33)** — **bramka nastawy wody grzania na stan sprężarki**
+- **0.23.0 (2026-10-23, #33)** — **bramka nastawy wody grzania na stan sprężarki**
   (Panasonic): krok nastawy przy stojącej sprężarce potrafił zablokować jej ponowny start.
   Teraz, przy podłączonych czujnikach częstotliwości sprężarki i wylotu, nowa nastawa jest
   pisana tylko w bezpiecznym stanie (praca: podwyżka od razu, obniżka gdy wylot < nowa + 2 K;
@@ -814,7 +814,7 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
   grzania" pokazuje teraz wartość po zaokrągleniu do kroku encji. Nastawa jest przycinana do
   zakresu encji, a zapis niepotwierdzony przez stan encji jest ponawiany po 2 min. Bez
   czujników — zapis jak dotąd. Bez migracji.
-- **Następne wydanie (issue #35)** — **krzywa wody grzania z własnymi parametrami i
+- **0.23.0 (2026-10-23, #35)** — **krzywa wody grzania z własnymi parametrami i
   podglądem**: nachylenie krzywej ma krok **0,01 K/K** (wcześniej 0,1 — np. 0,23 K/K dla
   pompy 25 °C przy +15 °C / 32 °C przy −15 °C). Krzywa ma własną **temperaturę neutralną**
   (`heating_curve_neutral_c`, domyślnie 15 °C) — dotąd korzystała z temperatury neutralnej
@@ -826,7 +826,7 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
   chłodzenia). Nowa instalacja działa tak samo jak wcześniej. Migracja **v5 → v6** (ta
   sama co dla issue #31) przepisuje zapisaną globalną temperaturę neutralną członu
   pogodowego do nowego parametru krzywej, więc krzywa żadnej instalacji się nie przesuwa.
-- **Następne wydanie (issue #32)** — **nowe domyślne nastawy wspomagania, rosy i
+- **0.23.0 (2026-10-23, #32)** — **nowe domyślne nastawy wspomagania, rosy i
   wymuszania startu chłodzenia**, sprawdzone na jednym domu przez cały sezon chłodzenia
   i początek grzania: próg dogrzewu 1,0 → **1,5 K**, minimalny czas pracy / postoju
   wspomagania 10 / 10 → **30 / 31 min**, podbicie nastawy splita 1 → **0 K** (split
@@ -840,7 +840,7 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
   tych parametrów jak zamrożoną kopię i ją usuwa — instalacja dostaje nowe wartości;
   kto celowo ustawił dokładnie dawną wartość (np. próg 1,0 K), musi ją ustawić
   ponownie (wpis w logu). Panel oznacza takie wartości jako **„stara domyślna"**.
-- **Następne wydanie (issue #31)** — **strojenie globalne zapisywane jako nadpisania**:
+- **0.23.0 (2026-10-23, #31)** — **strojenie globalne zapisywane jako nadpisania**:
   dotąd kreator i każdy zapis strojenia utrwalały pełną kopię wszystkich nastaw, więc
   poprawione wartości domyślne nigdy nie docierały do istniejących instalacji (np. `kp 8 /
   ki 0,02 / kt 6` zamiast `14 / 0,0015 / 12` i próg zapisu zaworu 2 zamiast 5 pp). Teraz
