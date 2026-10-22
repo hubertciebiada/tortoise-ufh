@@ -116,7 +116,7 @@
       },
       "settings": {
         "title": "Control & Tuning",
-        "description": "Set each room's control state — off (excluded from control, nothing is written to the hardware) or live (drives its valves and fast source) — and adjust the advanced controller gains. The panel and the per-room control-state select entities are the primary surface; this form is an emergency / automation-free fallback.",
+        "description": "Set each room's control state — off (excluded from control, nothing is written to the hardware) or live (drives its valves and fast source) — and adjust the advanced controller gains. The panel and the per-room control-state select entities are the primary surface; this form is an emergency / automation-free fallback. Only gains that differ from the default are stored; a gain set back to its default follows future default changes.",
         "data": {
           "kp": "Proportional gain kp (%/K)",
           "ki": "Integral gain ki (%/(K·s))",

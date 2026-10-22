@@ -458,6 +458,27 @@ def test_v021_surfaces_have_their_str_keys() -> None:
     assert not missing, f"missing STR keys: {missing}"
 
 
+_REQUIRED_TUNING_RESET_KEYS: tuple[str, ...] = (
+    "tune_custom",
+    "tune_reset_default",
+    "tune_old_default",
+    "tune_old_default_tip",
+)
+
+
+@pytest.mark.unit
+def test_tuning_reset_surfaces_have_their_str_keys() -> None:
+    """The global reset-to-default / old-default STR keys (issue #31) exist."""
+    sections = _str_language_keys(_PANEL_JS.read_text(encoding="utf-8"))
+    missing = [
+        f"{lang}:{key}"
+        for key in _REQUIRED_TUNING_RESET_KEYS
+        for lang in ("pl", "en", "de")
+        if key not in sections[lang]
+    ]
+    assert not missing, f"missing STR keys: {missing}"
+
+
 @pytest.mark.unit
 def test_flicker_flags_registered_and_consumed() -> None:
     """The 3 global flicker flags are FLAG_LABELS rows AND rendered (no orphans).

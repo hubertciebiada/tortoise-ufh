@@ -1,6 +1,6 @@
 """Config flow for the Tortoise-UFH integration.
 
-Implements the multi-step setup wizard (``VERSION = 5``) and the options flow.
+Implements the multi-step setup wizard (``VERSION = 6``) and the options flow.
 
 Wizard steps:
     1. ``user``       — home location (latitude / longitude, decimal degrees).
@@ -119,7 +119,7 @@ from .core.manifold import (
 )
 from .device import get_entry_device, room_slug
 from .entity_validator import EntityValidator
-from .tuning import flicker_open_max_pct, global_controller
+from .tuning import flicker_open_max_pct, global_controller, global_overrides
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -800,7 +800,7 @@ def _manifold_schema_dict(
 class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
     """Multi-step setup wizard for Tortoise-UFH."""
 
-    VERSION = 5
+    VERSION = 6
 
     @staticmethod
     def async_get_options_flow(
@@ -821,7 +821,9 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
         self._location: dict[str, Any] = {}
         self._rooms: list[dict[str, Any]] = []
         self._global: dict[str, Any] = {}
-        self._controller: dict[str, Any] = asdict(ControllerConfig())
+        # Sparse global overrides chosen in the algorithm step (issue #31):
+        # empty = library defaults, so later retunes reach the install.
+        self._controller: dict[str, Any] = {}
         self._entity_room_idx: int = 0
 
     # -- Step 1: location ---------------------------------------------------
@@ -1055,7 +1057,7 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.warning("Invalid controller tuning: %s", err)
                 errors["base"] = "invalid_controller"
             else:
-                self._controller = asdict(controller)
+                self._controller = global_overrides(asdict(controller))
                 return await self.async_step_confirm()
 
         schema = vol.Schema(
@@ -1093,9 +1095,15 @@ class TortoiseUfhConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_LONGITUDE: location.longitude,
                 CONF_HOME_SETPOINT: DEFAULT_HOME_SETPOINT_C,
                 CONF_ROOMS: rooms,
-                CONF_CONTROLLER: self._controller,
             }
-            return self.async_create_entry(title="Tortoise-UFH", data=data)
+            # Global tuning lives in the options as sparse overrides (issue
+            # #31), the one place the panel and the options flow write it.
+            options: dict[str, Any] = (
+                {CONF_CONTROLLER: dict(self._controller)} if self._controller else {}
+            )
+            return self.async_create_entry(
+                title="Tortoise-UFH", data=data, options=options
+            )
 
         return self.async_show_form(
             step_id="confirm",
@@ -1296,10 +1304,27 @@ class TortoiseUfhOptionsFlow(OptionsFlow):
                 # set from the panel) are preserved rather than wiped: an options
                 # flow's async_create_entry REPLACES entry.options wholesale.
                 new_options: dict[str, Any] = {
-                    **entry.options,
-                    CONF_ROOM_STATE: room_states,
-                    CONF_CONTROLLER: asdict(controller),
+                    key: value
+                    for key, value in entry.options.items()
+                    if key != CONF_CONTROLLER
                 }
+                new_options[CONF_ROOM_STATE] = room_states
+                # Sparse overrides only (issue #31): a knob left at the
+                # library default is not stored, so a retune reaches it.
+                sparse = global_overrides(asdict(controller))
+                if sparse:
+                    new_options[CONF_CONTROLLER] = sparse
+                if CONF_CONTROLLER in entry.data:
+                    # The form showed the merged values, so the options now
+                    # hold every override; drop the setup-time copy.
+                    self.hass.config_entries.async_update_entry(
+                        entry,
+                        data={
+                            key: value
+                            for key, value in entry.data.items()
+                            if key != CONF_CONTROLLER
+                        },
+                    )
                 global_supply = str(
                     user_input.get(CONF_ENTITY_GLOBAL_SUPPLY, "") or ""
                 ).strip()

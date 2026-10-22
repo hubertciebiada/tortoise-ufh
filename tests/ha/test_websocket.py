@@ -372,6 +372,15 @@ async def test_get_tuning_returns_fields_and_values(
     assert result["defaults"]["outdoor_ff_enabled"] is False
     # No per-room overrides configured yet.
     assert result["rooms"] == {}
+    # Issue #31: nothing is stored globally, and the earlier shipped defaults
+    # of the user-facing knobs are exposed for the panel's "old default" mark
+    # (the non-knob valve_write_threshold_pct is not).
+    assert result["global_overrides"] == []
+    assert result["superseded_defaults"] == {
+        "kp": [8.0],
+        "ki": [0.02],
+        "kt": [6.0],
+    }
 
 
 async def test_set_tuning_global_persists_and_reloads(
@@ -391,10 +400,102 @@ async def test_set_tuning_global_persists_and_reloads(
     await hass.async_block_till_done()
 
     entry = setup_integration
-    assert entry.options[CONF_CONTROLLER]["kp"] == 12.0
+    # Sparse (issue #31): only the changed knob is stored, not a snapshot.
+    assert entry.options[CONF_CONTROLLER] == {"kp": 12.0}
+    assert msg["result"]["global_overrides"] == ["kp"]
     coordinator = _coordinator(hass)
     assert coordinator._controller_configs["Salon"].kp == 12.0
     assert coordinator._controller_configs["Lazienka"].kp == 12.0
+
+
+async def test_set_tuning_global_does_not_freeze_defaults(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """A global save resending every knob stores only the non-default ones.
+
+    Issue #31: a value equal to the library default must never be persisted,
+    or a later retune of that default would not reach the install.
+    """
+    client = await hass_ws_client(hass)
+    tuning = await _round_trip(client, {"type": f"{DOMAIN}/get_tuning"})
+    values = dict(tuning["result"]["global"])
+    values["kt"] = 10.0
+    msg = await _round_trip(
+        client,
+        {"type": f"{DOMAIN}/set_tuning", "scope": "global", "values": values},
+    )
+
+    assert msg["success"] is True
+    await hass.async_block_till_done()
+    assert setup_integration.options[CONF_CONTROLLER] == {"kt": 10.0}
+
+
+async def test_set_tuning_global_null_resets_to_default(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """A null value in the global scope clears the override (issue #31)."""
+    client = await hass_ws_client(hass)
+    await _round_trip(
+        client,
+        {
+            "type": f"{DOMAIN}/set_tuning",
+            "scope": "global",
+            "values": {"kp": 12.0, "kt": 10.0},
+        },
+    )
+    await hass.async_block_till_done()
+    assert setup_integration.options[CONF_CONTROLLER] == {"kp": 12.0, "kt": 10.0}
+
+    msg = await _round_trip(
+        client,
+        {"type": f"{DOMAIN}/set_tuning", "scope": "global", "values": {"kp": None}},
+    )
+    assert msg["success"] is True
+    assert msg["result"]["global"]["kp"] == 14.0
+    assert msg["result"]["global_overrides"] == ["kt"]
+    await hass.async_block_till_done()
+    assert setup_integration.options[CONF_CONTROLLER] == {"kt": 10.0}
+
+    msg = await _round_trip(
+        client,
+        {"type": f"{DOMAIN}/set_tuning", "scope": "global", "values": {"kt": None}},
+    )
+    assert msg["success"] is True
+    await hass.async_block_till_done()
+    assert CONF_CONTROLLER not in setup_integration.options
+    assert _coordinator(hass)._controller_configs["Salon"].kt == 12.0
+
+
+async def test_set_tuning_global_reset_clears_a_setup_time_copy(
+    hass: HomeAssistant,
+    setup_integration: MockConfigEntry,
+    hass_ws_client: Any,
+) -> None:
+    """A global save drops a tuning copy left in entry.data.
+
+    Otherwise the data copy would shadow a reset (the merge is data <- options).
+    """
+    entry = setup_integration
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_CONTROLLER: {"kp": 9.0}}
+    )
+    await hass.async_block_till_done()
+
+    client = await hass_ws_client(hass)
+    msg = await _round_trip(
+        client,
+        {"type": f"{DOMAIN}/set_tuning", "scope": "global", "values": {"kp": None}},
+    )
+
+    assert msg["success"] is True
+    assert msg["result"]["global"]["kp"] == 14.0
+    await hass.async_block_till_done()
+    assert CONF_CONTROLLER not in entry.data
+    assert CONF_CONTROLLER not in entry.options
 
 
 async def test_set_tuning_room_override_merges(

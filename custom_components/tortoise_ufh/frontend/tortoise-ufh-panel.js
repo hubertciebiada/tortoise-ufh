@@ -272,6 +272,8 @@ const STR = {
     no_live_room: "Brak danych na żywo dla tego pokoju.",
     tune_intro:
       "Globalne nastawy regulatora oraz rzadkie nadpisania per pokój. " +
+      "Zapisywane są tylko wartości różne od domyślnych — nastawa równa " +
+      "domyślnej podąża za przyszłymi zmianami domyślnych. " +
       "Zapis przeładowuje regulator (integrator PID zostaje wyzerowany).",
     tune_scope_global: "Globalne",
     tune_save: "Zapisz",
@@ -279,6 +281,13 @@ const STR = {
     tune_saved: "Zapisano",
     tune_overridden: "nadpisane",
     tune_revert: "Wróć do globalnej",
+    tune_custom: "własne",
+    tune_reset_default: "Przywróć domyślną",
+    tune_old_default: "stara domyślna",
+    tune_old_default_tip:
+      "Ta wartość to dawna wartość domyślna, zapisana na stałe przez " +
+      "starszą wersję integracji — nie Twój wybór. Przywróć domyślną, " +
+      "chyba że ustawiłeś ją celowo.",
     tune_on: "wł.",
     tune_off: "wył.",
     tune_grp_pid: "Regulator PI i trend",
@@ -821,6 +830,8 @@ const STR = {
     no_live_room: "No live data for this room yet.",
     tune_intro:
       "Global controller tuning plus sparse per-room overrides. " +
+      "Only values that differ from the default are stored — a value left " +
+      "at the default follows future default changes. " +
       "Saving reloads the controller (the PID integrator is reset).",
     tune_scope_global: "Global",
     tune_save: "Save",
@@ -828,6 +839,13 @@ const STR = {
     tune_saved: "Saved",
     tune_overridden: "overridden",
     tune_revert: "Revert to global",
+    tune_custom: "custom",
+    tune_reset_default: "Reset to default",
+    tune_old_default: "old default",
+    tune_old_default_tip:
+      "This value is a former default that an older version of the " +
+      "integration stored permanently — not your choice. Reset it to the " +
+      "default unless you set it on purpose.",
     tune_on: "on",
     tune_off: "off",
     tune_grp_pid: "PI controller & trend",
@@ -1373,6 +1391,8 @@ const STR = {
     no_live_room: "Noch keine Live-Daten für diesen Raum.",
     tune_intro:
       "Globale Reglerabstimmung plus vereinzelte Übersteuerungen je Raum. " +
+      "Gespeichert werden nur Werte, die vom Standard abweichen — ein Wert " +
+      "auf dem Standard folgt künftigen Änderungen des Standards. " +
       "Das Speichern lädt den Regler neu (der PID-Integrator wird zurückgesetzt).",
     tune_scope_global: "Global",
     tune_save: "Speichern",
@@ -1380,6 +1400,13 @@ const STR = {
     tune_saved: "Gespeichert",
     tune_overridden: "übersteuert",
     tune_revert: "Auf global zurücksetzen",
+    tune_custom: "angepasst",
+    tune_reset_default: "Auf Standard zurücksetzen",
+    tune_old_default: "alter Standard",
+    tune_old_default_tip:
+      "Dieser Wert ist ein früherer Standardwert, den eine ältere Version " +
+      "der Integration dauerhaft gespeichert hat — nicht Ihre Wahl. Setzen " +
+      "Sie ihn auf den Standard zurück, sofern Sie ihn nicht bewusst gewählt haben.",
     tune_on: "ein",
     tune_off: "aus",
     tune_grp_pid: "PI-Regler & Trend",
@@ -2360,6 +2387,23 @@ function signed(value, digits, suffix) {
 }
 
 /** Clamp `v` to the inclusive `[lo, hi]` range. */
+/**
+ * Whether two knob values are the same (issue #31): booleans strictly,
+ * numbers within a relative 1e-9 (a stepper's float noise must not count as
+ * a custom value).
+ */
+function sameKnob(a, b) {
+  if (typeof a === "boolean" || typeof b === "boolean") {
+    return a === b;
+  }
+  const x = num(a);
+  const y = num(b);
+  if (x === null || y === null) {
+    return false;
+  }
+  return Math.abs(x - y) <= 1e-9 * Math.max(1, Math.abs(x), Math.abs(y));
+}
+
 function clamp(v, lo, hi) {
   return Math.min(hi, Math.max(lo, v));
 }
@@ -7297,16 +7341,26 @@ class TortoiseUfhPanel extends HTMLElement {
     // default and when to touch it (guarded: only when the STR key exists).
     const tipKey = "tip_knob_" + name;
     const info = tipKey in STR.en ? this._infoIcon(tipKey) : null;
+    // Room scope: "overridden" + revert to the global value. Global scope
+    // (issue #31): "custom" + reset to the library default (sent as null),
+    // and an "old default" mark for a value an older release froze.
     const badge = h("span", {
       class: "tune-badge",
-      text: this._t("tune_overridden"),
+      text: this._t(isRoom ? "tune_overridden" : "tune_custom"),
       style: "display:none",
     });
+    const legacy = h("span", {
+      class: "tune-badge tune-badge-legacy",
+      text: this._t("tune_old_default"),
+      title: this._t("tune_old_default_tip"),
+      style: "display:none",
+    });
+    const revertKey = isRoom ? "tune_revert" : "tune_reset_default";
     const revert = h("button", {
       class: "tune-revert",
       type: "button",
-      title: this._t("tune_revert"),
-      "aria-label": this._t("tune_revert"),
+      title: this._t(revertKey),
+      "aria-label": this._t(revertKey),
       style: "display:none",
       on: { click: () => this._revertTuneField(name) },
     });
@@ -7316,10 +7370,20 @@ class TortoiseUfhPanel extends HTMLElement {
       unit,
       info,
       badge,
+      legacy,
       revert,
     ]);
 
-    const refs = { field, badge, revert, valEl: null, minus: null, plus: null, toggle: null };
+    const refs = {
+      field,
+      badge,
+      legacy,
+      revert,
+      valEl: null,
+      minus: null,
+      plus: null,
+      toggle: null,
+    };
     let control;
     if (field.type === "bool") {
       const toggle = h("button", {
@@ -7379,8 +7443,29 @@ class TortoiseUfhPanel extends HTMLElement {
     }
 
     refs.card.classList.toggle("inherited", isRoom && !overridden);
-    refs.badge.style.display = overridden ? "" : "none";
-    refs.revert.style.display = overridden ? "" : "none";
+    if (isRoom) {
+      refs.badge.style.display = overridden ? "" : "none";
+      refs.revert.style.display = overridden ? "" : "none";
+      refs.legacy.style.display = "none";
+      return;
+    }
+    const custom = !sameKnob(value, this._tuneDefault(name));
+    refs.badge.style.display = custom ? "" : "none";
+    refs.revert.style.display = custom ? "" : "none";
+    refs.legacy.style.display = custom && this._isOldDefault(name, value) ? "" : "none";
+  }
+
+  /** The library default of a knob (from the get_tuning payload). */
+  _tuneDefault(name) {
+    const defaults = (this._tuning && this._tuning.defaults) || {};
+    return defaults[name];
+  }
+
+  /** Whether a value equals an earlier shipped default of the knob (#31). */
+  _isOldDefault(name, value) {
+    const old = (this._tuning && this._tuning.superseded_defaults) || {};
+    const values = Array.isArray(old[name]) ? old[name] : [];
+    return values.some((v) => sameKnob(value, v));
   }
 
   /** Nudge a numeric knob by ±step (clamped); marks it overridden in a room. */
@@ -7421,9 +7506,17 @@ class TortoiseUfhPanel extends HTMLElement {
     this._applyTuneField(name);
   }
 
-  /** Drop a room override for one knob, reverting it to the global value. */
+  /**
+   * Room scope: drop the override, reverting the knob to the global value.
+   * Global scope: put the knob back on the library default (saved as null).
+   */
   _revertTuneField(name) {
-    if (!this._tuningDraft || this._tuningScope === "global") {
+    if (!this._tuningDraft) {
+      return;
+    }
+    if (this._tuningScope === "global") {
+      this._tuningDraft.values[name] = this._tuneDefault(name);
+      this._applyTuneField(name);
       return;
     }
     this._tuningDraft.overridden.delete(name);
@@ -7436,7 +7529,19 @@ class TortoiseUfhPanel extends HTMLElement {
   _buildTuneSaveValues() {
     const draft = this._tuningDraft;
     if (this._tuningScope === "global") {
-      return { ...draft.values };
+      // Sparse (issue #31): a knob on its default is not sent, and one that
+      // was stored as an override is cleared with null, so the backend never
+      // freezes a default.
+      const stored = new Set((this._tuning && this._tuning.global_overrides) || []);
+      const values = {};
+      for (const [name, value] of Object.entries(draft.values)) {
+        if (!sameKnob(value, this._tuneDefault(name))) {
+          values[name] = value;
+        } else if (stored.has(name)) {
+          values[name] = null;
+        }
+      }
+      return values;
     }
     const prev = (this._tuning && this._tuning.rooms && this._tuning.rooms[this._tuningScope]) || {};
     const values = {};
@@ -8502,6 +8607,11 @@ button { font-family: inherit; cursor: pointer; }
   color: var(--t-primary);
   background: color-mix(in srgb, var(--t-primary) 16%, transparent);
   border-radius: 999px; padding: 2px 8px;
+}
+.tune-badge-legacy {
+  color: var(--t-warn);
+  background: color-mix(in srgb, var(--t-warn) 16%, transparent);
+  cursor: help;
 }
 .tune-revert {
   margin-left: auto; border: 1px solid var(--t-line); background: var(--t-card);

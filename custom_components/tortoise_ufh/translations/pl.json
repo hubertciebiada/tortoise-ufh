@@ -116,7 +116,7 @@
       },
       "settings": {
         "title": "Sterowanie i strojenie",
-        "description": "Ustaw stan sterowania każdego pomieszczenia — Wyłączony (poza sterowaniem, nic nie jest zapisywane do sprzętu) lub Steruje (napędza zawory i szybkie źródło) — oraz dostosuj zaawansowane wzmocnienia regulatora. Głównym interfejsem są panel i encje select stanu sterowania; ten formularz to awaryjna alternatywa bez automatyzacji.",
+        "description": "Ustaw stan sterowania każdego pomieszczenia — Wyłączony (poza sterowaniem, nic nie jest zapisywane do sprzętu) lub Steruje (napędza zawory i szybkie źródło) — oraz dostosuj zaawansowane wzmocnienia regulatora. Głównym interfejsem są panel i encje select stanu sterowania; ten formularz to awaryjna alternatywa bez automatyzacji. Zapisywane są tylko wzmocnienia różne od domyślnych; wzmocnienie ustawione z powrotem na domyślne podąża za przyszłymi zmianami domyślnych.",
         "data": {
           "kp": "Wzmocnienie proporcjonalne kp (%/K)",
           "ki": "Wzmocnienie całkujące ki (%/(K·s))",

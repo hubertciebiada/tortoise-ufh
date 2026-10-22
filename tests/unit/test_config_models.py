@@ -22,18 +22,21 @@ This module is part of the pure-core test suite: it imports ONLY from
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import Any
 
 import pytest
 
 from custom_components.tortoise_ufh.core.config import (
+    SUPERSEDED_CONTROLLER_DEFAULTS,
     BuildingConfig,
     ControllerConfig,
     Orientation,
     RoomConfig,
     SimScenario,
     WindowConfig,
+    controller_overrides,
+    is_superseded_default,
 )
 from custom_components.tortoise_ufh.core.models import (
     BuildingOutputs,
@@ -229,6 +232,92 @@ class TestControllerConfigValidation:
             hp_flicker_max_starts_per_h=6.0,
         )
         assert cfg.hp_flicker_band_k == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Sparse tuning persistence (issue #31)
+# ---------------------------------------------------------------------------
+
+_KNOBS = ("kp", "ki", "kt", "deadband_c", "outdoor_ff_enabled")
+
+
+class TestControllerOverrides:
+    """``controller_overrides`` / ``is_superseded_default`` (issue #31)."""
+
+    @pytest.mark.unit
+    def test_full_default_snapshot_reduces_to_nothing(self) -> None:
+        """A full ``asdict`` snapshot of the defaults has no overrides."""
+        snapshot = asdict(ControllerConfig())
+        assert controller_overrides(snapshot, fields=snapshot) == {}
+
+    @pytest.mark.unit
+    def test_keeps_only_changed_allowed_fields(self) -> None:
+        """Changed knobs stay, defaults and non-allowed fields go."""
+        stored = {
+            **asdict(ControllerConfig()),
+            "kp": 16.0,
+            "outdoor_ff_enabled": True,
+            "valve_write_threshold_pct": 2.0,
+        }
+        assert controller_overrides(stored, fields=_KNOBS) == {
+            "kp": 16.0,
+            "outdoor_ff_enabled": True,
+        }
+
+    @pytest.mark.unit
+    def test_input_not_mutated(self) -> None:
+        """The stored mapping is left untouched."""
+        stored = {"kp": 14.0, "kt": 10.0}
+        controller_overrides(stored, fields=_KNOBS, drop_superseded=True)
+        assert stored == {"kp": 14.0, "kt": 10.0}
+
+    @pytest.mark.unit
+    def test_float_noise_counts_as_default(self) -> None:
+        """A stepper's float noise around the default is not an override."""
+        assert controller_overrides({"ki": 0.0015 + 1e-15}, fields=_KNOBS) == {}
+
+    @pytest.mark.unit
+    def test_unknown_field_and_garbage_value(self) -> None:
+        """An unknown field is dropped; a non-numeric value is never dropped."""
+        stored = {"nope": 1.0, "kp": "abc"}
+        assert controller_overrides(stored, fields=(*_KNOBS, "nope")) == {"kp": "abc"}
+
+    @pytest.mark.unit
+    def test_superseded_defaults_dropped_only_on_request(self) -> None:
+        """Old shipped defaults survive normally, drop with ``drop_superseded``."""
+        stored = {"kp": 8.0, "ki": 0.02, "kt": 6.0, "deadband_c": 0.4}
+        assert controller_overrides(stored, fields=_KNOBS) == stored
+        assert controller_overrides(stored, fields=_KNOBS, drop_superseded=True) == {
+            "deadband_c": 0.4
+        }
+
+    @pytest.mark.unit
+    def test_is_superseded_default(self) -> None:
+        """Only an old default that differs from today's default matches."""
+        assert is_superseded_default("kp", 8.0)
+        assert is_superseded_default("kp", 8)
+        assert is_superseded_default("valve_write_threshold_pct", 2.0)
+        assert not is_superseded_default("kp", 9.0)
+        assert not is_superseded_default("kp", 14.0)
+        assert not is_superseded_default("deadband_c", 0.3)
+        assert not is_superseded_default("kp", True)
+
+    @pytest.mark.unit
+    def test_table_never_lists_a_current_default(self) -> None:
+        """Every superseded value is a real field and not today's default."""
+        defaults = ControllerConfig()
+        for name, values in SUPERSEDED_CONTROLLER_DEFAULTS.items():
+            current = getattr(defaults, name)
+            assert values
+            assert all(v != current for v in values)
+
+    @pytest.mark.unit
+    def test_booleans_compare_strictly(self) -> None:
+        """A bool default never matches a number (``True == 1`` in Python)."""
+        assert controller_overrides({"outdoor_ff_enabled": 0}, fields=_KNOBS) == {
+            "outdoor_ff_enabled": 0
+        }
+        assert controller_overrides({"outdoor_ff_enabled": False}, fields=_KNOBS) == {}
 
 
 # ---------------------------------------------------------------------------

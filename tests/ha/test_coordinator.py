@@ -893,7 +893,7 @@ async def test_off_room_does_not_vote_in_group_arbitration(
         options={CONF_ROOM_STATE: {"Polnoc": "live", "Poludnie": "off"}},
         title="Tortoise-UFH",
         unique_id="50.5_19.5",
-        version=5,
+        version=6,
     )
     entry.add_to_hass(hass)
     # TRANSITIONAL (bidirectional fast source, valves parked) seeded through
@@ -1137,7 +1137,7 @@ async def _setup_live_salon(
         options={CONF_ROOM_STATE: {"Salon": ROOM_STATE_LIVE}},
         title="Tortoise-UFH",
         unique_id="50.5_19.5",
-        version=5,
+        version=6,
     )
     entry.add_to_hass(hass)
     store_key = f"{DOMAIN}.setpoints.{entry.entry_id}"

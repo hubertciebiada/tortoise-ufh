@@ -330,6 +330,14 @@ Wasser-Sollwerte betreffen das gesamte Gebäude, daher hat eine Übersteuerung j
 keinen physikalischen Sinn und wird abgelehnt. **Hinweis: Das Speichern der Abstimmung
 lädt den Regler neu — der PID-Integrator wird auf null gesetzt.**
 
+Gespeichert werden nur Werte, die **vom Standard abweichen** (Issue #31). Ein Parameter auf
+dem Standardwert wird nicht gespeichert; verbessert eine künftige Version den Standard,
+erhält Ihre Installation ihn. In der globalen Ansicht trägt ein Parameter mit eigenem Wert
+die Markierung **„angepasst“** und die Schaltfläche **„Auf Standard zurücksetzen“**; ein Wert,
+der einem **früheren** Standard entspricht (z. B. `kp` 8, `ki` 0,02, `kt` 6) und von
+einer älteren Version dauerhaft gespeichert wurde, erhält die Warnmarkierung **„alter
+Standard“** — setzen Sie ihn zurück, sofern Sie ihn nicht bewusst gewählt haben.
+
 <!-- WÄCHTER: Die Beschreibungen unten sind eine 1:1-Kopie der Panel-Tooltips
      (STR.tip_knob_* in frontend/tortoise-ufh-panel.js) — BEIDE Stellen zusammen ändern. -->
 
@@ -739,6 +747,17 @@ für das ganze Haus.
 
 **Versionsverlauf / Migrationen**
 
+- **Nächste Version (Issue #31)** — **globale Abstimmung als Übersteuerungen gespeichert**:
+  Bisher speicherten der Assistent und jedes Speichern der Abstimmung eine vollständige
+  Kopie aller Einstellungen, sodass verbesserte Standardwerte bestehende Installationen nie
+  erreichten (z. B. `kp 8 / ki 0,02 / kt 6` statt `14 / 0,0015 / 12` und eine
+  Ventil-Schreibschwelle von 2 statt 5 pp). Jetzt werden nur vom Standard abweichende
+  Parameter gespeichert. Die Migration des Konfigurationseintrags **v5 → v6** entfernt aus
+  der gespeicherten globalen Abstimmung Felder, die keine Parameter sind, Werte gleich dem
+  aktuellen Standard und Werte gleich einem früheren Standard (`kp` 8, `ki` 0,02, `kt` 6,
+  Schreibschwelle 2 pp) — eigene Werte bleiben, die entfernten stehen im Log. Panel: in der
+  globalen Ansicht je Parameter **„Auf Standard zurücksetzen“** und die Markierung **„alter
+  Standard“** (§8). Übersteuerungen je Raum unverändert.
 - **0.22.3 (2026-10-12)** — **Durchfluss-Watchdog (S6) entfernt** samt allem, was daran
   hing: die Meldung `loop_no_flow` und das dadurch ausgelöste Einfrieren des Integrators,
   die binäre Entität „Durchflussstörung im Heizkreis“ (`flow_fault`), der manuelle

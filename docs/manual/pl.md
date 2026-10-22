@@ -303,6 +303,13 @@ Grupa **„Pompa ciepła — woda"** jest wyłącznie globalna — nastawy wody 
 budynku, więc nadpisanie per pokój nie ma fizycznego sensu i jest odrzucane.
 **Uwaga: zapis strojenia przeładowuje regulator — integrator PID jest zerowany.**
 
+Zapisywane są tylko wartości **różne od domyślnych** (issue #31). Parametr pozostawiony na
+wartości domyślnej nie jest zapamiętywany, więc gdy przyszła wersja poprawi domyślną
+nastawę, Twoja instalacja ją dostanie. W widoku globalnym parametr o własnej wartości ma
+znaczek **„własne"** i przycisk **„Przywróć domyślną"**; wartość równa **dawnej** domyślnej
+(np. `kp` 8, `ki` 0,02, `kt` 6), zapisana na stałe przez starszą wersję, dostaje
+ostrzegawczy znaczek **„stara domyślna"** — przywróć domyślną, chyba że ustawiłeś ją celowo.
+
 <!-- STRAŻNIK: opisy poniżej są 1:1 kopią tooltipów panelu
      (STR.tip_knob_* w frontend/tortoise-ufh-panel.js) — zmieniaj OBA miejsca razem. -->
 
@@ -682,6 +689,16 @@ przez temperaturę zasilania), jeden globalny tryb dla całego domu.
 
 **Historia wersji / migracje**
 
+- **Następne wydanie (issue #31)** — **strojenie globalne zapisywane jako nadpisania**:
+  dotąd kreator i każdy zapis strojenia utrwalały pełną kopię wszystkich nastaw, więc
+  poprawione wartości domyślne nigdy nie docierały do istniejących instalacji (np. `kp 8 /
+  ki 0,02 / kt 6` zamiast `14 / 0,0015 / 12` i próg zapisu zaworu 2 zamiast 5 pp). Teraz
+  zapisywane są tylko parametry różne od domyślnych. Migracja wpisu konfiguracji
+  **v5 → v6** usuwa z zapisanego strojenia globalnego pola niebędące parametrami, wartości
+  równe obecnym domyślnym i wartości równe dawnym domyślnym (`kp` 8, `ki` 0,02, `kt` 6,
+  próg zapisu 2 pp) — własne wartości zostają, a usunięte są wypisane w logu. Panel:
+  w widoku globalnym przycisk **„Przywróć domyślną"** przy każdym parametrze i znaczek
+  **„stara domyślna"** (§8). Nadpisania per pokój bez zmian.
 - **0.22.3 (2026-10-12)** — **usunięty watchdog przepływu (S6)** razem ze wszystkim, co do
   niego należało: flagą `loop_no_flow` i wywoływanym przez nią zamrożeniem integratora,
   encją binarną „usterka przepływu" (`flow_fault`), ręcznym **testem aktuacji** (usługa

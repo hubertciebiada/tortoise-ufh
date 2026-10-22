@@ -80,13 +80,17 @@ from .tuning import (
     flicker_open_max_pct,
     global_controller,
     global_controller_dict,
+    global_overrides,
     knob_names,
     knob_values,
+    persisted_global_overrides,
     room_overrides,
+    superseded_defaults,
     tuning_fields,
 )
 
 if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
     from .coordinator import CoordinatorData, TortoiseUfhCoordinator
@@ -426,6 +430,12 @@ class TuningResult:
             fields a room actually overrides.
         defaults: The library-default value of every exposed knob (the value a
             reverted room / global reset returns to).
+        global_overrides: The knobs the entry persists as global overrides
+            (values differing from ``defaults``; issue #31) — the ones a
+            global "reset to default" acts on.
+        superseded_defaults: Earlier shipped defaults per knob
+            ``{knob: [value, ...]}``, so the panel can mark a global value that
+            still equals an old default (issue #31).
 
     Raises:
         ValueError: If ``global_values`` or ``defaults`` is missing an exposed
@@ -436,6 +446,8 @@ class TuningResult:
     global_values: dict[str, Any]
     rooms: dict[str, dict[str, Any]]
     defaults: dict[str, Any]
+    global_overrides: tuple[str, ...] = ()
+    superseded_defaults: dict[str, list[float]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate that the value maps cover every exposed knob."""
@@ -456,12 +468,38 @@ class TuningResult:
             "global": dict(self.global_values),
             "rooms": {room: dict(vals) for room, vals in self.rooms.items()},
             "defaults": dict(self.defaults),
+            "global_overrides": list(self.global_overrides),
+            "superseded_defaults": {
+                name: list(values) for name, values in self.superseded_defaults.items()
+            },
         }
 
 
 # ---------------------------------------------------------------------------
 # Coordinator resolution
 # ---------------------------------------------------------------------------
+
+
+def _tuning_result(entry: ConfigEntry, *, open_max_pct: float) -> TuningResult:
+    """Build the ``get_tuning`` / ``set_tuning`` reply for an entry.
+
+    Args:
+        entry: The config entry.
+        open_max_pct: The dynamic ``hp_flicker_min_open_pct`` ceiling.
+
+    Returns:
+        The tuning view: knob descriptors, effective global values, per-room
+        overrides, library defaults, the persisted global overrides and the
+        earlier shipped defaults (issue #31).
+    """
+    return TuningResult(
+        fields=tuning_fields(open_max_pct=open_max_pct),
+        global_values=knob_values(global_controller(entry)),
+        rooms=room_overrides(entry),
+        defaults=knob_values(ControllerConfig()),
+        global_overrides=tuple(persisted_global_overrides(entry)),
+        superseded_defaults=superseded_defaults(),
+    )
 
 
 def _resolve_coordinator(hass: HomeAssistant) -> TortoiseUfhCoordinator | None:
@@ -917,12 +955,7 @@ def ws_get_tuning(
         entry.data.get(CONF_ROOMS, []),
         current_value=effective.hp_flicker_min_open_pct,
     )
-    result = TuningResult(
-        fields=tuning_fields(open_max_pct=open_max),
-        global_values=knob_values(effective),
-        rooms=room_overrides(entry),
-        defaults=knob_values(ControllerConfig()),
-    )
+    result = _tuning_result(entry, open_max_pct=open_max)
     connection.send_result(msg["id"], result.to_dict())
 
 
@@ -1155,10 +1188,13 @@ def ws_set_tuning(
 ) -> None:
     """Persist controller tuning for the global scope or one room.
 
-    ``scope`` is ``"global"`` (writes ``entry.options[CONF_CONTROLLER]``) or a
-    room name (merges into the sparse ``entry.options[CONF_ROOM_TUNING]`` map;
-    a ``None`` value clears that field's override and an emptied room override is
-    pruned entirely — "back to global"). Every submitted value is range-checked
+    ``scope`` is ``"global"`` (writes the sparse global overrides to
+    ``entry.options[CONF_CONTROLLER]``: only knobs differing from the library
+    default are stored, and a ``None`` value resets that knob to the default —
+    issue #31) or a room name (merges into the sparse
+    ``entry.options[CONF_ROOM_TUNING]`` map; a ``None`` value clears that
+    field's override and an emptied room override is pruned entirely — "back
+    to global"). Every submitted value is range-checked
     against :data:`~const.CONTROLLER_NUMBER_KNOBS` and the merged result is
     constructed as a :class:`ControllerConfig` so cross-field invariants are
     caught before persisting. The write reloads the entry (rebuilding the
@@ -1189,24 +1225,33 @@ def ws_set_tuning(
 
     raw_values: dict[str, Any] = dict(msg["values"])
     # The ceiling is floored by the STORED value: the panel's global save
-    # resends every knob, so a loop count shrunken by a room removal must not
-    # reject the whole batch over an untouched (now over-ceiling) threshold.
+    # resends every non-default knob, so a loop count shrunken by a room
+    # removal must not reject the whole batch over an untouched (now
+    # over-ceiling) threshold.
     open_max = flicker_open_max_pct(
         entry.data.get(CONF_ROOMS, []),
         current_value=global_controller(entry).hp_flicker_min_open_pct,
     )
     try:
         coerced = coerce_tuning_values(
-            raw_values, allow_delete=not is_global, open_max_pct=open_max
+            raw_values, room_scope=not is_global, open_max_pct=open_max
         )
     except ValueError as err:
         connection.send_error(msg["id"], _ERR_INVALID_TUNING, str(err))
         return
 
     global_dict = global_controller_dict(entry)
+    knob_set = set(knob_names())
     new_override: dict[str, Any] = {}
     if is_global:
-        merged = {**global_dict, **coerced}
+        # None = back to the library default: the field leaves the merged
+        # dict, so the default fills it and the sparse write below drops it.
+        merged = {key: value for key, value in global_dict.items() if key in knob_set}
+        for field_name, value in coerced.items():
+            if value is None:
+                merged.pop(field_name, None)
+            else:
+                merged[field_name] = value
     else:
         new_override = dict(room_overrides(entry).get(scope, {}))
         for field_name, value in coerced.items():
@@ -1222,8 +1267,24 @@ def ws_set_tuning(
         connection.send_error(msg["id"], _ERR_INVALID_TUNING, str(err))
         return
 
+    new_data: dict[str, Any] | None = None
     if is_global:
-        new_options = {**entry.options, CONF_CONTROLLER: asdict(validated)}
+        # Sparse overrides only (issue #31): a value equal to the library
+        # default is not frozen, so a later retune reaches this install.
+        new_options = {
+            key: value for key, value in entry.options.items() if key != CONF_CONTROLLER
+        }
+        sparse = global_overrides(asdict(validated))
+        if sparse:
+            new_options[CONF_CONTROLLER] = sparse
+        # The options now carry every global override; a setup-time copy in
+        # entry.data would shadow a reset, so it goes.
+        if CONF_CONTROLLER in entry.data:
+            new_data = {
+                key: value
+                for key, value in entry.data.items()
+                if key != CONF_CONTROLLER
+            }
     else:
         room_map = {room: dict(vals) for room, vals in room_overrides(entry).items()}
         if new_override:
@@ -1232,14 +1293,14 @@ def ws_set_tuning(
             room_map.pop(scope, None)
         new_options = {**entry.options, CONF_ROOM_TUNING: room_map}
 
-    hass.config_entries.async_update_entry(entry, options=new_options)
+    if new_data is not None:
+        hass.config_entries.async_update_entry(
+            entry, data=new_data, options=new_options
+        )
+    else:
+        hass.config_entries.async_update_entry(entry, options=new_options)
 
-    result = TuningResult(
-        fields=tuning_fields(open_max_pct=open_max),
-        global_values=knob_values(global_controller(entry)),
-        rooms=room_overrides(entry),
-        defaults=knob_values(ControllerConfig()),
-    )
+    result = _tuning_result(entry, open_max_pct=open_max)
     reply = result.to_dict()
     reply["scope"] = scope
     connection.send_result(msg["id"], reply)

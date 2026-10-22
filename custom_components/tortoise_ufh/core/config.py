@@ -7,6 +7,8 @@ only runtime dependencies are the standard library and the sibling core modules.
 
 Hierarchy:
     ControllerConfig  — PID + trend + fast-source + dew-point tuning knobs.
+                        (+ :func:`controller_overrides`: the sparse persisted
+                        form of a tuning, issue #31.)
     WindowConfig      — one window (orientation, area, solar transmittance).
     RoomConfig        — a single room: RC params, loops, fast source, windows.
     BuildingConfig    — the whole building: rooms, heat pump, location.
@@ -28,8 +30,11 @@ Every value type is ``@dataclass(frozen=True)`` and validates its invariants in
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from .models import FastSourceKind, Mode
@@ -374,6 +379,118 @@ class ControllerConfig:
                 f"got {self.valve_write_threshold_pct}"
             )
             raise ValueError(msg)
+
+
+# ---------------------------------------------------------------------------
+# Tuning persistence helpers — sparse overrides over the library defaults
+# ---------------------------------------------------------------------------
+
+SUPERSEDED_CONTROLLER_DEFAULTS: Mapping[str, frozenset[float]] = MappingProxyType(
+    {
+        # C1, 2026-07-09 (docs/DECISIONS.md §8): kp 8 -> 14, ki 0.02 -> 0.0015,
+        # kt 6 -> 12.
+        "kp": frozenset({8.0}),
+        "ki": frozenset({0.02}),
+        "kt": frozenset({6.0}),
+        # K2b, 2026-07-12 (docs/DECISIONS.md §11): 2 -> 5 pp. Not a user-facing
+        # knob, so a persisted copy is dropped anyway; listed for the record.
+        "valve_write_threshold_pct": frozenset({2.0}),
+    }
+)
+"""Earlier shipped :class:`ControllerConfig` defaults, per field.
+
+Until issue #31 (2026-10-22, docs/DECISIONS.md §35) the adapter persisted the
+WHOLE config as a snapshot, so an install created before a retune kept the old
+default forever. A stored value found in this table is treated as a frozen
+copy of an old default, not as a user choice: the config-entry migration
+drops it and the panel marks it. Only fields whose default actually changed
+are listed (values from the decision log; the git history before v0.21.0 is
+not available).
+"""
+
+_SAME_VALUE_REL_TOL: float = 1e-9
+_SAME_VALUE_ABS_TOL: float = 1e-12
+
+
+def _same_value(left: object, right: object) -> bool:
+    """Compare two knob values, numbers with a float tolerance.
+
+    Args:
+        left: A stored value (any type; a corrupted entry may hold anything).
+        right: The reference value (a :class:`ControllerConfig` default).
+
+    Returns:
+        ``True`` when both are booleans and equal, or both are real numbers
+        within a relative tolerance of 1e-9; ``False`` otherwise (also for
+        non-numeric garbage, which is therefore never silently dropped).
+    """
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if not isinstance(left, int | float) or not isinstance(right, int | float):
+        return False
+    return math.isclose(
+        float(left),
+        float(right),
+        rel_tol=_SAME_VALUE_REL_TOL,
+        abs_tol=_SAME_VALUE_ABS_TOL,
+    )
+
+
+def is_superseded_default(field_name: str, value: object) -> bool:
+    """Whether ``value`` equals an earlier shipped default of ``field_name``.
+
+    Args:
+        field_name: A :class:`ControllerConfig` field name.
+        value: The stored value.
+
+    Returns:
+        ``True`` when the value matches an entry of
+        :data:`SUPERSEDED_CONTROLLER_DEFAULTS` for that field and differs from
+        the current default.
+    """
+    old_values = SUPERSEDED_CONTROLLER_DEFAULTS.get(field_name, frozenset())
+    if not any(_same_value(value, old) for old in old_values):
+        return False
+    current = getattr(ControllerConfig(), field_name, None)
+    return not _same_value(value, current)
+
+
+def controller_overrides(
+    values: Mapping[str, object],
+    *,
+    fields: Iterable[str],
+    drop_superseded: bool = False,
+) -> dict[str, object]:
+    """Reduce stored tuning to the sparse overrides worth persisting.
+
+    A value equal to the current :class:`ControllerConfig` default is not an
+    override: persisting it would freeze today's default and hide a later
+    retune (issue #31). Keys outside ``fields`` (the user-facing knobs) are
+    dropped too, as no surface can show or reset them.
+
+    Args:
+        values: The stored ``{field: value}`` tuning (not mutated).
+        fields: The field names that may be persisted.
+        drop_superseded: Also drop values equal to an earlier shipped default
+            (:data:`SUPERSEDED_CONTROLLER_DEFAULTS`) — used by the one-off
+            config-entry migration.
+
+    Returns:
+        A new dict with only the fields that differ from the defaults, in the
+        order of ``values``.
+    """
+    allowed = set(fields)
+    defaults = ControllerConfig()
+    out: dict[str, object] = {}
+    for field_name, value in values.items():
+        if field_name not in allowed or not hasattr(defaults, field_name):
+            continue
+        if _same_value(value, getattr(defaults, field_name)):
+            continue
+        if drop_superseded and is_superseded_default(field_name, value):
+            continue
+        out[field_name] = value
+    return out
 
 
 # ---------------------------------------------------------------------------

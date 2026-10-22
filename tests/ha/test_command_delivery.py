@@ -90,7 +90,7 @@ async def _setup_live_salon(
         options={CONF_ROOM_STATE: {"Salon": ROOM_STATE_LIVE}},
         title="Tortoise-UFH",
         unique_id="50.5_19.5",
-        version=5,
+        version=6,
     )
     entry.add_to_hass(hass)
     store_key = f"{DOMAIN}.setpoints.{entry.entry_id}"

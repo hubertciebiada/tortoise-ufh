@@ -181,8 +181,21 @@ async def async_migrate_entry(
     override; a room override left empty is dropped. Without this an old key
     would make ``ControllerConfig(**kwargs)`` reject the whole tuning.
 
+    v5 -> v6 (tuning persisted as sparse overrides, 2026-10-22, issue #31;
+    DECISIONS §35): the global tuning used to be stored as a FULL
+    ``ControllerConfig`` snapshot (seeded into ``data`` at setup, rewritten
+    whole into ``options`` by every save), so a retuned library default never
+    reached an existing install. The stored global tuning (``data`` <-
+    ``options``, the old merge rule) is reduced to the user-facing knobs whose
+    value differs from the current default AND from every earlier shipped
+    default (:data:`~tortoise_ufh.config.SUPERSEDED_CONTROLLER_DEFAULTS`);
+    what is left moves to ``options`` (dropped when empty) and ``data`` loses
+    the key. Non-user-facing fields (``kd``, ``cycle_seconds``,
+    ``valve_write_threshold_pct``) are dropped too. Per-room overrides are
+    already sparse and stay as they are. Every dropped key is logged.
+
     A v1 entry passes every block sequentially in one call (each block ends at
-    the version the next one picks up) and lands on v5.
+    the version the next one picks up) and lands on v6.
 
     Args:
         hass: The Home Assistant instance.
@@ -217,7 +230,7 @@ async def async_migrate_entry(
     # likewise no longer a named constant, kept only to purge it from data.
     legacy_mode_entity_key = "entity_mode"
 
-    if entry.version > 5:
+    if entry.version > 6:
         # Downgrade from an unknown future version is not supported.
         return False
 
@@ -342,6 +355,45 @@ async def async_migrate_entry(
             "Migrated Tortoise-UFH entry %s to v5 (retired the S6 tuning keys)",
             entry.entry_id,
         )
+
+    if entry.version == 5:
+        # Sparse global tuning (2026-10-22, issue #31; DECISIONS §35).
+        from .core.config import controller_overrides
+        from .tuning import knob_names
+
+        stored: dict[str, Any] = {}
+        for source in (entry.data, entry.options):
+            tuning = source.get(CONF_CONTROLLER)
+            if isinstance(tuning, dict):
+                stored.update(tuning)
+        kept = controller_overrides(stored, fields=knob_names(), drop_superseded=True)
+        dropped = {key: value for key, value in stored.items() if key not in kept}
+        new_data_v6 = {
+            key: value for key, value in entry.data.items() if key != CONF_CONTROLLER
+        }
+        new_options_v6 = {
+            key: value for key, value in entry.options.items() if key != CONF_CONTROLLER
+        }
+        if kept:
+            new_options_v6[CONF_CONTROLLER] = kept
+        hass.config_entries.async_update_entry(
+            entry, data=new_data_v6, options=new_options_v6, version=6
+        )
+        if dropped:
+            _LOGGER.info(
+                "Migrated Tortoise-UFH entry %s to v6: global tuning is now stored "
+                "as overrides only; dropped stored defaults and non-tuning "
+                "fields %s, kept overrides %s",
+                entry.entry_id,
+                dropped,
+                kept,
+            )
+        else:
+            _LOGGER.debug(
+                "Migrated Tortoise-UFH entry %s to v6 (kept overrides %s)",
+                entry.entry_id,
+                kept,
+            )
 
     return True
 

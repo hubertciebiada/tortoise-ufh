@@ -31,7 +31,11 @@ from .const import (
     CONTROLLER_NUMBER_KNOBS,
     HP_GLOBAL_ONLY_KNOBS,
 )
-from .core.config import ControllerConfig
+from .core.config import (
+    SUPERSEDED_CONTROLLER_DEFAULTS,
+    ControllerConfig,
+    controller_overrides,
+)
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -41,6 +45,9 @@ __all__ = [
     "flicker_open_max_pct",
     "global_controller",
     "global_controller_dict",
+    "global_overrides",
+    "persisted_global_overrides",
+    "superseded_defaults",
     "knob_names",
     "knob_range",
     "knob_values",
@@ -66,11 +73,11 @@ def flicker_open_max_pct(
     The ceiling never shrinks below ``current_value`` (the stored knob value):
     after removing rooms/loops the persisted value may exceed the new physical
     ceiling, and it must still round-trip — the panel's global save resends
-    EVERY global knob, so a suddenly-too-low ceiling would reject the whole
-    batch over a knob the user never touched, and the options form would
-    silently pull the stored value down. Widening to the stored value keeps
-    both paths lossless while still only allowing the user to KEEP or LOWER
-    an over-ceiling value, never raise it further.
+    EVERY non-default global knob, so a suddenly-too-low ceiling would reject
+    the whole batch over a knob the user never touched, and the options form
+    would silently pull the stored value down. Widening to the stored value
+    keeps both paths lossless while still only allowing the user to KEEP or
+    LOWER an over-ceiling value, never raise it further.
 
     Args:
         rooms: The per-room config dicts (``entry.data[CONF_ROOMS]`` shape).
@@ -174,6 +181,56 @@ def global_controller_dict(entry: ConfigEntry) -> dict[str, Any]:
     }
 
 
+def global_overrides(values: dict[str, Any]) -> dict[str, Any]:
+    """Reduce a global tuning dict to the sparse overrides that get persisted.
+
+    Issue #31 (DECISIONS §35): ``entry.options[CONF_CONTROLLER]`` holds only
+    the user-facing knobs whose value differs from the library default, the
+    same sparse shape as the per-room :data:`~const.CONF_ROOM_TUNING`. A
+    value equal to the default is not stored, so a later retune of the
+    default reaches the install; non-knob fields (``kd``, ``cycle_seconds``,
+    ``valve_write_threshold_pct``) are never stored.
+
+    Args:
+        values: A ``{field: value}`` dict, e.g. ``asdict(ControllerConfig)``.
+
+    Returns:
+        The sparse ``{knob: value}`` overrides.
+    """
+    return controller_overrides(values, fields=knob_names())
+
+
+def persisted_global_overrides(entry: ConfigEntry) -> list[str]:
+    """Return the knob names the entry stores as global overrides.
+
+    Args:
+        entry: The config entry.
+
+    Returns:
+        The sorted names of the user-facing knobs whose persisted global value
+        differs from the library default (what the panel's "reset to
+        default" acts on).
+    """
+    return sorted(global_overrides(global_controller_dict(entry)))
+
+
+def superseded_defaults() -> dict[str, list[float]]:
+    """Return the earlier shipped defaults of the user-facing knobs.
+
+    Returns:
+        ``{knob: [old default, ...]}`` from
+        :data:`~tortoise_ufh.config.SUPERSEDED_CONTROLLER_DEFAULTS`, limited to
+        the exposed knobs, so the panel can mark a global value that still
+        equals an old default.
+    """
+    knobs = set(knob_names())
+    return {
+        name: sorted(values)
+        for name, values in SUPERSEDED_CONTROLLER_DEFAULTS.items()
+        if name in knobs
+    }
+
+
 def global_controller(entry: ConfigEntry) -> ControllerConfig:
     """Resolve the effective global :class:`ControllerConfig` for an entry.
 
@@ -224,32 +281,31 @@ def room_overrides(entry: ConfigEntry) -> dict[str, dict[str, Any]]:
 def coerce_tuning_values(
     raw_values: dict[str, Any],
     *,
-    allow_delete: bool,
+    room_scope: bool,
     open_max_pct: float | None = None,
 ) -> dict[str, Any]:
     """Coerce + range-validate submitted knob values.
 
     Args:
         raw_values: The ``{field: value}`` payload. A ``None`` value requests
-            deletion of that field's override (room scope only).
-        allow_delete: Whether ``None`` values are permitted. ``True`` is the
-            ROOM scope (the only scope with deletable overrides), so it also
-            gates the global-only heat-pump knobs below.
+            deletion of that field's override: back to the global value in a
+            room scope, back to the library default in the global scope
+            (issue #31).
+        room_scope: ``True`` for a per-room scope, which rejects the
+            global-only heat-pump knobs below.
         open_max_pct: The dynamic ceiling for ``hp_flicker_min_open_pct``
             (see :func:`flicker_open_max_pct`); ``None`` falls back to the
             loose static spec maximum.
 
     Returns:
         A ``{field: value}`` dict where numeric knobs are floats, the boolean
-        knob is a bool, and (when ``allow_delete``) a deleted field maps to
-        ``None``.
+        knob is a bool, and a deleted field maps to ``None``.
 
     Raises:
         ValueError: If a field is not an exposed knob, a global-only heat-pump
             knob is submitted for a room scope (B2 — a per-room water setpoint
-            has no physical meaning), a value has the wrong type, a numeric
-            value is out of range, or a ``None`` is submitted when
-            ``allow_delete`` is ``False``.
+            has no physical meaning), a value has the wrong type, or a numeric
+            value is out of range.
     """
     knobs = set(knob_names())
     coerced: dict[str, Any] = {}
@@ -257,13 +313,10 @@ def coerce_tuning_values(
         if field_name not in knobs:
             msg = f"unknown knob {field_name!r}"
             raise ValueError(msg)
-        if allow_delete and field_name in HP_GLOBAL_ONLY_KNOBS:
+        if room_scope and field_name in HP_GLOBAL_ONLY_KNOBS:
             msg = f"{field_name!r} is a global-only knob (no per-room override)"
             raise ValueError(msg)
         if value is None:
-            if not allow_delete:
-                msg = f"cannot clear global knob {field_name!r}"
-                raise ValueError(msg)
             coerced[field_name] = None
             continue
         if field_name in CONTROLLER_BOOL_KNOBS:
