@@ -169,10 +169,17 @@ const OV_HIST_MAXAGE_MS = 5 * 60 * 1000;
 const OV_SCALE_MIN_K = 1.0;
 const OV_SCALE_MAX_K = 3.0;
 
-/** Comfort-strip dots closer than this (fraction of the axis) stack upwards. */
+/**
+ * Comfort-strip dots closer than one dot width (`OV_SWARM_DOT_PX` of axis)
+ * stack upwards; `OV_SWARM_GAP` is the axis fraction used before the strip
+ * is laid out. A crowd stacks at most `OV_SWARM_MAX_LEVELS` steps high —
+ * beyond that the steps compress, so the hero never grows.
+ */
+const OV_SWARM_DOT_PX = 15;
 const OV_SWARM_GAP = 0.045;
 /** Vertical step [px] between stacked comfort-strip dots. */
 const OV_SWARM_STEP_PX = 13;
+const OV_SWARM_MAX_LEVELS = 3;
 
 /** Attention entries the Overview hero lists; the rest sit behind "+N more". */
 const OV_ATT_MAX = 3;
@@ -227,13 +234,18 @@ const STR = {
     ov_warm: "za ciepło",
     ov_nodata: "bez odczytu",
     ov_off: "wyłączone",
+    ov_no_cool: "bez chłodzenia",
+    ov_house_off: "Tryb domu: {mode} — nic nie jest sterowane.",
     ov_band_cap: "pasmo komfortu ±{v} K",
     tip_ov_comfort:
       "Pokój jest w paśmie komfortu, gdy pomiar odbiega od zadanej najwyżej o " +
       "strefę nieczułości regulatora (parametr „Strefa nieczułości wokół " +
-      "zadanej”, globalny lub per pokój). Liczą się tylko pokoje w stanie " +
-      "„Steruje”. Na osi każda kropka to jeden pokój: w lewo zimniej, w prawo " +
-      "cieplej niż zadana. Kliknij kropkę, żeby otworzyć szczegóły pokoju.",
+      "zadanej”, globalny lub per pokój). Liczą się tylko pokoje sterowane: w " +
+      "stanie „Steruje”, w chłodzeniu tylko uczestniczące w chłodzeniu, a w " +
+      "trybie domu „Wył.” żaden. Na osi każda kropka to jeden pokój: w lewo " +
+      "zimniej, w prawo cieplej niż zadana; zielony pas to pasmo globalne (pokój " +
+      "z własnym pasmem ocenia się według swojego). Kliknij kropkę, żeby " +
+      "otworzyć szczegóły pokoju.",
     ov_dev_below: "{v} K poniżej zadanej",
     ov_dev_above: "{v} K powyżej zadanej",
     ov_dev_ok: "w paśmie komfortu",
@@ -987,13 +999,18 @@ const STR = {
     ov_warm: "too warm",
     ov_nodata: "no reading",
     ov_off: "off",
+    ov_no_cool: "no cooling",
+    ov_house_off: "House mode: {mode} — nothing is controlled.",
     ov_band_cap: "comfort band ±{v} K",
     tip_ov_comfort:
       "A room is in its comfort band when the reading is within the " +
       "controller's deadband of the setpoint (the “Deadband around the " +
-      "setpoint” knob, global or per room). Only rooms set to “Live” count. On " +
-      "the axis each dot is one room: left is colder, right is warmer than the " +
-      "setpoint. Click a dot to open the room's details.",
+      "setpoint” knob, global or per room). Only controlled rooms count: set to " +
+      "“Live”, in cooling only those taking part in cooling, and none in house " +
+      "mode Off. On the axis each dot is one room: left is colder, right is " +
+      "warmer than the setpoint; the green stripe is the global band (a room " +
+      "with its own band is judged by it). Click a dot to open the room's " +
+      "details.",
     ov_dev_below: "{v} K below the setpoint",
     ov_dev_above: "{v} K above the setpoint",
     ov_dev_ok: "in the comfort band",
@@ -1753,13 +1770,18 @@ const STR = {
     ov_warm: "zu warm",
     ov_nodata: "ohne Messwert",
     ov_off: "aus",
+    ov_no_cool: "ohne Kühlung",
+    ov_house_off: "Hausmodus: {mode} — nichts wird geregelt.",
     ov_band_cap: "Komfortband ±{v} K",
     tip_ov_comfort:
       "Ein Raum liegt im Komfortband, wenn der Messwert höchstens um das " +
       "Totband des Reglers vom Sollwert abweicht (Parameter „Totband um den " +
-      "Sollwert“, global oder je Raum). Es zählen nur Räume auf „Aktiv“. Auf " +
-      "der Achse ist jeder Punkt ein Raum: links kälter, rechts wärmer als der " +
-      "Sollwert. Ein Klick auf einen Punkt öffnet die Raumdetails.",
+      "Sollwert“, global oder je Raum). Es zählen nur geregelte Räume: auf " +
+      "„Aktiv“, beim Kühlen nur die am Kühlen teilnehmenden, im Hausmodus „Aus“ " +
+      "keiner. Auf der Achse ist jeder Punkt ein Raum: links kälter, rechts " +
+      "wärmer als der Sollwert; das grüne Band ist das globale Band (ein Raum " +
+      "mit eigenem Band wird nach diesem bewertet). Ein Klick auf einen Punkt " +
+      "öffnet die Raumdetails.",
     ov_dev_below: "{v} K unter dem Sollwert",
     ov_dev_above: "{v} K über dem Sollwert",
     ov_dev_ok: "im Komfortband",
@@ -3690,6 +3712,7 @@ function ovFanSvg(points, t0, t1, band, scale) {
       "Z";
     mid += "M" + run.map((p) => xy(p.t, p.v.mid)).join("L");
     if (run.length < 2) {
+      mid += "h0.4"; // a lone bucket draws as a dot
       continue;
     }
     const a = run[0].t;
@@ -3716,20 +3739,24 @@ function ovFanSvg(points, t0, t1, band, scale) {
   return ovSvg(kids);
 }
 
+/** Chart y [viewBox units] of `v` on the fixed [`lo`, `hi`] scale (clamped). */
+function ovSeriesY(v, lo, hi) {
+  const range = hi > lo ? hi - lo : 1;
+  return OV_SVG_H - 1 - ((clamp(v, lo, hi) - lo) / range) * (OV_SVG_H - 2);
+}
+
 /**
  * A single-series chart on the fixed [`lo`, `hi`] scale: the line, over an
- * area down to the floor when `area` (the valve opening). Values clamp.
+ * area down to the floor when `area` (the valve opening). Values clamp; a
+ * lone bucket between gaps draws as a dot (a hair-long round-capped line).
  */
 function ovSeriesSvg(points, t0, t1, lo, hi, area) {
-  const range = hi > lo ? hi - lo : 1;
-  const xy = (p) =>
-    `${ovX(p.t, t0, t1).toFixed(2)},` +
-    (OV_SVG_H - 1 - ((clamp(p.v, lo, hi) - lo) / range) * (OV_SVG_H - 2)).toFixed(2);
+  const xy = (p) => `${ovX(p.t, t0, t1).toFixed(2)},${ovSeriesY(p.v, lo, hi).toFixed(2)}`;
   let line = "";
   let fill = "";
   for (const seg of segments(points.filter((p) => p.t >= t0 && p.t <= t1))) {
     const path = seg.map(xy).join("L");
-    line += "M" + path;
+    line += "M" + path + (seg.length === 1 ? "h0.4" : "");
     if (area && seg.length > 1) {
       const xa = ovX(seg[0].t, t0, t1).toFixed(2);
       const xz = ovX(seg[seg.length - 1].t, t0, t1).toFixed(2);
@@ -5990,6 +6017,11 @@ class TortoiseUfhPanel extends HTMLElement {
   _tickAge() {
     if (this._built) {
       this._applyPill();
+      // The Overview's attention list carries the same ticking status line.
+      const O = this._ovEls;
+      if (O && O.attStatusLabel) {
+        O.attStatusLabel.textContent = this._pillState().text;
+      }
     }
   }
 
@@ -6159,11 +6191,15 @@ class TortoiseUfhPanel extends HTMLElement {
       this._setActiveTab("assist"),
     );
     O.pDew = this._ovPlantRow("ov_dew_cap", "mdi:water-alert-outline", "•", null);
-    const plant = h("div", { class: "ov-card ov-plant" }, [
+    O.plant = h("div", { class: "ov-card ov-plant" }, [
       h("div", { class: "ov-eyebrow", text: this._t("ov_plant_cap") }),
       O.pHp.el,
       O.pAssist.el,
       O.pDew.el,
+    ]);
+    O.layout = h("div", { class: "ov-layout" }, [
+      h("div", { class: "ov-main" }, [hero, charts]),
+      h("div", { class: "ov-side" }, [O.plant, O.mfCard]),
     ]);
 
     const el = h(
@@ -6175,12 +6211,7 @@ class TortoiseUfhPanel extends HTMLElement {
         dataset: { tab: "overview" },
       },
       [
-        h("div", { class: "ov" }, [
-          h("div", { class: "ov-layout" }, [
-            h("div", { class: "ov-main" }, [hero, charts]),
-            h("div", { class: "ov-side" }, [plant, O.mfCard]),
-          ]),
-        ]),
+        h("div", { class: "ov" }, [O.layout]),
       ],
     );
     this._ovEls = O;
@@ -6225,8 +6256,8 @@ class TortoiseUfhPanel extends HTMLElement {
   /**
    * One house-chart card: the caption (+ "i"), the current value with a
    * details line, then the plot — the stretched SVG, its two scale labels,
-   * a hover guide and tooltip — over the time labels. `_ovPaintChart` fills
-   * it on every poll.
+   * the "now" dot, a hover guide and tooltip — over the time labels.
+   * `_ovPaintChart` fills it on every poll.
    */
   _ovChartCard(capKey, infoKey) {
     const C = { sig: null, xSig: null, hover: [], t0: 0, t1: 1 };
@@ -6235,6 +6266,7 @@ class TortoiseUfhPanel extends HTMLElement {
     C.box = h("div", { class: "ov-chart-box" }, [ovSvg([])]);
     C.yTop = h("span");
     C.yBot = h("span");
+    C.now = h("span", { class: "ov-chart-now", style: "display:none" });
     C.guide = h("div", { class: "ov-chart-guide", style: "display:none" });
     C.tip = h("div", { class: "ov-chart-tip", style: "display:none" });
     C.plot = h(
@@ -6249,6 +6281,7 @@ class TortoiseUfhPanel extends HTMLElement {
       [
         h("div", { class: "ov-chart-y", "aria-hidden": "true" }, [C.yTop, C.yBot]),
         C.box,
+        C.now,
         C.guide,
         C.tip,
       ],
@@ -6269,13 +6302,19 @@ class TortoiseUfhPanel extends HTMLElement {
 
   /**
    * Fill a chart card: the SVG from `draw()` (rebuilt only when `sig`
-   * changes), the top / bottom scale labels and the hover points `{t, text}`
-   * of the [t0, t1] window.
+   * changes), the "now" dot at `nowY` [viewBox units] (null hides it — the
+   * live value stays visible even after a gap), the top / bottom scale labels
+   * and the hover points `{t, text}` of the [t0, t1] window.
    */
   _ovPaintChart(C, P) {
     if (C.sig !== P.sig) {
       C.sig = P.sig;
       C.box.replaceChild(P.draw(), C.box.firstChild);
+    }
+    C.now.style.display = P.nowY === null ? "none" : "";
+    if (P.nowY !== null) {
+      C.now.className = "ov-chart-now" + (P.nowCls ? " " + P.nowCls : "");
+      C.now.style.top = ((P.nowY / OV_SVG_H) * 100).toFixed(2) + "%";
     }
     C.yTop.textContent = P.yTop;
     C.yBot.textContent = P.yBot;
@@ -6314,7 +6353,8 @@ class TortoiseUfhPanel extends HTMLElement {
     C.tip.textContent = `${this._tipTime("24h", best.t)} · ${best.text}`;
     C.tip.style.display = "";
     // Follow the pointer inside the plot; a tooltip wider than the plot
-    // centres over it instead (into the axis gutter, still inside the card).
+    // (it wraps at the plot + 32 px) centres over it instead, into the axis
+    // gutter and the card padding.
     const w = C.tip.offsetWidth;
     const left = w > box.width ? (box.width - w) / 2 : clamp(x - w / 2, 0, box.width - w);
     C.tip.style.left = left.toFixed(1) + "px";
@@ -6330,12 +6370,17 @@ class TortoiseUfhPanel extends HTMLElement {
     this._ensureTuningLoaded();
     const live = this._live || {};
     const mode = pick(live, ["mode"], pick(this._config || {}, ["mode"], "heating"));
-    const items = this._view.map((r) => this._ovDerive(r));
-    this._ovRenderHero(items);
+    const items = this._view.map((r) => this._ovDerive(r, mode));
+    this._ovRenderHero(items, mode);
     this._ovRenderAttention(items);
     this._ovRenderCharts(items);
     this._ovRenderPlant(items, mode);
     this._ovRenderManifolds();
+    // An empty side column gives its width back to the main one.
+    O.layout.classList.toggle(
+      "no-side",
+      O.plant.style.display === "none" && O.mfCard.style.display === "none",
+    );
     this._ovFetchHistory();
   }
 
@@ -6359,9 +6404,12 @@ class TortoiseUfhPanel extends HTMLElement {
    * Per-room Overview facts. `dev` = measured − setpoint [K] (positive =
    * warmer than the target, the reverse sign of the table's "Uchyb" — so the
    * Overview words it instead of signing it); `zone` places it against the
-   * room's comfort band (cold / ok / warm, or none without a reading).
+   * room's comfort band (cold / ok / warm, or none without a reading). `ctl`
+   * = under control: live AND not run passively by the core — with the house
+   * mode Off, or in cooling for a room that does not take part (`passive`;
+   * valve 0, split off, flagged `cooling_disabled`).
    */
-  _ovDerive(r) {
+  _ovDerive(r, mode) {
     const band = this._ovKnob(r.name, "deadband_c", OV_BAND_FALLBACK_K);
     const dev = r.current !== null && r.setpoint !== null ? r.current - r.setpoint : null;
     let zone = "none";
@@ -6371,13 +6419,9 @@ class TortoiseUfhPanel extends HTMLElement {
       const abs = Math.abs(dev);
       zone = abs < 0.05 || abs <= band + 1e-6 ? "ok" : dev < 0 ? "cold" : "warm";
     }
-    return {
-      r,
-      band,
-      dev,
-      zone,
-      live: r.state === STATE_LIVE,
-    };
+    const live = r.state === STATE_LIVE;
+    const passive = live && (mode === "off" || (mode === "cooling" && !r.cooling));
+    return { r, band, dev, zone, live, passive, ctl: live && !passive };
   }
 
   /** The deviation in words ("0.6 K below the setpoint" / "in the comfort band"). */
@@ -6408,32 +6452,43 @@ class TortoiseUfhPanel extends HTMLElement {
   }
 
   /** Comfort hero: controlled rooms in band, the counts, the deviation strip. */
-  _ovRenderHero(items) {
+  _ovRenderHero(items, mode) {
     const O = this._ovEls;
-    const liveItems = items.filter((d) => d.live);
+    const ctl = items.filter((d) => d.ctl);
     const n = { cold: 0, warm: 0, none: 0 };
-    for (const d of liveItems) {
+    for (const d of ctl) {
       if (d.zone !== "ok") {
         n[d.zone] += 1;
       }
     }
-    if (liveItems.length) {
-      const ok = liveItems.length - n.cold - n.warm - n.none;
-      O.comfortVal.textContent = `${ok}/${liveItems.length}`;
+    if (ctl.length) {
+      const ok = ctl.length - n.cold - n.warm - n.none;
+      O.comfortVal.textContent = `${ok}/${ctl.length}`;
       O.comfortSub.textContent = this._t("ov_comfort_sub");
     } else {
       O.comfortVal.textContent = "—";
-      O.comfortSub.textContent = !this._config
-        ? this._t("loading")
-        : items.length
-          ? this._t("ov_none_live")
-          : this._t("no_rooms");
+      let sub = this._t("ov_comfort_sub");
+      if (!this._config) {
+        sub = this._t("loading");
+      } else if (!items.length) {
+        sub = this._t("no_rooms");
+      } else if (mode === "off") {
+        sub = fmtStr(this._t("ov_house_off"), { mode: this._t("mode_off") });
+      } else if (!items.some((d) => d.live)) {
+        sub = this._t("ov_none_live");
+      }
+      O.comfortSub.textContent = sub;
     }
     const counts = [
       ["cold", "ov_cold", n.cold],
       ["warm", "ov_warm", n.warm],
       ["nodata", "ov_nodata", n.none],
-      ["off", "ov_off", items.length - liveItems.length],
+      [
+        "passive",
+        "ov_no_cool",
+        mode === "cooling" ? items.filter((d) => d.passive).length : 0,
+      ],
+      ["off", "ov_off", items.filter((d) => !d.live).length],
     ].filter((c) => c[2] > 0);
     const sig = JSON.stringify(counts);
     if (sig !== O.countSig) {
@@ -6449,7 +6504,7 @@ class TortoiseUfhPanel extends HTMLElement {
         );
       }
     }
-    this._ovRenderStrip(liveItems.filter((d) => d.dev !== null));
+    this._ovRenderStrip(ctl.filter((d) => d.dev !== null));
   }
 
   /**
@@ -6486,12 +6541,17 @@ class TortoiseUfhPanel extends HTMLElement {
       }
     }
 
+    const axisPx = O.stripPlot.clientWidth;
     const placed = ovSwarm(
       read.map((d) => ({ d, x: pct(d.dev) / 100 })),
-      OV_SWARM_GAP,
+      axisPx > 0 ? Math.min(0.25, OV_SWARM_DOT_PX / axisPx) : OV_SWARM_GAP,
     );
+    const levels = placed.reduce((m, p) => Math.max(m, p.level + 1), 1);
+    const step =
+      levels > OV_SWARM_MAX_LEVELS
+        ? (OV_SWARM_STEP_PX * OV_SWARM_MAX_LEVELS) / levels
+        : OV_SWARM_STEP_PX;
     const seen = new Set();
-    let top = 0;
     for (const p of placed) {
       const name = p.d.r.name;
       seen.add(name);
@@ -6509,10 +6569,9 @@ class TortoiseUfhPanel extends HTMLElement {
       dot.className =
         "ov-dot z-" + p.d.zone + (name === this._selectedRoom ? " selected" : "");
       dot.style.left = (p.x * 100).toFixed(2) + "%";
-      dot.style.bottom = p.level * OV_SWARM_STEP_PX - 4 + "px";
+      dot.style.bottom = (p.level * step - 4).toFixed(1) + "px";
       dot.title = label;
       dot.setAttribute("aria-label", label);
-      top = Math.max(top, p.level);
     }
     for (const [name, dot] of [...O.dots]) {
       if (!seen.has(name)) {
@@ -6520,16 +6579,26 @@ class TortoiseUfhPanel extends HTMLElement {
         O.dots.delete(name);
       }
     }
-    O.stripPlot.style.height = (top + 1) * OV_SWARM_STEP_PX + 16 + "px";
+    // Keep the Tab order the axis order (moved only when it changed).
+    const order = placed.map((p) => O.dots.get(p.d.r.name));
+    const now = [...O.stripPlot.querySelectorAll(".ov-dot")];
+    if (order.some((dot, i) => now[i] !== dot)) {
+      for (const dot of order) {
+        O.stripPlot.appendChild(dot);
+      }
+    }
+    O.stripPlot.style.height =
+      Math.min(levels, OV_SWARM_MAX_LEVELS) * OV_SWARM_STEP_PX + 16 + "px";
   }
 
   /**
    * Attention: the algorithm status and every active warn-or-worse flag,
    * rooms' and the heat pump's, one line per flag with HOW MANY rooms raise
-   * it (which ones is the Rooms and Flags tabs' job), worst first, capped at
-   * `OV_ATT_MAX` with the rest behind a link to the Flags tab. `ok` / `info`
-   * states — intentional, nothing to fix — go to one quiet line below.
-   * Rebuilt only when the content changes.
+   * it (which ones is the Rooms and Flags tabs' job), worst first. Room flags
+   * beyond `OV_ATT_MAX` fold behind a link to the Flags tab, which lists
+   * them; the status and the heat pump's flags are not there, so they always
+   * show. `ok` / `info` states — intentional, nothing to fix — go to one
+   * quiet line below. Rebuilt only when the content changes.
    */
   _ovRenderAttention(items) {
     const O = this._ovEls;
@@ -6597,8 +6666,8 @@ class TortoiseUfhPanel extends HTMLElement {
     O.attOk.style.display = entries.length ? "none" : "";
     O.attList.style.display = entries.length ? "" : "none";
     O.attList.textContent = "";
-    // The hero lists the worst few; the rest are one click away (Flags tab).
-    for (const e of entries.slice(0, OV_ATT_MAX)) {
+    const folded = entries.filter((e) => e.key !== "status" && !e.tab).slice(OV_ATT_MAX);
+    for (const e of entries.filter((x) => !folded.includes(x))) {
       const high = (SEV_RANK[e.sev] || 0) >= SEV_RANK.problem;
       const head = [];
       if (e.sx) {
@@ -6626,12 +6695,12 @@ class TortoiseUfhPanel extends HTMLElement {
         ]),
       );
     }
-    if (entries.length > OV_ATT_MAX) {
+    if (folded.length) {
       O.attList.appendChild(
         h("button", {
           class: "ov-link ov-att-more",
           type: "button",
-          text: fmtStr(this._t("ov_att_more"), { n: entries.length - OV_ATT_MAX }),
+          text: fmtStr(this._t("ov_att_more"), { n: folded.length }),
           on: { click: () => this._setActiveTab("flags") },
         }),
       );
@@ -6656,9 +6725,9 @@ class TortoiseUfhPanel extends HTMLElement {
 
   /**
    * The three house charts over the last 24 h. Every series aggregates the
-   * CURRENT live rooms bucket by bucket — the recorder keeps no history of a
-   * room's control state — and ends in the live value at "now", so each
-   * headline equals its chart's last point.
+   * rooms under control NOW bucket by bucket — the recorder keeps no history
+   * of a room's control state — and ends in the live value at "now", marked
+   * by the chart's dot (the floor and outdoor headlines are that value).
    */
   _ovRenderCharts(items) {
     const O = this._ovEls;
@@ -6666,7 +6735,13 @@ class TortoiseUfhPanel extends HTMLElement {
     const now = Date.now();
     const t1 = now - (now % 60000);
     const t0 = t1 - OV_HIST_HOURS * 3600 * 1000;
-    const liveItems = items.filter((d) => d.live);
+    const ctl = items.filter((d) => d.ctl);
+    const loopsOf = (d) =>
+      Math.max(1, this._entityList(d.r.entities[LOOP_VALVE_KEY]).length);
+    // Which rooms (and weights) an aggregate covers: part of the signatures.
+    const ctlSig = ctl.map((d) => `${d.r.name}:${loopsOf(d)}`).join("|");
+    // One decimal with an explicit sign, never "-0.0".
+    const k1 = (v, suffix) => signed(Math.round(v * 10) / 10 || 0, 1, suffix);
     const series = (d, key) => {
       const id = d.r.diagnosticEntities && d.r.diagnosticEntities[key];
       return id ? H.data.get(id) || [] : [];
@@ -6692,7 +6767,7 @@ class TortoiseUfhPanel extends HTMLElement {
     const devSeries = [];
     let inBand = 0;
     let samples = 0;
-    for (const d of liveItems) {
+    for (const d of ctl) {
       const pts = series(d, "error_c")
         .filter((p) => p.t >= t0)
         .map((p) => ({ t: p.t, v: p.v === null ? null : -p.v }));
@@ -6704,11 +6779,9 @@ class TortoiseUfhPanel extends HTMLElement {
       }
       devSeries.push({ pts, w: 1 });
     }
-    const nowDev = liveItems.filter((d) => d.dev !== null).map((d) => d.dev);
-    const fan = close(
-      ovAggregate(devSeries, OV_HIST_PERIOD_MS, ovSpread),
-      nowDev.length ? ovSpread(nowDev) : null,
-    );
+    const nowDev = ctl.filter((d) => d.dev !== null).map((d) => d.dev);
+    const nowSpread = nowDev.length ? ovSpread(nowDev) : null;
+    const fan = close(ovAggregate(devSeries, OV_HIST_PERIOD_MS, ovSpread), nowSpread);
     let maxAbs = 0;
     for (const p of fan) {
       if (p.v) {
@@ -6721,15 +6794,17 @@ class TortoiseUfhPanel extends HTMLElement {
     O.cDev.val.textContent = samples ? fmt((100 * inBand) / samples, 0, " %") : "—";
     O.cDev.sub.textContent = samples ? this._t("ov_inband_sub") : "";
     this._ovPaintChart(O.cDev, {
-      sig: JSON.stringify([H.at, t1, band, scale, nowDev]),
+      sig: JSON.stringify([H.at, t1, band, scale, nowDev, ctlSig]),
       draw: () => ovFanSvg(fan, t0, t1, band, scale),
+      nowY: nowSpread ? ovDevY(nowSpread.mid, scale) : null,
+      nowCls: "",
       yTop: signed(scale, sd, " K"),
       yBot: signed(-scale, sd, " K"),
       hover: hoverOf(fan, (v) =>
         fmtStr(this._t("ov_fan_tip"), {
-          mid: signed(v.mid, 1, " K"),
-          lo: signed(v.lo, 1),
-          hi: signed(v.hi, 1, " K"),
+          mid: k1(v.mid, " K"),
+          lo: k1(v.lo, ""),
+          hi: k1(v.hi, " K"),
         }),
       ),
       t0,
@@ -6737,12 +6812,10 @@ class TortoiseUfhPanel extends HTMLElement {
     });
 
     // Floor loops: the valve opening weighted by each room's loop count.
-    const loopsOf = (d) =>
-      Math.max(1, this._entityList(d.r.entities[LOOP_VALVE_KEY]).length);
     let wSum = 0;
     let loops = 0;
     let open = 0;
-    for (const d of liveItems) {
+    for (const d of ctl) {
       if (d.r.valve === null) {
         continue;
       }
@@ -6754,7 +6827,7 @@ class TortoiseUfhPanel extends HTMLElement {
     const mean = loops ? wSum / loops : null;
     const valve = close(
       ovAggregate(
-        liveItems.map((d) => ({ pts: series(d, "recommended_valve"), w: loopsOf(d) })),
+        ctl.map((d) => ({ pts: series(d, "recommended_valve"), w: loopsOf(d) })),
         OV_HIST_PERIOD_MS,
         ovWeightedMean,
       ),
@@ -6768,8 +6841,10 @@ class TortoiseUfhPanel extends HTMLElement {
       .filter((x) => x)
       .join(" · ");
     this._ovPaintChart(O.cFloor, {
-      sig: JSON.stringify([H.at, t1, mean]),
+      sig: JSON.stringify([H.at, t1, mean, ctlSig]),
       draw: () => ovSeriesSvg(valve, t0, t1, 0, 100, true),
+      nowY: mean === null ? null : ovSeriesY(mean, 0, 100),
+      nowCls: "primary",
       yTop: "100 %",
       yBot: "0 %",
       hover: hoverOf(valve, (v) => fmt(v, 0, " %")),
@@ -6804,6 +6879,8 @@ class TortoiseUfhPanel extends HTMLElement {
     this._ovPaintChart(O.cOut, {
       sig: JSON.stringify([H.at, t1, tOut, outId]),
       draw: () => ovSeriesSvg(outPts, t0, t1, lo, hi, false),
+      nowY: tOut === null ? null : ovSeriesY(tOut, lo, hi),
+      nowCls: "",
       yTop: fmt(hi, 0, "°"),
       yBot: fmt(lo, 0, "°"),
       hover: hoverOf(outPts, (v) => fmt(v, 1, " °C")),
@@ -6816,11 +6893,13 @@ class TortoiseUfhPanel extends HTMLElement {
     if (O.cDev.xSig === xSig) {
       return;
     }
-    const first = new Date(t0);
-    first.setMinutes(0, 0, 0);
+    // Local wall-clock steps (setHours), so a DST change keeps 00/06/12/18.
+    const tick = new Date(t0);
+    tick.setMinutes(0, 0, 0);
     do {
-      first.setHours(first.getHours() + 1);
-    } while (first.getHours() % 6);
+      tick.setHours(tick.getHours() + 1);
+    } while (tick.getHours() % 6);
+    const first = tick.getTime();
     // "18:00", or a short "6 PM" where the locale counts twelve hours.
     let hourFmt = null;
     try {
@@ -6831,15 +6910,19 @@ class TortoiseUfhPanel extends HTMLElement {
     } catch (err) {
       hourFmt = null;
     }
+    const ticks = [];
+    for (const d = new Date(first); d.getTime() < t1 - 3600 * 1000; ) {
+      ticks.push(new Date(d));
+      d.setHours(d.getHours() + 6);
+    }
     for (const C of [O.cDev, O.cFloor, O.cOut]) {
       C.xSig = xSig;
       C.xTicks.textContent = "";
-      for (let t = first.getTime(); t < t1 - 3600 * 1000; t += 6 * 3600 * 1000) {
-        const d = new Date(t);
+      for (const d of ticks) {
         C.xTicks.appendChild(
           h("span", {
             text: hourFmt ? hourFmt.format(d) : d.toLocaleTimeString(),
-            style: `left:${(((t - t0) / (t1 - t0)) * 100).toFixed(2)}%`,
+            style: `left:${(((d.getTime() - t0) / (t1 - t0)) * 100).toFixed(2)}%`,
           }),
         );
       }
@@ -6917,7 +7000,7 @@ class TortoiseUfhPanel extends HTMLElement {
     PA.el.style.display = withSrc.length ? "" : "none";
     if (withSrc.length) {
       const active = withSrc.filter(
-        (d) => d.live && d.r.fastOn && d.r.fastMode !== "off",
+        (d) => d.ctl && d.r.fastOn && d.r.fastMode !== "off",
       );
       PA.val.textContent = `${active.length}/${withSrc.length}`;
       const manual = withSrc.filter((d) => d.r.flags.includes("fast_source_manual")).length;
@@ -6955,14 +7038,18 @@ class TortoiseUfhPanel extends HTMLElement {
       PD.val.textContent = fmt(dew, 1, " °C");
       let worst = null;
       for (const d of items) {
-        if (d.live && d.r.cooling && d.r.dew !== null && (worst === null || d.r.dew > worst)) {
+        if (d.ctl && d.r.dew !== null && (worst === null || d.r.dew > worst)) {
           worst = d.r.dew;
         }
       }
+      // Counted, never named: the rooms are the Rooms tab's job.
+      const lacking = this._view.filter((r) => r.dewReason).length;
       PD.sub.textContent = line([
         this._t("dew_cap"),
         dew === null
-          ? this._dewReasonSummary()
+          ? lacking
+            ? fmtStr(this._t("dew_none_collective"), { n: lacking })
+            : ""
           : worst !== null
             ? fmtStr(this._t("ov_dew_worst"), { v: fmt(worst, 1, " °C") })
             : "",
@@ -6983,6 +7070,7 @@ class TortoiseUfhPanel extends HTMLElement {
       }
       setChips(PD, chips);
     }
+    O.plant.style.display = hp || withSrc.length || cooling ? "" : "none";
   }
 
   /** Manifold rows: name, one bar per circuit filled to its opening, temps. */
@@ -7478,13 +7566,13 @@ class TortoiseUfhPanel extends HTMLElement {
     p.err = h("span", { class: "err-val" });
     const errCell = h("td", { class: "col-error" }, [p.err]);
 
-    // Column 6: valve percent (no mini-bar here — that stays on the Valves tab).
+    // Column 6: valve percent (no bar here — the per-loop bars are on the
+    // Manifolds tab).
     p.valveVal = h("span", { class: "valve-val" });
     const valveCell = h("td", { class: "col-valve" }, [p.valveVal]);
 
     // Columns 7-8: loop supply / return temperature, read live from hass.states
-    // (same entities + helper the Valves tab uses; first loop when a room has
-    // several).
+    // (first loop when a room has several; the Manifolds tab shows every loop).
     p.supplyVal = h("span", { class: "meas-val" });
     const supplyCell = h("td", { class: "col-supply" }, [p.supplyVal]);
     p.returnVal = h("span", { class: "meas-val" });
@@ -7567,11 +7655,11 @@ class TortoiseUfhPanel extends HTMLElement {
       r.setpoint !== null && r.current !== null ? r.setpoint - r.current : null;
     p.err.textContent = signed(err, 1, " K");
 
-    // Valve percent (value only — the mini-bar stays on the Valves tab).
+    // Valve percent (value only — the per-loop bars are on the Manifolds tab).
     p.valveVal.textContent = fmt(r.valve, 0, "%");
 
     // Loop supply / return, read live from hass.states (first loop when a
-    // room has several — the full per-loop breakdown lives on the Valves tab).
+    // room has several — the full per-loop breakdown is on the Manifolds tab).
     const primaryLoop = this._roomLoops(r)[0] || null;
     p.supplyVal.textContent = fmt(
       primaryLoop ? this._stateNum(primaryLoop.supplyId) : null,
@@ -7640,9 +7728,12 @@ class TortoiseUfhPanel extends HTMLElement {
     // when the close came from inside the inspector (keyboard flow); an
     // outside click keeps its own focus.
     if (hadFocus && prev) {
-      const dot =
-        this._activeTab === "overview" && this._ovEls ? this._ovEls.dots.get(prev) : null;
-      const row = dot || this._rows.get(prev);
+      // On the Overview a room without a dot hands focus to the tab itself
+      // (the Rooms table is hidden there).
+      const row =
+        this._activeTab === "overview" && this._ovEls
+          ? this._ovEls.dots.get(prev) || (this._tabs && this._tabs.btns.overview)
+          : this._rows.get(prev);
       if (row && row.isConnected) {
         row.focus();
       }
@@ -10954,6 +11045,7 @@ button { font-family: inherit; cursor: pointer; }
 .ov-count.warm i { background: var(--t-heat); }
 .ov-count.nodata i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--t-muted); }
 .ov-count.off i { background: var(--t-disabled); }
+.ov-count.passive i { background: color-mix(in srgb, var(--t-cool) 35%, transparent); }
 .ov-strip { display: flex; flex-direction: column; gap: 3px; min-width: 0; margin-top: auto; padding-top: 8px; }
 .ov-strip-cap { margin-left: auto; font-weight: 400; letter-spacing: 0; text-transform: none; }
 .ov-strip-plot { position: relative; height: 29px; margin: 0 12px; border-bottom: 1px solid var(--ov-line); }
@@ -11047,10 +11139,20 @@ button { font-family: inherit; cursor: pointer; }
 }
 .ov-chart-tip {
   position: absolute; top: -8px; transform: translateY(-100%); z-index: 2; pointer-events: none;
-  padding: 4px 8px; border-radius: 8px; font-size: 11px; line-height: 1.3; white-space: nowrap;
+  width: max-content; max-width: calc(100% + 32px);
+  padding: 4px 8px; border-radius: 8px; font-size: 11px; line-height: 1.3;
   background: var(--t-fg); color: var(--t-card); box-shadow: var(--ov-shadow);
 }
+.ov-chart-now {
+  position: absolute; right: 0; width: 7px; height: 7px; margin: -3.5px -3.5px 0 0; pointer-events: none;
+  border-radius: 50%; background: color-mix(in srgb, var(--t-fg) 70%, transparent);
+  box-shadow: 0 0 0 2px var(--t-card);
+}
+.ov-chart-now.primary { background: var(--t-primary); }
+/* The time-label row is the container a narrow plot is detected by (as
+   wide as the plot; a container on the flex card broke its height). */
 .ov-chart-x {
+  container: ovchart / inline-size;
   position: relative; height: 14px; margin: 5px 0 0 34px;
   font-size: 10px; color: var(--t-muted); font-variant-numeric: tabular-nums;
 }
@@ -11120,8 +11222,17 @@ button { font-family: inherit; cursor: pointer; }
 .ov-mode.mode-heating::before { background: var(--t-heat); }
 .ov-mode.mode-cooling::before { background: var(--t-cool); }
 .ov-mode.mode-dry::before { background: var(--t-dry); }
-@container ov (max-width: 880px) {
+.ov-layout.no-side { grid-template-columns: minmax(0, 1fr); grid-template-areas: "main"; }
+.ov-layout.no-side .ov-side { display: none; }
+/* Below ~1100 px the main column would drop under ~750 px next to the side
+   column (cramped hero, unreadable chart axes): stack, side cards in a row. */
+@container ov (max-width: 1100px) {
   .ov-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "main" "side"; }
+  .ov-side { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: start; }
+}
+/* A narrow plot keeps every other time label (12 h apart). */
+@container ovchart (max-width: 150px) {
+  .ov-chart-x span:nth-child(even) { display: none; }
 }
 @container ov (max-width: 620px) {
   .ov-hero { grid-template-columns: minmax(0, 1fr); }
@@ -11301,7 +11412,6 @@ button { font-family: inherit; cursor: pointer; }
 .sp-val { font-weight: 600; }
 .err-val { font-weight: 600; white-space: nowrap; }
 .trend { font-size: 12px; color: var(--t-muted); white-space: nowrap; }
-.valve-mini { display: flex; flex-direction: column; gap: 3px; min-width: 64px; }
 .valve-val { font-size: 13px; font-weight: 600; }
 .valve-track { height: 6px; border-radius: 999px; background: var(--t-chip); overflow: hidden; }
 .valve-fill { display: block; height: 100%; width: 0%; background: var(--t-primary); border-radius: 999px; transition: width .3s ease; }
@@ -11407,16 +11517,6 @@ details.flag-legend[open] > summary { margin-bottom: 12px; }
 .mono.mode-cooling { color: var(--t-cool); }
 .mono.mode-dry { color: var(--t-dry); }
 .mono.mismatch { color: var(--t-warn); }
-.loop-caret { border: 0; background: transparent; color: var(--t-muted); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 6px; transition: transform .15s ease; }
-.loop-caret:hover { color: var(--t-fg); background: var(--t-chip); }
-.loop-caret.open { transform: rotate(90deg); }
-.loop-caret .hicon { --mdc-icon-size: 16px; }
-.loop-detail td { background: color-mix(in srgb, var(--t-chip) 45%, transparent); }
-.loop-list { display: flex; flex-direction: column; gap: 4px; }
-.loop-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; padding: 2px 0; }
-.loop-label { font-weight: 600; color: var(--t-muted); min-width: 60px; }
-.loop-metric { display: inline-flex; align-items: baseline; gap: 4px; }
-.loop-cap { font-size: 11px; color: var(--t-muted); text-transform: uppercase; letter-spacing: .03em; }
 .loop-link { border: 0; background: transparent; color: var(--t-primary); cursor: pointer; display: inline-flex; align-items: center; gap: 3px; padding: 0; font: inherit; }
 .loop-link:hover { text-decoration: underline; }
 .loop-link .hicon, .loop-link .hicon-fallback { --mdc-icon-size: 14px; opacity: .6; }

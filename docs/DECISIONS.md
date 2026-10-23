@@ -2349,16 +2349,23 @@ and it never repeats the per-room detail the Rooms tab already shows — it aggr
   `overview`; a tab remembered in `localStorage` still wins. Panel only: no backend, payload,
   config or migration change — everything comes from `get_config`, `get_live`, the tuning
   payload and recorder statistics the panel could already read.
-- **Hero = comfort beside attention.** Comfort: controlled (`live`) rooms inside their comfort
-  band (each room's effective `deadband_c`, the library default 0.3 K until the tuning payload
-  arrives), the counts outside it (too cold / too warm / no reading / off) and a "now" strip
-  of the deviations (measured − setpoint, worded rather than signed because the Rooms table's
-  error has the opposite sign). The strip is a distribution, not a list: its dots are the one
-  per-room element left (a name on hover, the room's inspector on click). Attention: the
-  algorithm status and every active warn-or-worse flag ONE line per flag with how many rooms
-  raise it ("Rooms: 2") — which rooms is the Rooms and Flags tabs' job — worst first, capped
-  at `OV_ATT_MAX` (3) with a "+N more" link to the Flags tab; `ok`/`info` states share one
-  quiet line.
+- **Hero = comfort beside attention.** Comfort: controlled rooms inside their comfort band
+  (each room's effective `deadband_c`, the library default 0.3 K until the tuning payload
+  arrives), the counts outside it (too cold / too warm / no reading / no cooling / off) and a
+  "now" strip of the deviations (measured − setpoint, worded rather than signed because the
+  Rooms table's error has the opposite sign). Controlled = `live` AND not run passively by the
+  core: with the house mode Off no room is (the hero says so instead of "0/0"), in cooling a
+  room that does not take part in cooling is counted apart ("no cooling": valve 0, split off,
+  `cooling_disabled`) — the same set feeds the strip, the charts and the assist count. The
+  strip is a distribution, not a list: its dots are the one per-room element left (a name on
+  hover, the room's inspector on click, Tab order = axis order); dots closer than one dot
+  width stack, at most three steps high, then the steps compress so the hero never grows; the
+  green stripe is the global band (a room with its own band is judged by it — the "i" says
+  so). Attention: the algorithm status and every active warn-or-worse flag, ONE line per flag
+  with how many rooms raise it ("Rooms: 2") — which rooms is the Rooms and Flags tabs' job —
+  worst first; room flags beyond `OV_ATT_MAX` (3) fold behind a "+N more" link to the Flags
+  tab, which lists them, while the status and the heat pump's flags (not on the Flags tab)
+  always show; `ok`/`info` states share one quiet line.
 - **Three house charts instead of room tiles.** Small multiples on one 24 h time axis, each
   with its own unit and scale (never a dual-axis chart): the rooms' deviation spread (median
   line, coldest–warmest envelope, comfort band; red / blue where the envelope leaves the band;
@@ -2368,21 +2375,29 @@ and it never repeats the per-room detail the Rooms tab already shows — it aggr
   call (5-minute means of every room's `error_c` and `recommended_valve` diagnostic sensors
   plus the outdoor sensor), at most once per control cycle and only while the tab is visible;
   aggregated bucket by bucket (`ovAggregate`), a bucket no series holds breaks the line
-  (the `statPoints` rule), and every series ends in the live value at "now", so a headline
-  equals its chart's last point. Hover shows the bucket's time and value(s).
+  (the `statPoints` rule; a lone bucket draws as a dot), and every series ends in the live
+  value at "now", marked by a dot even after a gap — the floor and outdoor headlines are that
+  value, the deviation headline is a 24 h share. Hover shows the bucket's time and value(s).
+  The time labels step in local wall-clock hours (00/06/12/18 across a DST change); a narrow
+  chart keeps every other one.
 - **Side column:** plant rows (heat pump target / mode, compressor, mode sync and DHW chips;
   assist sources running out of all, by mode; in cooling the safe dew point, the highest
   room dew point and the S2 counts) and one line per manifold (circuits filled to their
   opening, supply → return; the words and ΔT in the tooltip; the card opens the Manifolds
-  tab). No number appears twice on the tab.
+  tab). A card with nothing to show hides; an empty column gives its width to the main one.
+  No number appears twice on the tab.
 - **Layout.** A container query on the tab (not the viewport) stacks the two columns below
-  880 px and the hero and charts below 620 px, so an open inspector or the HA sidebar re-flow
-  it; measured to fit 1184×780 (a 1440×900 laptop with the HA sidebar open), 1440×900 and
-  1664×955 in heating and cooling, light and dark, PL/EN/DE. A phone scrolls (stacked).
+  1100 px (narrower, the main column drops under ~750 px: a cramped hero and unreadable chart
+  axes; stacked, the side cards sit in a row) and the hero and charts below 620 px, so an
+  open inspector or the HA sidebar re-flow it; measured to fit 1184×780 (a 1440×900 laptop
+  with the HA sidebar open), 1440×900 and 1664×955 in heating and cooling, light and dark,
+  PL/EN/DE. Narrower screens and a phone scroll (stacked).
 
-**Trade-offs / not done:** the charts aggregate the rooms that are live NOW — the recorder
+**Trade-offs / not done:** the charts aggregate the rooms controlled NOW — the recorder
 keeps no history of a room's control state, so a room switched off an hour ago drops out of
-the whole 24 h; the deviation chart uses the global deadband for its band while the headline
-counts each room against its own; the attention cap hides the least severe entries behind
-one click. Tests: `tests/unit/test_panel_i18n.py` (every Overview string in PL/EN/DE, the
+the whole 24 h and one switched on brings its whole 24 h in; the deviation chart uses the
+global deadband for its band while the headline counts each room against its own; the
+attention cap hides the least severe room flags behind one click; a source sensor without
+long-term statistics (no `state_class`) leaves its chart empty — no fallback to the raw
+history. Tests: `tests/unit/test_panel_i18n.py` (every Overview string in PL/EN/DE, the
 tab first and default).

@@ -469,6 +469,8 @@ _REQUIRED_OVERVIEW_KEYS: tuple[str, ...] = (
     "ov_warm",
     "ov_nodata",
     "ov_off",
+    "ov_no_cool",
+    "ov_house_off",
     "ov_band_cap",
     "tip_ov_comfort",
     "ov_dev_below",

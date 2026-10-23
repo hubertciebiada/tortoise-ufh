@@ -149,16 +149,19 @@ Zakładki:
 
 - **Przegląd** (zakładka domyślna) — cały dom na jednym ekranie, wyłącznie w agregatach
   (szczegóły pokoi są w zakładce Pokoje). **Komfort**: ile sterowanych pokoi jest w paśmie
-  komfortu, liczniki za zimno / za ciepło / bez odczytu / wyłączone i oś odchyłek „teraz"
-  (kropka = pokój; najechanie pokazuje pokój, kliknięcie otwiera jego szczegóły). Obok
-  **Wymaga uwagi**: status algorytmu i aktywne flagi zliczone per flaga („Pokoje: 2"), trzy
-  najgroźniejsze, resztę otwiera odnośnik do zakładki Flagi; stany informacyjne w jednej
-  linii. Pod spodem trzy wykresy z ostatnich 24 godzin (średnie 5-minutowe z recordera,
+  komfortu, liczniki za zimno / za ciepło / bez odczytu / bez chłodzenia / wyłączone i oś
+  odchyłek „teraz" (kropka = pokój; najechanie pokazuje pokój, kliknięcie otwiera jego
+  szczegóły). Sterowany = w stanie „Steruje"; w chłodzeniu tylko pokój uczestniczący w
+  chłodzeniu, w trybie domu „Wył." żaden. Obok **Wymaga uwagi**: status algorytmu i aktywne
+  flagi zliczone per flaga („Pokoje: 2"), najgroźniejsze na górze; z flag pokoi widać trzy,
+  resztę otwiera odnośnik do zakładki Flagi (status i flagi pompy ciepła są widoczne zawsze);
+  stany informacyjne w jednej linii. Pod spodem trzy wykresy z ostatnich 24 godzin (średnie 5-minutowe z recordera,
   jedno zapytanie): **Odchyłka od zadanej** (mediana i rozrzut od najzimniejszego do
   najcieplejszego pokoju na tle pasma komfortu; liczba to część czasu, jaką pokoje spędziły
   w paśmie), **Podłogówka** (średnie otwarcie zaworów ważone liczbą pętli) i **Temperatura
-  zewnętrzna** — najechanie pokazuje wartość z danej chwili. Wykresy liczą pokoje, które
-  sterują TERAZ (recorder nie pamięta historii stanu pokoju). Z boku **Instalacja** (pompa
+  zewnętrzna** — najechanie pokazuje wartość z danej chwili, kropka na końcu linii to
+  wartość bieżąca. Wykresy liczą pokoje sterowane TERAZ (recorder nie pamięta historii stanu
+  pokoju). Z boku **Instalacja** (pompa
   ciepła, wspomaganie, w chłodzeniu ochrona przed rosą) i **Rozdzielacze** (wiersz na
   rozdzielacz: obwody wypełnione do otwarcia, zasilanie → powrót; kliknięcie otwiera
   zakładkę).
