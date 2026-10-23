@@ -458,6 +458,72 @@ def test_v021_surfaces_have_their_str_keys() -> None:
     assert not missing, f"missing STR keys: {missing}"
 
 
+# The Overview tab (dashboard): the comfort + attention hero, three house-level
+# 24 h charts, plant rows and one line per manifold.
+_REQUIRED_OVERVIEW_KEYS: tuple[str, ...] = (
+    "tab_overview",
+    "ov_comfort_cap",
+    "ov_comfort_sub",
+    "ov_none_live",
+    "ov_cold",
+    "ov_warm",
+    "ov_nodata",
+    "ov_off",
+    "ov_no_cool",
+    "ov_house_off",
+    "ov_band_cap",
+    "tip_ov_comfort",
+    "ov_dev_below",
+    "ov_dev_above",
+    "ov_dev_ok",
+    "ov_att_cap",
+    "ov_att_ok",
+    "ov_att_ok_sub",
+    "ov_att_info",
+    "ov_att_more",
+    "ov_dev_cap",
+    "ov_inband_sub",
+    "ov_fan_tip",
+    "tip_ov_dev",
+    "ov_minmax_24h",
+    "ov_floor_cap",
+    "ov_floor_sub",
+    "ov_loops_open",
+    "tip_ov_floor",
+    "ov_assist_note",
+    "ov_assist_idle",
+    "ov_assist_manual",
+    "ov_dhw",
+    "ov_dew_cap",
+    "ov_dew_worst",
+    "ov_dew_throttled",
+    "ov_plant_cap",
+)
+
+
+@pytest.mark.unit
+def test_overview_surfaces_have_their_str_keys() -> None:
+    """The Overview tab's STR keys exist in all languages; it opens first."""
+    source = _PANEL_JS.read_text(encoding="utf-8")
+    sections = _str_language_keys(source)
+    missing = [
+        f"{lang}:{key}"
+        for key in _REQUIRED_OVERVIEW_KEYS
+        for lang in ("pl", "en", "de")
+        if key not in sections[lang]
+    ]
+    assert not missing, f"missing STR keys: {missing}"
+    tabs_block = re.search(r"const TABS = \[(.*?)\n\];", source, re.DOTALL)
+    assert tabs_block is not None, "TABS array not found in the panel module"
+    tabs = re.findall(r'\{ key: "(\w+)", label: "(\w+)" \}', tabs_block.group(1))
+    assert tabs and tabs[0] == ("overview", "tab_overview"), tabs
+    assert 'const DEFAULT_TAB = "overview";' in source
+    # The retired Valves tab (v0.21.1) left no dead strings behind.
+    for lang, keys in sections.items():
+        dead = sorted(k for k in keys if k.startswith(("val_", "tip_val_")))
+        assert not dead, f"dead Valves-tab keys in STR.{lang}: {dead}"
+
+
 # Issue #35: the heat-pump water groups split in two and the heating-curve
 # preview (Tuning tab + Heat-pump tab).
 _REQUIRED_ISSUE35_KEYS: tuple[str, ...] = (

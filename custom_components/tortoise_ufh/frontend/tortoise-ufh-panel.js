@@ -3,8 +3,9 @@
  *
  * A dependency-free custom element (no CDN / external imports / build step,
  * CSP-safe) that renders the per-room underfloor-heating control state as a
- * health hero + a tabbed workspace (Rooms table, Flags, Tuning, Valves,
- * Assist, Heat pump and Manifolds) + a master/detail room inspector (a sticky side column on wide
+ * health hero + a tabbed workspace (the Overview dashboard — the default tab —
+ * then the Rooms table, Flags, Tuning, Manifolds, Assist and Heat pump) + a
+ * master/detail room inspector (a sticky side column on wide
  * screens, a right-side overlay drawer on narrow ones), and lets an admin
  * edit the global home temperature, mode, per-room offset and each room's
  * two-state control (off / live). Tuning knobs and the harder decision
@@ -76,6 +77,7 @@ const STATE_META = [
 
 /** Top-level tabs. Order is authoritative for keyboard navigation. */
 const TABS = [
+  { key: "overview", label: "tab_overview" },
   { key: "rooms", label: "tab_rooms" },
   { key: "flags", label: "tab_flags" },
   { key: "tuning", label: "tab_tuning" },
@@ -84,7 +86,7 @@ const TABS = [
   { key: "hp", label: "tab_hp" },
 ];
 const TAB_ORDER = TABS.map((t) => t.key);
-const DEFAULT_TAB = "rooms";
+const DEFAULT_TAB = "overview";
 const ACTIVE_TAB_STORAGE_KEY = "tortoise-ufh.activeTab";
 
 /** Width below which the table drops its Error and Assist columns. */
@@ -143,6 +145,45 @@ const CHART_MARGIN = { l: 42, r: 46, t: 12, b: 36 };
 const CHART_MIN_W = 300;
 const CHART_MAX_W = 900;
 
+// --- Overview (dashboard) ---------------------------------------------------
+
+/**
+ * Comfort-band half-width [K] used until the tuning payload arrives — the
+ * `ControllerConfig.deadband_c` library default. Afterwards every room uses
+ * its effective `deadband_c` (global value or per-room override).
+ */
+const OV_BAND_FALLBACK_K = 0.3;
+
+/**
+ * House charts: 24 h of 5-minute recorder statistics for every room's
+ * `error_c` and `recommended_valve` diagnostic sensors (plus the outdoor
+ * sensor) in ONE websocket call, refetched at most once per control cycle
+ * while the Overview is visible.
+ */
+const OV_HIST_HOURS = 24;
+const OV_HIST_PERIOD = "5minute";
+const OV_HIST_PERIOD_MS = 5 * 60 * 1000;
+const OV_HIST_MAXAGE_MS = 5 * 60 * 1000;
+
+/** Shared deviation scale [K] of the comfort strip and the deviation chart. */
+const OV_SCALE_MIN_K = 1.0;
+const OV_SCALE_MAX_K = 3.0;
+
+/**
+ * Comfort-strip dots closer than one dot width (`OV_SWARM_DOT_PX` of axis)
+ * stack upwards; `OV_SWARM_GAP` is the axis fraction used before the strip
+ * is laid out. A crowd stacks at most `OV_SWARM_MAX_LEVELS` steps high —
+ * beyond that the steps compress, so the hero never grows.
+ */
+const OV_SWARM_DOT_PX = 15;
+const OV_SWARM_GAP = 0.045;
+/** Vertical step [px] between stacked comfort-strip dots. */
+const OV_SWARM_STEP_PX = 13;
+const OV_SWARM_MAX_LEVELS = 3;
+
+/** Attention entries the Overview hero lists; the rest sit behind "+N more". */
+const OV_ATT_MAX = 3;
+
 // --- i18n -------------------------------------------------------------------
 
 const STR = {
@@ -184,6 +225,62 @@ const STR = {
     tab_assist: "Wspomaganie",
     tab_hp: "Pompa ciepła",
     tab_manifolds: "Rozdzielacze",
+    tab_overview: "Przegląd",
+    // Przegląd (dashboard)
+    ov_comfort_cap: "Komfort",
+    ov_comfort_sub: "sterowanych pokoi w paśmie komfortu",
+    ov_none_live: "Żaden pokój nie jest w stanie „Steruje”.",
+    ov_cold: "za zimno",
+    ov_warm: "za ciepło",
+    ov_nodata: "bez odczytu",
+    ov_off: "wyłączone",
+    ov_no_cool: "bez chłodzenia",
+    ov_house_off: "Tryb domu: {mode} — nic nie jest sterowane.",
+    ov_band_cap: "pasmo komfortu ±{v} K",
+    tip_ov_comfort:
+      "Pokój jest w paśmie komfortu, gdy pomiar odbiega od zadanej najwyżej o " +
+      "strefę nieczułości regulatora (parametr „Strefa nieczułości wokół " +
+      "zadanej”, globalny lub per pokój). Liczą się tylko pokoje sterowane: w " +
+      "stanie „Steruje”, w chłodzeniu tylko uczestniczące w chłodzeniu, a w " +
+      "trybie domu „Wył.” żaden. Na osi każda kropka to jeden pokój: w lewo " +
+      "zimniej, w prawo cieplej niż zadana; zielony pas to pasmo globalne (pokój " +
+      "z własnym pasmem ocenia się według swojego). Kliknij kropkę, żeby " +
+      "otworzyć szczegóły pokoju.",
+    ov_dev_below: "{v} K poniżej zadanej",
+    ov_dev_above: "{v} K powyżej zadanej",
+    ov_dev_ok: "w paśmie komfortu",
+    ov_att_cap: "Wymaga uwagi",
+    ov_att_ok: "Wszystko w porządku",
+    ov_att_ok_sub: "Algorytm działa, żadna flaga nie wymaga reakcji.",
+    ov_att_info: "Informacyjnie:",
+    ov_att_more: "+{n} więcej w zakładce Flagi",
+    ov_dev_cap: "Odchyłka od zadanej",
+    ov_inband_sub: "czasu w paśmie komfortu (24 godz.)",
+    ov_fan_tip: "mediana {mid} · rozrzut {lo} … {hi}",
+    tip_ov_dev:
+      "Ostatnie 24 godziny pokoi w stanie „Steruje” (średnie 5-minutowe z " +
+      "recordera; w górę = cieplej niż zadana). Linia to mediana odchyłki, szare " +
+      "pole — rozrzut od najzimniejszego do najcieplejszego pokoju, zielony pas — " +
+      "pasmo komfortu; czerwone i niebieskie pola to rozrzut ponad i pod pasmem. " +
+      "Liczba: jaką część czasu pokoje spędziły w swoim paśmie komfortu. " +
+      "Szczegóły pokoi są na zakładce Pokoje.",
+    ov_minmax_24h: "min. {min} · maks. {max} (24 godz.)",
+    ov_floor_cap: "Podłogówka",
+    ov_floor_sub: "średnie otwarcie zaworów",
+    ov_loops_open: "otwarte pętle: {n} z {m}",
+    tip_ov_floor:
+      "Średnie otwarcie zaworów pokoi w stanie „Steruje”, ważone liczbą pętli " +
+      "pokoju (pokój z trzema pętlami waży trzy razy więcej). Pętla liczy się " +
+      "jako otwarta od 5 %. Wykres: ta sama średnia z ostatnich 24 godzin " +
+      "(średnie 5-minutowe z recordera).",
+    ov_assist_note: "pracuje teraz",
+    ov_assist_idle: "wszystkie w spoczynku",
+    ov_assist_manual: "sterowanie ręczne: {n}",
+    ov_dhw: "CWU",
+    ov_dew_cap: "Ochrona przed rosą",
+    ov_dew_worst: "najwyższy punkt rosy w pokojach: {v}",
+    ov_dew_throttled: "dławione pokoje: {n}",
+    ov_plant_cap: "Instalacja",
     manage_rooms: "Zarządzaj pokojami",
     menu_btn: "Menu boczne",
     loading: "Ładowanie…",
@@ -327,25 +424,6 @@ const STR = {
     tune_heating_curve_hysteresis_k: "Histereza krzywej wody grzania",
     tune_heating_restart_band_k: "Pasmo ponownego startu pompy",
     tune_heating_stop_offset_k: "Próg zatrzymania pompy",
-    val_th_command: "Komenda",
-    val_th_raw: "Surowy",
-    val_th_floor: "Podłoga",
-    val_th_sat: "Saturacja",
-    val_th_s2: "Dławienie S2",
-    val_th_feedback: "Feedback",
-    val_raw_tooltip: "P {p} · I {i} · Trend {t} · FF {f}",
-    val_floor_chip: "min. otwarcie {v}%",
-    val_s2_flow: "przepływ {v}%",
-    val_s2_condensation: "kondensacja",
-    val_loop: "Pętla {n}",
-    val_supply: "Zasilanie",
-    val_return: "Powrót",
-    val_dt: "ΔT",
-    val_feedback_pos: "poz. {v}%",
-    val_no_loops: "brak przypisanych zaworów",
-    val_show_loops: "Pokaż pętle ({n})",
-    val_hide_loops: "Ukryj pętle",
-    val_empty: "Brak skonfigurowanych pokoi.",
     test_running_min: "~{m} min",
     ast_th_kind: "Rodzaj",
     ast_th_group: "Grupa",
@@ -531,8 +609,8 @@ const STR = {
       "dopiero, gdy wylot jest niżej niż nowa nastawa plus ten próg — " +
       "inaczej zapis od razu zakończyłby pracę. Parametr globalny. " +
       "Domyślnie 2 K.",
-    // Tooltipy szczegółów pokoju (tip_dec_*) i nagłówków tabel (tip_val_* /
-    // tip_ast_* / tip_th_*) — treść wspólna z docs/manual/pl.md: zmieniaj razem.
+    // Tooltipy szczegółów pokoju (tip_dec_*) i nagłówków tabel (tip_ast_* /
+    // tip_th_*) — treść wspólna z docs/manual/pl.md: zmieniaj razem.
     tip_th_assist:
       "Komenda dla szybkiego źródła pokoju (split/grzałka): kierunek pracy " +
       "i temperatura zadana dla urządzenia. „—” = pokój nie ma wspomagania; " +
@@ -592,23 +670,6 @@ const STR = {
       "Flagi diagnostyczne tego cyklu — każda mówi, które zabezpieczenie lub " +
       "ograniczenie zadziałało. Pełny słownik flag znajdziesz w instrukcji " +
       "(docs/manual/pl.md §12).",
-    tip_val_raw:
-      "Otwarcie policzone przez regulator przed limitami (minimalne otwarcie, " +
-      "obcięcie 0–100 %, reguły bezpieczeństwa). Najedź na wartość, by " +
-      "zobaczyć wkład członów P/I/Trend/FF.",
-    tip_val_floor:
-      "Czy zadziałało minimalne otwarcie przy grzaniu (parametr „Minimalne " +
-      "otwarcie zaworu”).",
-    tip_val_sat:
-      "Zawór uderzył w ogranicznik 0 lub 100 % — regulator chce więcej, niż " +
-      "fizycznie się da; anty-nasycenie pilnuje, by całka nie rosła w ścianę.",
-    tip_val_s2:
-      "Dławienie przepływu przy punkcie rosy (tylko chłodzenie): 100 % = bez " +
-      "ograniczeń, 0 % = zawór zamknięty (flaga s2_throttle; także " +
-      "zachowawczo przy braku danych o wilgotności lub zasilaniu).",
-    tip_val_feedback:
-      "Pozycja raportowana przez siłownik; trwała rozbieżność z komendą " +
-      "podnosi flagę valve_mismatch.",
     tip_ast_timer:
       "Blokada minimalnego czasu pracy/postoju: tyle jeszcze musi upłynąć, " +
       "zanim wspomaganie może zmienić stan. Chroni sprężarkę.",
@@ -929,6 +990,62 @@ const STR = {
     tab_assist: "Assist",
     tab_hp: "Heat pump",
     tab_manifolds: "Manifolds",
+    tab_overview: "Overview",
+    // Overview (dashboard)
+    ov_comfort_cap: "Comfort",
+    ov_comfort_sub: "controlled rooms within the comfort band",
+    ov_none_live: "No room is set to “Live”.",
+    ov_cold: "too cold",
+    ov_warm: "too warm",
+    ov_nodata: "no reading",
+    ov_off: "off",
+    ov_no_cool: "no cooling",
+    ov_house_off: "House mode: {mode} — nothing is controlled.",
+    ov_band_cap: "comfort band ±{v} K",
+    tip_ov_comfort:
+      "A room is in its comfort band when the reading is within the " +
+      "controller's deadband of the setpoint (the “Deadband around the " +
+      "setpoint” knob, global or per room). Only controlled rooms count: set to " +
+      "“Live”, in cooling only those taking part in cooling, and none in house " +
+      "mode Off. On the axis each dot is one room: left is colder, right is " +
+      "warmer than the setpoint; the green stripe is the global band (a room " +
+      "with its own band is judged by it). Click a dot to open the room's " +
+      "details.",
+    ov_dev_below: "{v} K below the setpoint",
+    ov_dev_above: "{v} K above the setpoint",
+    ov_dev_ok: "in the comfort band",
+    ov_att_cap: "Needs attention",
+    ov_att_ok: "All good",
+    ov_att_ok_sub: "The algorithm is running and no flag needs action.",
+    ov_att_info: "For information:",
+    ov_att_more: "+{n} more in the Flags tab",
+    ov_dev_cap: "Deviation from setpoint",
+    ov_inband_sub: "of the time in the comfort band (24 h)",
+    ov_fan_tip: "median {mid} · spread {lo} … {hi}",
+    tip_ov_dev:
+      "The last 24 hours of the rooms set to “Live” (5-minute recorder means; " +
+      "up = warmer than the setpoint). The line is the median deviation, the " +
+      "grey area the spread from the coldest to the warmest room, the green " +
+      "stripe the comfort band; red and blue mark the spread above and below " +
+      "the band. The figure is the share of time the rooms spent inside their " +
+      "comfort band. Per-room detail is on the Rooms tab.",
+    ov_minmax_24h: "min {min} · max {max} (24 h)",
+    ov_floor_cap: "Floor loops",
+    ov_floor_sub: "mean valve opening",
+    ov_loops_open: "open loops: {n} of {m}",
+    tip_ov_floor:
+      "Mean valve opening of the rooms set to “Live”, weighted by each room's " +
+      "loop count (a room with three loops weighs three times as much). A loop " +
+      "counts as open from 5 %. The chart: the same mean over the last 24 hours " +
+      "(5-minute recorder means).",
+    ov_assist_note: "running now",
+    ov_assist_idle: "all idle",
+    ov_assist_manual: "manual control: {n}",
+    ov_dhw: "DHW",
+    ov_dew_cap: "Condensation guard",
+    ov_dew_worst: "highest room dew point: {v}",
+    ov_dew_throttled: "throttled rooms: {n}",
+    ov_plant_cap: "Plant",
     manage_rooms: "Manage rooms",
     menu_btn: "Sidebar menu",
     loading: "Loading…",
@@ -1072,25 +1189,6 @@ const STR = {
     tune_heating_curve_hysteresis_k: "Heating curve hysteresis",
     tune_heating_restart_band_k: "Heat pump restart band",
     tune_heating_stop_offset_k: "Heat pump stop offset",
-    val_th_command: "Command",
-    val_th_raw: "Raw",
-    val_th_floor: "Floor",
-    val_th_sat: "Saturation",
-    val_th_s2: "S2 throttle",
-    val_th_feedback: "Feedback",
-    val_raw_tooltip: "P {p} · I {i} · Trend {t} · FF {f}",
-    val_floor_chip: "min opening {v}%",
-    val_s2_flow: "flow {v}%",
-    val_s2_condensation: "condensation",
-    val_loop: "Loop {n}",
-    val_supply: "Supply",
-    val_return: "Return",
-    val_dt: "ΔT",
-    val_feedback_pos: "pos {v}%",
-    val_no_loops: "no valves assigned",
-    val_show_loops: "Show loops ({n})",
-    val_hide_loops: "Hide loops",
-    val_empty: "No rooms configured.",
     ast_th_kind: "Kind",
     ast_th_group: "Group",
     ast_th_command: "Command",
@@ -1273,8 +1371,8 @@ const STR = {
       "is written only once the outlet is below the new setpoint plus this " +
       "offset — otherwise the write would end the run at once. Global " +
       "parameter. Default 2 K.",
-    // Room-detail tooltips (tip_dec_*) and table-header tooltips (tip_val_* /
-    // tip_ast_* / tip_th_*) — content shared with docs/manual/pl.md: change
+    // Room-detail tooltips (tip_dec_*) and table-header tooltips (tip_ast_* /
+    // tip_th_*) — content shared with docs/manual/pl.md: change
     // together.
     tip_th_assist:
       "The command for the room's fast source (split/heater): running " +
@@ -1336,23 +1434,6 @@ const STR = {
       "This cycle's diagnostic flags — each names the protection or limit " +
       "that acted. The full flag dictionary is in the manual " +
       "(docs/manual/pl.md §12).",
-    tip_val_raw:
-      "Opening computed by the controller before limits (valve floor, 0–100 % " +
-      "clamp, safety rules). Hover the value to see the P/I/Trend/FF term " +
-      "contributions.",
-    tip_val_floor:
-      "Whether the heating valve floor (the 'Valve floor' knob) was applied " +
-      "this cycle.",
-    tip_val_sat:
-      "The valve hit the 0 or 100 % bound — the controller wants more than " +
-      "physics allows; anti-windup keeps the integral in check.",
-    tip_val_s2:
-      "Dew-point flow throttling (cooling only): 100 % = unrestricted, 0 % = " +
-      "valve shut (flag s2_throttle; also a conservative 0 % when humidity " +
-      "or supply data is missing).",
-    tip_val_feedback:
-      "The position the actuator reports; a persistent mismatch with the " +
-      "command raises valve_mismatch.",
     tip_ast_timer:
       "Min on/off dwell lock: this much time must still pass before the " +
       "assist may change state. Protects the compressor.",
@@ -1680,6 +1761,62 @@ const STR = {
     tab_assist: "Zusatzquelle",
     tab_hp: "Wärmepumpe",
     tab_manifolds: "Verteiler",
+    tab_overview: "Übersicht",
+    // Übersicht (Dashboard)
+    ov_comfort_cap: "Komfort",
+    ov_comfort_sub: "geregelte Räume im Komfortband",
+    ov_none_live: "Kein Raum steht auf „Aktiv“.",
+    ov_cold: "zu kalt",
+    ov_warm: "zu warm",
+    ov_nodata: "ohne Messwert",
+    ov_off: "aus",
+    ov_no_cool: "ohne Kühlung",
+    ov_house_off: "Hausmodus: {mode} — nichts wird geregelt.",
+    ov_band_cap: "Komfortband ±{v} K",
+    tip_ov_comfort:
+      "Ein Raum liegt im Komfortband, wenn der Messwert höchstens um das " +
+      "Totband des Reglers vom Sollwert abweicht (Parameter „Totband um den " +
+      "Sollwert“, global oder je Raum). Es zählen nur geregelte Räume: auf " +
+      "„Aktiv“, beim Kühlen nur die am Kühlen teilnehmenden, im Hausmodus „Aus“ " +
+      "keiner. Auf der Achse ist jeder Punkt ein Raum: links kälter, rechts " +
+      "wärmer als der Sollwert; das grüne Band ist das globale Band (ein Raum " +
+      "mit eigenem Band wird nach diesem bewertet). Ein Klick auf einen Punkt " +
+      "öffnet die Raumdetails.",
+    ov_dev_below: "{v} K unter dem Sollwert",
+    ov_dev_above: "{v} K über dem Sollwert",
+    ov_dev_ok: "im Komfortband",
+    ov_att_cap: "Erfordert Aufmerksamkeit",
+    ov_att_ok: "Alles in Ordnung",
+    ov_att_ok_sub: "Der Algorithmus läuft, keine Meldung erfordert eine Reaktion.",
+    ov_att_info: "Zur Information:",
+    ov_att_more: "+{n} weitere im Tab Meldungen",
+    ov_dev_cap: "Abweichung vom Sollwert",
+    ov_inband_sub: "der Zeit im Komfortband (24 Std.)",
+    ov_fan_tip: "Median {mid} · Streuung {lo} … {hi}",
+    tip_ov_dev:
+      "Die letzten 24 Stunden der Räume auf „Aktiv“ (5-Minuten-Mittelwerte des " +
+      "Recorders; oben = wärmer als der Sollwert). Die Linie ist der Median der " +
+      "Abweichung, die graue Fläche die Streuung vom kältesten bis zum wärmsten " +
+      "Raum, das grüne Band das Komfortband; Rot und Blau markieren die Streuung " +
+      "über und unter dem Band. Die Zahl ist der Zeitanteil, den die Räume in " +
+      "ihrem Komfortband verbracht haben. Details je Raum stehen im Tab Räume.",
+    ov_minmax_24h: "min. {min} · max. {max} (24 Std.)",
+    ov_floor_cap: "Fußbodenkreise",
+    ov_floor_sub: "mittlere Ventilöffnung",
+    ov_loops_open: "offene Kreise: {n} von {m}",
+    tip_ov_floor:
+      "Mittlere Ventilöffnung der Räume auf „Aktiv“, gewichtet mit der " +
+      "Kreisanzahl des Raums (ein Raum mit drei Kreisen zählt dreifach). Ein " +
+      "Kreis gilt ab 5 % als offen. Das Diagramm: derselbe Mittelwert über die " +
+      "letzten 24 Stunden (5-Minuten-Mittelwerte des Recorders).",
+    ov_assist_note: "jetzt in Betrieb",
+    ov_assist_idle: "alle in Ruhe",
+    ov_assist_manual: "manuelle Steuerung: {n}",
+    ov_dhw: "WW",
+    ov_dew_cap: "Kondensationsschutz",
+    ov_dew_worst: "höchster Raum-Taupunkt: {v}",
+    ov_dew_throttled: "gedrosselte Räume: {n}",
+    ov_plant_cap: "Anlage",
     manage_rooms: "Räume verwalten",
     menu_btn: "Seitenmenü",
     loading: "Wird geladen…",
@@ -1823,25 +1960,6 @@ const STR = {
     tune_heating_curve_hysteresis_k: "Hysterese der Heizwasserkurve",
     tune_heating_restart_band_k: "Wiederanlaufband der Pumpe",
     tune_heating_stop_offset_k: "Abschaltschwelle der Pumpe",
-    val_th_command: "Befehl",
-    val_th_raw: "Rohwert",
-    val_th_floor: "Minimum",
-    val_th_sat: "Sättigung",
-    val_th_s2: "S2-Drosselung",
-    val_th_feedback: "Rückmeldung",
-    val_raw_tooltip: "P {p} · I {i} · Trend {t} · FF {f}",
-    val_floor_chip: "Mindestöffnung {v}%",
-    val_s2_flow: "Durchfluss {v}%",
-    val_s2_condensation: "Kondensation",
-    val_loop: "Kreis {n}",
-    val_supply: "Vorlauf",
-    val_return: "Rücklauf",
-    val_dt: "ΔT",
-    val_feedback_pos: "Pos. {v}%",
-    val_no_loops: "keine Ventile zugewiesen",
-    val_show_loops: "Kreise anzeigen ({n})",
-    val_hide_loops: "Kreise ausblenden",
-    val_empty: "Keine Räume konfiguriert.",
     ast_th_kind: "Art",
     ast_th_group: "Gruppe",
     ast_th_command: "Befehl",
@@ -2035,8 +2153,8 @@ const STR = {
       "der Vorlauf unter dem neuen Sollwert plus dieser Schwelle liegt — " +
       "sonst würde der Schreibvorgang den Lauf sofort beenden. Globaler " +
       "Parameter. Standard 2 K.",
-    // Tooltips der Raumdetails (tip_dec_*) und der Tabellenköpfe (tip_val_* /
-    // tip_ast_* / tip_th_*) — Inhalt gemeinsam mit docs/manual/de.md: zusammen
+    // Tooltips der Raumdetails (tip_dec_*) und der Tabellenköpfe (tip_ast_* /
+    // tip_th_*) — Inhalt gemeinsam mit docs/manual/de.md: zusammen
     // ändern.
     tip_th_assist:
       "Der Befehl für die Zusatzquelle des Raums (Split/Heizgerät): Betriebsrichtung " +
@@ -2099,23 +2217,6 @@ const STR = {
       "Die Diagnosemeldungen dieses Zyklus — jede benennt den Schutz oder die " +
       "Begrenzung, die gewirkt hat. Das vollständige Meldungsverzeichnis steht im " +
       "Handbuch (docs/manual/de.md §12).",
-    tip_val_raw:
-      "Vom Regler vor den Begrenzungen berechnete Öffnung (Ventil-Mindestöffnung, " +
-      "0–100-%-Begrenzung, Sicherheitsregeln). Bewegen Sie den Mauszeiger über den " +
-      "Wert, um die Anteile der Glieder P/I/Trend/FF zu sehen.",
-    tip_val_floor:
-      "Ob die Ventil-Mindestöffnung beim Heizen (Parameter „Ventil-Mindestöffnung“) " +
-      "in diesem Zyklus angewendet wurde.",
-    tip_val_sat:
-      "Das Ventil hat die Grenze 0 oder 100 % erreicht — der Regler will mehr, als " +
-      "die Physik zulässt; das Anti-Windup hält den Integralanteil in Schach.",
-    tip_val_s2:
-      "Taupunkt-Durchflussdrosselung (nur Kühlung): 100 % = uneingeschränkt, 0 % = " +
-      "Ventil geschlossen (Meldung s2_throttle; auch vorsorglich 0 %, wenn " +
-      "Luftfeuchtigkeits- oder Vorlaufdaten fehlen).",
-    tip_val_feedback:
-      "Die vom Aktor gemeldete Position; eine anhaltende Abweichung vom Befehl löst " +
-      "valve_mismatch aus.",
     tip_ast_timer:
       "Sperre der Mindest-Ein-/Ausschaltzeit: so viel Zeit muss noch vergehen, bevor " +
       "die Zusatzquelle den Zustand wechseln darf. Schützt den Kompressor.",
@@ -2972,6 +3073,8 @@ const DEW_REASON_KEYS = {
 const LOOP_VALVE_KEY = "entity_valves";
 const LOOP_SUPPLY_KEY = "entity_supply";
 const LOOP_RETURN_KEY = "entity_return";
+/** Room config key of the outdoor-temperature entity (Overview tile). */
+const OUTDOOR_KEY = "entity_temp_outdoor";
 
 /** Command↔feedback divergence [%] above which the valve row flags a mismatch. */
 const VALVE_MISMATCH_PCT = 12;
@@ -3002,7 +3105,6 @@ function signed(value, digits, suffix) {
   return (n > 0 ? "+" : "") + n.toFixed(digits) + (suffix || "");
 }
 
-/** Clamp `v` to the inclusive `[lo, hi]` range. */
 /**
  * Whether two knob values are the same (issue #31): booleans strictly,
  * numbers within a relative 1e-9 (a stepper's float noise must not count as
@@ -3020,6 +3122,7 @@ function sameKnob(a, b) {
   return Math.abs(x - y) <= 1e-9 * Math.max(1, Math.abs(x), Math.abs(y));
 }
 
+/** Clamp `v` to the inclusive `[lo, hi]` range. */
 function clamp(v, lo, hi) {
   return Math.min(hi, Math.max(lo, v));
 }
@@ -3374,6 +3477,35 @@ function modeRuns(points, tEnd) {
   return runs;
 }
 
+/**
+ * Recorder statistics rows (`recorder/statistics_during_period`, `start` in
+ * epoch MILLISECONDS) → sorted `[{t, v = mean}]`. The recorder OMITS empty
+ * buckets (an outage yields no row at all, not a `mean: null` row), so a gap
+ * arrives as two adjacent rows: an explicit null goes between rows spaced
+ * more than ~1.5 periods so `segments()` breaks the line instead of
+ * interpolating across it — mirroring the `unavailable` breaks history mode
+ * gets for free.
+ */
+function statPoints(rows, periodMs) {
+  const pts = (Array.isArray(rows) ? rows : [])
+    .map((row) => ({
+      t: num(row && row.start),
+      v: row && row.mean != null ? num(row.mean) : null,
+    }))
+    .filter((pt) => pt.t !== null)
+    .sort((a, b) => a.t - b.t);
+  const out = [];
+  let prevT = null;
+  for (const pt of pts) {
+    if (prevT !== null && pt.t - prevT > periodMs * 1.5) {
+      out.push({ t: prevT + periodMs, v: null });
+    }
+    out.push(pt);
+    prevT = pt.t;
+  }
+  return out;
+}
+
 /** "Nice" round number for axis steps (Heckbert). */
 function niceNum(range, round) {
   const exp = Math.floor(Math.log10(range || 1));
@@ -3401,6 +3533,244 @@ function niceTicks(min, max, count) {
     ticks.push(Number(v.toFixed(6)));
   }
   return ticks;
+}
+
+// --- Overview helpers (pure) ------------------------------------------------
+
+/** Chart viewBox [user units]; the SVG is stretched to its box. */
+const OV_SVG_W = 100;
+const OV_SVG_H = 32;
+
+/** Symmetric deviation scale [K]: the largest |value| rounded up to 0.5 K, clamped. */
+function ovScale(maxAbs) {
+  const n = num(maxAbs);
+  const up = n === null ? 0 : Math.ceil(Math.abs(n) * 2 - 1e-9) / 2;
+  return clamp(up, OV_SCALE_MIN_K, OV_SCALE_MAX_K);
+}
+
+/** Chart y [viewBox units] of a deviation `v` [K] on a ±`scale` axis. */
+function ovDevY(v, scale) {
+  const sc = scale > 0 ? scale : 1;
+  return OV_SVG_H / 2 - (clamp(v, -sc, sc) / sc) * (OV_SVG_H / 2 - 1);
+}
+
+/** Chart x [viewBox units] of time `t` in the [t0, t1] window. */
+function ovX(t, t0, t1) {
+  return clamp(((t - t0) / Math.max(1, t1 - t0)) * OV_SVG_W, 0, OV_SVG_W);
+}
+
+/**
+ * Stack comfort-strip dots that would overlap: items (`x` in 0..1) are taken
+ * left to right and each lands on the lowest level whose previous dot sits at
+ * least `gap` away. Returns new objects carrying `level` (0 = on the axis).
+ */
+function ovSwarm(items, gap) {
+  const lastX = [];
+  return items
+    .slice()
+    .sort((a, b) => a.x - b.x)
+    .map((it) => {
+      let level = 0;
+      while (level < lastX.length && it.x - lastX[level] < gap) {
+        level += 1;
+      }
+      lastX[level] = it.x;
+      return { ...it, level };
+    });
+}
+
+/**
+ * Aggregate aligned statistics series bucket by bucket: `reduce(values,
+ * weights)` over the non-null values the `{pts, w}` series hold at each
+ * timestamp (5-minute statistics share one epoch grid). A timestamp no
+ * series holds is simply missing, so a null goes between rows spaced more
+ * than ~1.5 periods (the `statPoints` rule) and the line breaks instead of
+ * bridging the outage.
+ */
+function ovAggregate(series, periodMs, reduce) {
+  const byT = new Map();
+  for (const { pts, w } of series) {
+    for (const p of pts) {
+      if (p.v === null) {
+        continue;
+      }
+      let b = byT.get(p.t);
+      if (!b) {
+        b = { vals: [], ws: [] };
+        byT.set(p.t, b);
+      }
+      b.vals.push(p.v);
+      b.ws.push(w);
+    }
+  }
+  const out = [];
+  let prevT = null;
+  for (const t of [...byT.keys()].sort((a, b) => a - b)) {
+    if (prevT !== null && t - prevT > periodMs * 1.5) {
+      out.push({ t: prevT + periodMs, v: null });
+    }
+    const b = byT.get(t);
+    out.push({ t, v: reduce(b.vals, b.ws) });
+    prevT = t;
+  }
+  return out;
+}
+
+/** Lowest, median and highest of a non-empty list of numbers. */
+function ovSpread(vals) {
+  const v = vals.slice().sort((a, b) => a - b);
+  const k = v.length;
+  const mid = k % 2 ? v[(k - 1) / 2] : (v[k / 2 - 1] + v[k / 2]) / 2;
+  return { lo: v[0], mid, hi: v[k - 1] };
+}
+
+/** Mean of `vals` weighted by `ws` (in step), or null without any weight. */
+function ovWeightedMean(vals, ws) {
+  let sw = 0;
+  let sv = 0;
+  vals.forEach((v, i) => {
+    sv += v * ws[i];
+    sw += ws[i];
+  });
+  return sw > 0 ? sv / sw : null;
+}
+
+/** Shared attributes of the stretched Overview chart SVGs. */
+function ovSvg(kids) {
+  return s(
+    "svg",
+    {
+      class: "ov-svg",
+      viewBox: `0 0 ${OV_SVG_W} ${OV_SVG_H}`,
+      preserveAspectRatio: "none",
+      "aria-hidden": "true",
+      focusable: "false",
+    },
+    kids,
+  );
+}
+
+/**
+ * The rooms' deviation-spread chart.
+ *
+ * `points` carry `v = {lo, mid, hi}` — the coldest, the median and the
+ * warmest room's measured − setpoint [K] (up = warmer) — or null for a gap.
+ * Draws the comfort band (±`band`), the zero line, the lo–hi envelope, a
+ * warm wash where the warmest room sits above the band and a cold wash where
+ * the coldest sits below it (each clamped to the band edge, so no
+ * intersection maths), then the median line. Values beyond ±`scale` clamp.
+ */
+function ovFanSvg(points, t0, t1, band, scale) {
+  const b = clamp(band, 0, scale > 0 ? scale : 1);
+  const xy = (t, v) => `${ovX(t, t0, t1).toFixed(2)},${ovDevY(v, scale).toFixed(2)}`;
+  const kids = [
+    s("rect", {
+      class: "ov-band",
+      x: 0,
+      y: ovDevY(b, scale).toFixed(2),
+      width: OV_SVG_W,
+      height: Math.max(0.6, ovDevY(-b, scale) - ovDevY(b, scale)).toFixed(2),
+    }),
+    s("line", {
+      class: "ov-zero",
+      x1: 0,
+      x2: OV_SVG_W,
+      y1: OV_SVG_H / 2,
+      y2: OV_SVG_H / 2,
+    }),
+  ];
+  // Runs of consecutive real buckets (a null bucket is a gap).
+  const runs = [];
+  let cur = [];
+  for (const p of points) {
+    if (p.t < t0 || p.t > t1) {
+      continue;
+    }
+    if (p.v === null) {
+      if (cur.length) {
+        runs.push(cur);
+      }
+      cur = [];
+    } else {
+      cur.push(p);
+    }
+  }
+  if (cur.length) {
+    runs.push(cur);
+  }
+  let env = "";
+  let warm = "";
+  let cold = "";
+  let mid = "";
+  for (const run of runs) {
+    const back = run.slice().reverse();
+    env +=
+      "M" +
+      run.map((p) => xy(p.t, p.v.hi)).join("L") +
+      "L" +
+      back.map((p) => xy(p.t, p.v.lo)).join("L") +
+      "Z";
+    mid += "M" + run.map((p) => xy(p.t, p.v.mid)).join("L");
+    if (run.length < 2) {
+      mid += "h0.4"; // a lone bucket draws as a dot
+      continue;
+    }
+    const a = run[0].t;
+    const z = run[run.length - 1].t;
+    warm +=
+      `M${xy(a, b)}L` +
+      run.map((p) => xy(p.t, Math.max(p.v.hi, b))).join("L") +
+      `L${xy(z, b)}Z`;
+    cold +=
+      `M${xy(a, -b)}L` +
+      run.map((p) => xy(p.t, Math.min(p.v.lo, -b))).join("L") +
+      `L${xy(z, -b)}Z`;
+  }
+  for (const [cls, d] of [
+    ["ov-env", env],
+    ["ov-warm", warm],
+    ["ov-cold", cold],
+    ["ov-line", mid],
+  ]) {
+    if (d) {
+      kids.push(s("path", { class: cls, d }));
+    }
+  }
+  return ovSvg(kids);
+}
+
+/** Chart y [viewBox units] of `v` on the fixed [`lo`, `hi`] scale (clamped). */
+function ovSeriesY(v, lo, hi) {
+  const range = hi > lo ? hi - lo : 1;
+  return OV_SVG_H - 1 - ((clamp(v, lo, hi) - lo) / range) * (OV_SVG_H - 2);
+}
+
+/**
+ * A single-series chart on the fixed [`lo`, `hi`] scale: the line, over an
+ * area down to the floor when `area` (the valve opening). Values clamp; a
+ * lone bucket between gaps draws as a dot (a hair-long round-capped line).
+ */
+function ovSeriesSvg(points, t0, t1, lo, hi, area) {
+  const xy = (p) => `${ovX(p.t, t0, t1).toFixed(2)},${ovSeriesY(p.v, lo, hi).toFixed(2)}`;
+  let line = "";
+  let fill = "";
+  for (const seg of segments(points.filter((p) => p.t >= t0 && p.t <= t1))) {
+    const path = seg.map(xy).join("L");
+    line += "M" + path + (seg.length === 1 ? "h0.4" : "");
+    if (area && seg.length > 1) {
+      const xa = ovX(seg[0].t, t0, t1).toFixed(2);
+      const xz = ovX(seg[seg.length - 1].t, t0, t1).toFixed(2);
+      fill += `M${xa},${OV_SVG_H}L${path}L${xz},${OV_SVG_H}Z`;
+    }
+  }
+  const kids = [];
+  if (fill) {
+    kids.push(s("path", { class: "ov-area", d: fill }));
+  }
+  if (line) {
+    kids.push(s("path", { class: "ov-line", d: line }));
+  }
+  return ovSvg(kids);
 }
 
 // --- Custom element ---------------------------------------------------------
@@ -4022,6 +4392,9 @@ class TortoiseUfhPanel extends HTMLElement {
     this._tuningEls = null; // stable Tuning-section refs
     this._tuningLoading = false; // in-flight guard for the lazy fetch
     this._hpEls = null; // stable Heat-pump-section refs (B2)
+    this._ovEls = null; // stable Overview-section refs (strip dots, rows by key)
+    // Overview 24 h chart batch: { at, key (requested ids), data: Map<id, [{t, v}]> }.
+    this._ovHist = { at: 0, key: "", data: new Map(), inflight: false };
     this._manifoldEls = null; // Manifolds-section refs + cards by manifold id
     this._mfRO = null; // ResizeObserver repainting a manifold drawing on resize
     // Errors are suppressed until this epoch-ms (a save reloads the entry, so
@@ -4193,7 +4566,7 @@ class TortoiseUfhPanel extends HTMLElement {
     }
   }
 
-  /** Restore the persisted active tab, defaulting to `rooms` (storage may throw). */
+  /** Restore the persisted active tab, defaulting to `overview` (storage may throw). */
   _loadActiveTab() {
     try {
       const v = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
@@ -4648,31 +5021,7 @@ class TortoiseUfhPanel extends HTMLElement {
         period: w.period,
         types: ["mean"],
       });
-      const arr = (res && res[entityId]) || [];
-      // Statistics `start` is epoch MILLISECONDS already — use it directly.
-      const rows = arr
-        .map((row) => ({
-          t: num(row.start),
-          v: row.mean == null ? null : num(row.mean),
-        }))
-        .filter((pt) => pt.t !== null)
-        .sort((a, b) => a.t - b.t);
-      // The recorder OMITS empty buckets (an outage yields no row at all, not
-      // a `mean: null` row), so a multi-hour gap arrives as two adjacent rows.
-      // Insert an explicit null between rows spaced more than ~1.5 periods so
-      // `segments()` breaks the line instead of interpolating across the gap —
-      // mirroring the `unavailable` breaks history mode gets for free.
-      const periodMs = w.periodMs || 3600 * 1000;
-      const out = [];
-      let prevT = null;
-      for (const pt of rows) {
-        if (prevT !== null && pt.t - prevT > periodMs * 1.5) {
-          out.push({ t: prevT + periodMs, v: null });
-        }
-        out.push(pt);
-        prevT = pt.t;
-      }
-      return out;
+      return statPoints(res && res[entityId], w.periodMs || 3600 * 1000);
     }
     const res = await this._callWSSilent({
       type: WS.history,
@@ -5186,6 +5535,7 @@ class TortoiseUfhPanel extends HTMLElement {
     // switching tabs is instant and never disturbs scroll or in-flight fetches.
     const roomsSection = this._buildRoomsSection();
     const sections = {
+      overview: this._buildOverviewSection(),
       rooms: roomsSection.el,
       flags: this._buildFlagsSection(),
       tuning: this._buildTuningSection(),
@@ -5409,7 +5759,9 @@ class TortoiseUfhPanel extends HTMLElement {
       btn.setAttribute("aria-selected", on ? "true" : "false");
       btn.tabIndex = on ? 0 : -1;
     }
-    if (this._activeTab === "rooms") {
+    if (this._activeTab === "overview") {
+      this._renderOverview();
+    } else if (this._activeTab === "rooms") {
       this._reconcileTable();
     } else if (this._activeTab === "flags") {
       this._updateFlagLegend();
@@ -5665,6 +6017,11 @@ class TortoiseUfhPanel extends HTMLElement {
   _tickAge() {
     if (this._built) {
       this._applyPill();
+      // The Overview's attention list carries the same ticking status line.
+      const O = this._ovEls;
+      if (O && O.attStatusLabel) {
+        O.attStatusLabel.textContent = this._pillState().text;
+      }
     }
   }
 
@@ -5722,6 +6079,1138 @@ class TortoiseUfhPanel extends HTMLElement {
     H.homeVal.textContent = fmt(homeTemp, 1, " °C");
     H.homeMinus.disabled = homeTemp === null || homeTemp <= HOME_MIN;
     H.homePlus.disabled = homeTemp === null || homeTemp >= HOME_MAX;
+  }
+
+  // --------------------------------------------------------------------------
+  // Overview tab (dashboard)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Build the Overview tab once: a one-screen dashboard of house-level
+   * aggregates (the per-room detail lives on the Rooms tab). The main column
+   * holds the hero — comfort (controlled rooms in band, the counts outside
+   * it, the "now" deviation strip) beside what needs attention, counted per
+   * flag — over three 24 h charts on one time axis (the rooms' deviation
+   * spread, the loop-weighted floor valve opening, the outdoor temperature);
+   * the side column holds the plant rows (heat pump, assist, condensation
+   * guard) and one line per manifold. A container query stacks the columns
+   * when the tab itself is narrow (phone, open inspector). `_renderOverview`
+   * updates every part in place on each poll; strip dots and manifold rows
+   * are reconciled by key, never rebuilt by the poll.
+   */
+  _buildOverviewSection() {
+    const O = {
+      dots: new Map(), // room name -> comfort-strip dot button
+      mfRows: [], // manifold row parts, in payload order
+      mfSig: null, // manifold ids + circuit counts the rows were built for
+      countSig: null, // comfort counts (rebuilt on change only)
+      tickSig: null, // strip scale the tick labels were built for
+      attSig: null, // attention entries (rebuilt on change only)
+      attStatusLabel: null, // the status entry's label (written in place)
+    };
+
+    // Hero, left: the comfort headline, the counts and the deviation strip.
+    O.comfortVal = h("span", { class: "ov-hero-val" });
+    O.comfortSub = h("span", { class: "ov-hero-sub" });
+    O.counts = h("div", { class: "ov-counts" });
+    O.stripBand = h("div", { class: "ov-strip-band" });
+    O.stripPlot = h("div", { class: "ov-strip-plot" }, [
+      O.stripBand,
+      h("div", { class: "ov-strip-zero" }),
+    ]);
+    O.stripTicks = h("div", { class: "ov-strip-ticks", "aria-hidden": "true" });
+    O.stripBandCap = h("span", { class: "ov-strip-cap" });
+    const comfort = h("div", { class: "ov-hero-comfort" }, [
+      h("div", { class: "ov-eyebrow" }, [
+        this._t("ov_comfort_cap"),
+        this._infoIcon("tip_ov_comfort"),
+        O.stripBandCap,
+      ]),
+      h("div", { class: "ov-hero-fig" }, [O.comfortVal, O.comfortSub]),
+      O.counts,
+      h("div", { class: "ov-strip" }, [O.stripPlot, O.stripTicks]),
+    ]);
+
+    // Hero, right: what needs a look, worst first; a calm OK state.
+    O.attCount = h("span", { class: "chip", style: "display:none" });
+    O.attList = h("div", { class: "ov-att-list", style: "display:none" });
+    O.attOk = h("div", { class: "ov-att-ok", style: "display:none" }, [
+      h("span", { class: "ov-ichip ok" }, [this._icon("mdi:check", "✓")]),
+      h("div", null, [
+        h("div", { class: "ov-att-ok-title", text: this._t("ov_att_ok") }),
+        h("div", { class: "ov-att-ok-sub", text: this._t("ov_att_ok_sub") }),
+      ]),
+    ]);
+    O.attInfo = h("div", { class: "ov-att-info", style: "display:none" });
+    const attention = h("div", { class: "ov-hero-att" }, [
+      h("div", { class: "ov-eyebrow" }, [this._t("ov_att_cap"), O.attCount]),
+      O.attOk,
+      O.attList,
+      O.attInfo,
+    ]);
+    const hero = h("div", { class: "ov-card ov-hero" }, [comfort, attention]);
+
+    // House charts: small multiples sharing the 24 h time axis.
+    O.cDev = this._ovChartCard("ov_dev_cap", "tip_ov_dev");
+    O.cFloor = this._ovChartCard("ov_floor_cap", "tip_ov_floor");
+    O.cOut = this._ovChartCard("role_entity_temp_outdoor", null);
+    const charts = h("div", { class: "ov-charts" }, [
+      O.cDev.el,
+      O.cFloor.el,
+      O.cOut.el,
+    ]);
+
+    // Manifold rows (hidden without manifolds); the card opens the tab.
+    O.mfList = h("div", { class: "ov-mf-list" });
+    const openMf = () => this._setActiveTab("manifolds");
+    O.mfCard = h(
+      "div",
+      {
+        class: "ov-card ov-mf",
+        role: "button",
+        tabindex: "0",
+        style: "display:none",
+        on: {
+          click: openMf,
+          keydown: (e) => {
+            if (e.target === O.mfCard && (e.key === "Enter" || e.key === " ")) {
+              e.preventDefault();
+              openMf();
+            }
+          },
+        },
+      },
+      [h("div", { class: "ov-eyebrow", text: this._t("tab_manifolds") }), O.mfList],
+    );
+
+    // Plant rows; the heat pump and the assist open their tabs.
+    O.pHp = this._ovPlantRow("tab_hp", "mdi:heat-pump-outline", "◎", () =>
+      this._setActiveTab("hp"),
+    );
+    O.pAssist = this._ovPlantRow("tab_assist", "mdi:air-conditioner", "~", () =>
+      this._setActiveTab("assist"),
+    );
+    O.pDew = this._ovPlantRow("ov_dew_cap", "mdi:water-alert-outline", "•", null);
+    O.plant = h("div", { class: "ov-card ov-plant" }, [
+      h("div", { class: "ov-eyebrow", text: this._t("ov_plant_cap") }),
+      O.pHp.el,
+      O.pAssist.el,
+      O.pDew.el,
+    ]);
+    O.layout = h("div", { class: "ov-layout" }, [
+      h("div", { class: "ov-main" }, [hero, charts]),
+      h("div", { class: "ov-side" }, [O.plant, O.mfCard]),
+    ]);
+
+    const el = h(
+      "section",
+      {
+        class: "tab-section",
+        role: "tabpanel",
+        style: "display:none",
+        dataset: { tab: "overview" },
+      },
+      [
+        h("div", { class: "ov" }, [O.layout]),
+      ],
+    );
+    this._ovEls = O;
+    return el;
+  }
+
+  /**
+   * One plant row: an icon chip, the caption, the value with a details line
+   * (`sub`) and an `extra` row (chips). With `onOpen` the row is a button.
+   */
+  _ovPlantRow(capKey, icon, glyph, onOpen) {
+    const K = {};
+    K.val = h("span", { class: "ov-prow-val" });
+    K.sub = h("span", { class: "ov-prow-sub" });
+    K.extra = h("div", { class: "ov-prow-extra" });
+    const attrs = { class: "ov-prow" };
+    if (onOpen) {
+      attrs.class += " link";
+      attrs.role = "button";
+      attrs.tabindex = "0";
+      attrs.on = {
+        click: onOpen,
+        keydown: (e) => {
+          if (e.target === K.el && (e.key === "Enter" || e.key === " ")) {
+            e.preventDefault();
+            onOpen();
+          }
+        },
+      };
+    }
+    K.el = h("div", attrs, [
+      h("span", { class: "ov-ichip" }, [this._icon(icon, glyph)]),
+      h("div", { class: "ov-prow-body" }, [
+        h("span", { class: "ov-prow-cap", text: this._t(capKey) }),
+        h("div", { class: "ov-prow-fig" }, [K.val, K.sub]),
+        K.extra,
+      ]),
+    ]);
+    return K;
+  }
+
+  /**
+   * One house-chart card: the caption (+ "i"), the current value with a
+   * details line, then the plot — the stretched SVG, its two scale labels,
+   * the "now" dot, a hover guide and tooltip — over the time labels.
+   * `_ovPaintChart` fills it on every poll.
+   */
+  _ovChartCard(capKey, infoKey) {
+    const C = { sig: null, xSig: null, hover: [], t0: 0, t1: 1 };
+    C.val = h("span", { class: "ov-chart-val" });
+    C.sub = h("span", { class: "ov-chart-sub" });
+    C.box = h("div", { class: "ov-chart-box" }, [ovSvg([])]);
+    C.yTop = h("span");
+    C.yBot = h("span");
+    C.now = h("span", { class: "ov-chart-now", style: "display:none" });
+    C.guide = h("div", { class: "ov-chart-guide", style: "display:none" });
+    C.tip = h("div", { class: "ov-chart-tip", style: "display:none" });
+    C.plot = h(
+      "div",
+      {
+        class: "ov-chart",
+        on: {
+          pointermove: (e) => this._ovChartHover(C, e),
+          pointerleave: () => this._ovChartHover(C, null),
+        },
+      },
+      [
+        h("div", { class: "ov-chart-y", "aria-hidden": "true" }, [C.yTop, C.yBot]),
+        C.box,
+        C.now,
+        C.guide,
+        C.tip,
+      ],
+    );
+    C.xTicks = h("div", { class: "ov-chart-x", "aria-hidden": "true" });
+    const cap = [this._t(capKey)];
+    if (infoKey) {
+      cap.push(this._infoIcon(infoKey));
+    }
+    C.el = h("div", { class: "ov-card ov-chart-card" }, [
+      h("div", { class: "ov-eyebrow" }, cap),
+      h("div", { class: "ov-chart-fig" }, [C.val, C.sub]),
+      C.plot,
+      C.xTicks,
+    ]);
+    return C;
+  }
+
+  /**
+   * Fill a chart card: the SVG from `draw()` (rebuilt only when `sig`
+   * changes), the "now" dot at `nowY` [viewBox units] (null hides it — the
+   * live value stays visible even after a gap), the top / bottom scale labels
+   * and the hover points `{t, text}` of the [t0, t1] window.
+   */
+  _ovPaintChart(C, P) {
+    if (C.sig !== P.sig) {
+      C.sig = P.sig;
+      C.box.replaceChild(P.draw(), C.box.firstChild);
+    }
+    C.now.style.display = P.nowY === null ? "none" : "";
+    if (P.nowY !== null) {
+      C.now.className = "ov-chart-now" + (P.nowCls ? " " + P.nowCls : "");
+      C.now.style.top = ((P.nowY / OV_SVG_H) * 100).toFixed(2) + "%";
+    }
+    C.yTop.textContent = P.yTop;
+    C.yBot.textContent = P.yBot;
+    C.hover = P.hover;
+    C.t0 = P.t0;
+    C.t1 = P.t1;
+  }
+
+  /** Hover guide + tooltip of a house chart: the bucket nearest the pointer. */
+  _ovChartHover(C, e) {
+    const hide = () => {
+      C.guide.style.display = "none";
+      C.tip.style.display = "none";
+    };
+    const box = e && C.hover.length ? C.box.getBoundingClientRect() : null;
+    if (!box || !box.width) {
+      hide();
+      return;
+    }
+    const span = Math.max(1, C.t1 - C.t0);
+    const t = C.t0 + clamp((e.clientX - box.left) / box.width, 0, 1) * span;
+    let best = C.hover[0];
+    for (const p of C.hover) {
+      if (Math.abs(p.t - t) < Math.abs(best.t - t)) {
+        best = p;
+      }
+    }
+    // Over a gap (no bucket close by) the chart draws nothing to read.
+    if (Math.abs(best.t - t) > OV_HIST_PERIOD_MS * 3) {
+      hide();
+      return;
+    }
+    const x = ((best.t - C.t0) / span) * box.width;
+    C.guide.style.display = "";
+    C.guide.style.left = x.toFixed(1) + "px";
+    // The time over one line per value part (never wrapped mid-value).
+    C.tip.textContent = "";
+    C.tip.appendChild(
+      h("span", { class: "ov-chart-tip-t", text: this._tipTime("24h", best.t) }),
+    );
+    for (const part of best.text.split(" · ")) {
+      C.tip.appendChild(h("span", { text: part }));
+    }
+    C.tip.style.display = "";
+    // Follow the pointer inside the plot; a tooltip wider than the plot
+    // centres over it instead, into the axis gutter and the card padding.
+    const w = C.tip.offsetWidth;
+    const left = w > box.width ? (box.width - w) / 2 : clamp(x - w / 2, 0, box.width - w);
+    C.tip.style.left = left.toFixed(1) + "px";
+  }
+
+  /** Update the Overview tab in place from the current view + live payload. */
+  _renderOverview() {
+    const O = this._ovEls;
+    if (!O) {
+      return;
+    }
+    // Each room's comfort band is its effective deadband (tuning payload).
+    this._ensureTuningLoaded();
+    const live = this._live || {};
+    const mode = pick(live, ["mode"], pick(this._config || {}, ["mode"], "heating"));
+    const items = this._view.map((r) => this._ovDerive(r, mode));
+    this._ovRenderHero(items, mode);
+    this._ovRenderAttention(items);
+    this._ovRenderCharts(items);
+    this._ovRenderPlant(items, mode);
+    this._ovRenderManifolds();
+    // An empty side column gives its width back to the main one.
+    O.layout.classList.toggle(
+      "no-side",
+      O.plant.style.display === "none" && O.mfCard.style.display === "none",
+    );
+    this._ovFetchHistory();
+  }
+
+  /** Effective tuning knob for a room (override, else global), or `fallback`. */
+  _ovKnob(room, key, fallback) {
+    const T = this._tuning;
+    if (T) {
+      const over = room && T.rooms && T.rooms[room] ? num(T.rooms[room][key]) : null;
+      if (over !== null) {
+        return over;
+      }
+      const glob = T.global ? num(T.global[key]) : null;
+      if (glob !== null) {
+        return glob;
+      }
+    }
+    return fallback;
+  }
+
+  /**
+   * Per-room Overview facts. `dev` = measured − setpoint [K] (positive =
+   * warmer than the target, the reverse sign of the table's "Uchyb" — so the
+   * Overview words it instead of signing it); `zone` places it against the
+   * room's comfort band (cold / ok / warm, or none without a reading). `ctl`
+   * = under control: live AND not run passively by the core — with the house
+   * mode Off, or in cooling for a room that does not take part (`passive`;
+   * valve 0, split off, flagged `cooling_disabled`).
+   */
+  _ovDerive(r, mode) {
+    const band = this._ovKnob(r.name, "deadband_c", OV_BAND_FALLBACK_K);
+    const dev = r.current !== null && r.setpoint !== null ? r.current - r.setpoint : null;
+    let zone = "none";
+    if (dev !== null) {
+      // Below the display step, or inside the band with float slack
+      // (21.3 − 21.0 = 0.3000000000000007), reads as "in band".
+      const abs = Math.abs(dev);
+      zone = abs < 0.05 || abs <= band + 1e-6 ? "ok" : dev < 0 ? "cold" : "warm";
+    }
+    const live = r.state === STATE_LIVE;
+    const passive = live && (mode === "off" || (mode === "cooling" && !r.cooling));
+    return { r, band, dev, zone, live, passive, ctl: live && !passive };
+  }
+
+  /** The deviation in words ("0.6 K below the setpoint" / "in the comfort band"). */
+  _ovDevText(d) {
+    if (d.dev === null) {
+      return "—";
+    }
+    if (d.zone === "ok") {
+      return this._t("ov_dev_ok");
+    }
+    return fmtStr(this._t(d.dev < 0 ? "ov_dev_below" : "ov_dev_above"), {
+      v: fmt(Math.abs(d.dev), 1),
+    });
+  }
+
+  /**
+   * The outdoor sensor, or null. It is one global entity the config flow
+   * fans out into every room, so the first room that carries it names it.
+   */
+  _ovOutdoorId() {
+    for (const r of this._view) {
+      const id = r.entities ? r.entities[OUTDOOR_KEY] : null;
+      if (id) {
+        return id;
+      }
+    }
+    return null;
+  }
+
+  /** Comfort hero: controlled rooms in band, the counts, the deviation strip. */
+  _ovRenderHero(items, mode) {
+    const O = this._ovEls;
+    const ctl = items.filter((d) => d.ctl);
+    const n = { cold: 0, warm: 0, none: 0 };
+    for (const d of ctl) {
+      if (d.zone !== "ok") {
+        n[d.zone] += 1;
+      }
+    }
+    if (ctl.length) {
+      const ok = ctl.length - n.cold - n.warm - n.none;
+      O.comfortVal.textContent = `${ok}/${ctl.length}`;
+      O.comfortSub.textContent = this._t("ov_comfort_sub");
+    } else {
+      O.comfortVal.textContent = "—";
+      let sub = this._t("ov_comfort_sub");
+      if (!this._config) {
+        sub = this._t("loading");
+      } else if (!items.length) {
+        sub = this._t("no_rooms");
+      } else if (mode === "off") {
+        sub = fmtStr(this._t("ov_house_off"), { mode: this._t("mode_off") });
+      } else if (!items.some((d) => d.live)) {
+        sub = this._t("ov_none_live");
+      }
+      O.comfortSub.textContent = sub;
+    }
+    const counts = [
+      ["cold", "ov_cold", n.cold],
+      ["warm", "ov_warm", n.warm],
+      ["nodata", "ov_nodata", n.none],
+      [
+        "passive",
+        "ov_no_cool",
+        mode === "cooling" ? items.filter((d) => d.passive).length : 0,
+      ],
+      ["off", "ov_off", items.filter((d) => !d.live).length],
+    ].filter((c) => c[2] > 0);
+    const sig = JSON.stringify(counts);
+    if (sig !== O.countSig) {
+      O.countSig = sig;
+      O.counts.textContent = "";
+      for (const [cls, key, count] of counts) {
+        O.counts.appendChild(
+          h("span", { class: "ov-count " + cls }, [
+            h("i"),
+            h("span", { text: this._t(key) }),
+            h("b", { text: String(count) }),
+          ]),
+        );
+      }
+    }
+    this._ovRenderStrip(ctl.filter((d) => d.dev !== null));
+  }
+
+  /**
+   * The "now" deviation strip: one dot per live room on a shared ±scale axis
+   * — a distribution, not a list (a dot names its room on hover and opens
+   * it on click).
+   */
+  _ovRenderStrip(read) {
+    const O = this._ovEls;
+    let maxAbs = 0;
+    for (const d of read) {
+      maxAbs = Math.max(maxAbs, Math.abs(d.dev));
+    }
+    const S = ovScale(maxAbs);
+    const pct = (v) => ((clamp(v, -S, S) + S) / (2 * S)) * 100;
+    const band = this._ovKnob(null, "deadband_c", OV_BAND_FALLBACK_K);
+    O.stripBand.style.left = pct(-band) + "%";
+    O.stripBand.style.width = pct(band) - pct(-band) + "%";
+    O.stripBandCap.textContent = fmtStr(this._t("ov_band_cap"), { v: fmt(band, 1) });
+
+    if (O.tickSig !== S) {
+      O.tickSig = S;
+      O.stripTicks.textContent = "";
+      const step = S <= 1 ? 0.5 : 1;
+      for (let v = Math.ceil(-S / step) * step; v <= S + 1e-9; v += step) {
+        const val = Math.abs(v) < 1e-9 ? 0 : v;
+        O.stripTicks.appendChild(
+          h("span", {
+            text:
+              val === 0 ? this._t("chart_setpoint") : signed(val, step < 1 ? 1 : 0),
+            style: `left:${pct(val)}%`,
+          }),
+        );
+      }
+    }
+
+    const axisPx = O.stripPlot.clientWidth;
+    const placed = ovSwarm(
+      read.map((d) => ({ d, x: pct(d.dev) / 100 })),
+      axisPx > 0 ? Math.min(0.25, OV_SWARM_DOT_PX / axisPx) : OV_SWARM_GAP,
+    );
+    const levels = placed.reduce((m, p) => Math.max(m, p.level + 1), 1);
+    const step =
+      levels > OV_SWARM_MAX_LEVELS
+        ? (OV_SWARM_STEP_PX * OV_SWARM_MAX_LEVELS) / levels
+        : OV_SWARM_STEP_PX;
+    const seen = new Set();
+    for (const p of placed) {
+      const name = p.d.r.name;
+      seen.add(name);
+      let dot = O.dots.get(name);
+      if (!dot) {
+        dot = h(
+          "button",
+          { class: "ov-dot", type: "button", on: { click: () => this._select(name) } },
+          [h("i")],
+        );
+        O.dots.set(name, dot);
+        O.stripPlot.appendChild(dot);
+      }
+      const label = `${name}: ${this._ovDevText(p.d)}`;
+      dot.className =
+        "ov-dot z-" + p.d.zone + (name === this._selectedRoom ? " selected" : "");
+      dot.style.left = (p.x * 100).toFixed(2) + "%";
+      dot.style.bottom = (p.level * step - 4).toFixed(1) + "px";
+      dot.title = label;
+      dot.setAttribute("aria-label", label);
+    }
+    for (const [name, dot] of [...O.dots]) {
+      if (!seen.has(name)) {
+        dot.remove();
+        O.dots.delete(name);
+      }
+    }
+    // Keep the Tab order the axis order (moved only when it changed).
+    const order = placed.map((p) => O.dots.get(p.d.r.name));
+    const now = [...O.stripPlot.querySelectorAll(".ov-dot")];
+    if (order.some((dot, i) => now[i] !== dot)) {
+      for (const dot of order) {
+        O.stripPlot.appendChild(dot);
+      }
+    }
+    O.stripPlot.style.height =
+      Math.min(levels, OV_SWARM_MAX_LEVELS) * OV_SWARM_STEP_PX + 16 + "px";
+  }
+
+  /**
+   * Attention: the algorithm status and every active warn-or-worse flag,
+   * rooms' and the heat pump's, one line per flag with HOW MANY rooms raise
+   * it (which ones is the Rooms and Flags tabs' job), worst first. Room flags
+   * beyond `OV_ATT_MAX` fold behind a link to the Flags tab, which lists
+   * them; the status and the heat pump's flags are not there, so they always
+   * show. `ok` / `info` states — intentional, nothing to fix — go to one
+   * quiet line below. Rebuilt only when the content changes.
+   */
+  _ovRenderAttention(items) {
+    const O = this._ovEls;
+    const entries = [];
+    const info = [];
+    const pill = this._pillState();
+    if (pill.sev !== "ok") {
+      entries.push({ key: "status", sev: pill.sev, label: pill.text, n: 0 });
+    }
+    const add = (code, n, tab) => {
+      const sev = this._flagSev(code);
+      const entry = {
+        key: (tab || "") + ":" + code,
+        code,
+        sev,
+        label: this._flagLabel(code),
+        sx: this._flagSx(code),
+        n,
+        tab,
+      };
+      ((SEV_RANK[sev] || 0) >= SEV_RANK.warn ? entries : info).push(entry);
+    };
+    const byCode = new Map();
+    for (const d of items) {
+      for (const code of d.r.flags) {
+        byCode.set(code, (byCode.get(code) || 0) + 1);
+      }
+    }
+    for (const [code, n] of byCode) {
+      add(code, n, null);
+    }
+    const hp = (this._live && this._live.heat_pump) || null;
+    if (hp && hp.flicker && Array.isArray(hp.flicker.flags)) {
+      for (const code of hp.flicker.flags) {
+        add(code, 0, "hp");
+      }
+    }
+    entries.sort((a, b) => (SEV_RANK[b.sev] || 0) - (SEV_RANK[a.sev] || 0));
+    // Where an entry comes from: "Rooms: 2", or the heat pump's tab name.
+    const where = (e) =>
+      e.tab ? this._t("tab_" + e.tab) : e.n ? `${this._t("tab_rooms")}: ${e.n}` : "";
+
+    // The status label carries a ticking age ("stale · 8 min ago"): it is
+    // written in place below, outside the signature, so it never forces a
+    // rebuild (and a lost focus) on every poll.
+    const sig = JSON.stringify([
+      entries.map((e) => [e.key, e.sev, e.key === "status" ? "" : e.label, e.n]),
+      info.map((e) => [e.key, e.n]),
+    ]);
+    const status = entries.find((e) => e.key === "status");
+    if (sig === O.attSig) {
+      if (status && O.attStatusLabel) {
+        O.attStatusLabel.textContent = status.label;
+      }
+      return;
+    }
+    O.attSig = sig;
+    O.attStatusLabel = null;
+
+    const worst = entries.length ? entries[0].sev : null;
+    O.attCount.style.display = entries.length ? "" : "none";
+    O.attCount.className =
+      "chip chip-" + (worst === "alarm" || worst === "problem" ? worst : "warn");
+    O.attCount.textContent = String(entries.length);
+    O.attOk.style.display = entries.length ? "none" : "";
+    O.attList.style.display = entries.length ? "" : "none";
+    O.attList.textContent = "";
+    const folded = entries.filter((e) => e.key !== "status" && !e.tab).slice(OV_ATT_MAX);
+    for (const e of entries.filter((x) => !folded.includes(x))) {
+      const high = (SEV_RANK[e.sev] || 0) >= SEV_RANK.problem;
+      const head = [];
+      if (e.sx) {
+        head.push(h("span", { class: "flag-sx", text: e.sx }));
+      }
+      const labelEl = h("span", { class: "ov-att-label", text: e.label });
+      if (e.key === "status") {
+        O.attStatusLabel = labelEl;
+      } else {
+        labelEl.title = e.label;
+      }
+      head.push(labelEl);
+      if (e.code) {
+        const code = e.code;
+        head.push(this._infoBtn(() => this._flagDesc(code), this._t("tooltip_show")));
+      }
+      const from = where(e);
+      O.attList.appendChild(
+        h("div", { class: "ov-att-row sev-" + e.sev }, [
+          h("span", { class: "ov-ichip " + (high ? "problem" : "warn") }, [
+            this._icon(high ? "mdi:alert-circle-outline" : "mdi:alert-outline", "!"),
+          ]),
+          h("div", { class: "ov-att-head" }, head),
+          from ? h("span", { class: "ov-att-where", text: from }) : null,
+        ]),
+      );
+    }
+    if (folded.length) {
+      O.attList.appendChild(
+        h("button", {
+          class: "ov-link ov-att-more",
+          type: "button",
+          text: fmtStr(this._t("ov_att_more"), { n: folded.length }),
+          on: { click: () => this._setActiveTab("flags") },
+        }),
+      );
+    }
+
+    O.attInfo.textContent = "";
+    O.attInfo.style.display = info.length ? "" : "none";
+    if (info.length) {
+      O.attInfo.appendChild(
+        h("span", { class: "ov-att-info-cap", text: this._t("ov_att_info") }),
+      );
+      info.forEach((e, i) => {
+        const from = e.tab ? ` (${this._t("tab_" + e.tab)})` : `: ${e.n}`;
+        O.attInfo.appendChild(
+          document.createTextNode((i ? " · " : " ") + e.label + from),
+        );
+      });
+    }
+    // One line in the hero; the whole list on hover.
+    O.attInfo.title = O.attInfo.textContent;
+  }
+
+  /**
+   * The three house charts over the last 24 h. Every series aggregates the
+   * rooms under control NOW bucket by bucket — the recorder keeps no history
+   * of a room's control state — and ends in the live value at "now", marked
+   * by the chart's dot (the floor and outdoor headlines are that value).
+   */
+  _ovRenderCharts(items) {
+    const O = this._ovEls;
+    const H = this._ovHist;
+    const now = Date.now();
+    const t1 = now - (now % 60000);
+    const t0 = t1 - OV_HIST_HOURS * 3600 * 1000;
+    const ctl = items.filter((d) => d.ctl);
+    const loopsOf = (d) =>
+      Math.max(1, this._entityList(d.r.entities[LOOP_VALVE_KEY]).length);
+    // Which rooms (and weights) an aggregate covers: part of the signatures.
+    const ctlSig = ctl.map((d) => `${d.r.name}:${loopsOf(d)}`).join("|");
+    // One decimal with an explicit sign, never "-0.0".
+    const k1 = (v, suffix) => signed(Math.round(v * 10) / 10 || 0, 1, suffix);
+    const series = (d, key) => {
+      const id = d.r.diagnosticEntities && d.r.diagnosticEntities[key];
+      return id ? H.data.get(id) || [] : [];
+    };
+    // The live value closes a series at t1, after a gap when the newest
+    // bucket is more than four periods old (compile delay + the batch age).
+    const close = (pts, v) => {
+      const out = pts.filter((p) => p.t >= t0 && p.t < t1);
+      if (v !== null) {
+        const last = out.length ? out[out.length - 1] : null;
+        if (last && t1 - last.t > OV_HIST_PERIOD_MS * 4) {
+          out.push({ t: last.t + OV_HIST_PERIOD_MS, v: null });
+        }
+        out.push({ t: t1, v });
+      }
+      return out;
+    };
+    const hoverOf = (pts, text) =>
+      pts.filter((p) => p.v !== null).map((p) => ({ t: p.t, text: text(p.v) }));
+
+    // Deviation spread: measured − setpoint (= −error_c) of the live rooms;
+    // the headline is the share of room-time spent inside the comfort band.
+    const devSeries = [];
+    let inBand = 0;
+    let samples = 0;
+    for (const d of ctl) {
+      const pts = series(d, "error_c")
+        .filter((p) => p.t >= t0)
+        .map((p) => ({ t: p.t, v: p.v === null ? null : -p.v }));
+      for (const p of pts) {
+        if (p.v !== null) {
+          samples += 1;
+          inBand += Math.abs(p.v) <= d.band + 1e-6 ? 1 : 0;
+        }
+      }
+      devSeries.push({ pts, w: 1 });
+    }
+    const nowDev = ctl.filter((d) => d.dev !== null).map((d) => d.dev);
+    const nowSpread = nowDev.length ? ovSpread(nowDev) : null;
+    const fan = close(ovAggregate(devSeries, OV_HIST_PERIOD_MS, ovSpread), nowSpread);
+    let maxAbs = 0;
+    for (const p of fan) {
+      if (p.v) {
+        maxAbs = Math.max(maxAbs, Math.abs(p.v.lo), Math.abs(p.v.hi));
+      }
+    }
+    const scale = ovScale(maxAbs);
+    const sd = scale % 1 ? 1 : 0;
+    const band = this._ovKnob(null, "deadband_c", OV_BAND_FALLBACK_K);
+    O.cDev.val.textContent = samples ? fmt((100 * inBand) / samples, 0, " %") : "—";
+    O.cDev.sub.textContent = samples ? this._t("ov_inband_sub") : "";
+    this._ovPaintChart(O.cDev, {
+      sig: JSON.stringify([H.at, t1, band, scale, nowDev, ctlSig]),
+      draw: () => ovFanSvg(fan, t0, t1, band, scale),
+      nowY: nowSpread ? ovDevY(nowSpread.mid, scale) : null,
+      nowCls: "",
+      yTop: signed(scale, sd, " K"),
+      yBot: signed(-scale, sd, " K"),
+      hover: hoverOf(fan, (v) =>
+        fmtStr(this._t("ov_fan_tip"), {
+          mid: k1(v.mid, " K"),
+          lo: k1(v.lo, ""),
+          hi: k1(v.hi, " K"),
+        }),
+      ),
+      t0,
+      t1,
+    });
+
+    // Floor loops: the valve opening weighted by each room's loop count.
+    let wSum = 0;
+    let loops = 0;
+    let open = 0;
+    for (const d of ctl) {
+      if (d.r.valve === null) {
+        continue;
+      }
+      const n = loopsOf(d);
+      wSum += d.r.valve * n;
+      loops += n;
+      open += d.r.valve >= MF_OPEN_THRESHOLD_PCT ? n : 0;
+    }
+    const mean = loops ? wSum / loops : null;
+    const valve = close(
+      ovAggregate(
+        ctl.map((d) => ({ pts: series(d, "recommended_valve"), w: loopsOf(d) })),
+        OV_HIST_PERIOD_MS,
+        ovWeightedMean,
+      ),
+      mean,
+    );
+    O.cFloor.val.textContent = fmt(mean, 0, " %");
+    O.cFloor.sub.textContent = [
+      this._t("ov_floor_sub"),
+      loops ? fmtStr(this._t("ov_loops_open"), { n: open, m: loops }) : "",
+    ]
+      .filter((x) => x)
+      .join(" · ");
+    this._ovPaintChart(O.cFloor, {
+      sig: JSON.stringify([H.at, t1, mean, ctlSig]),
+      draw: () => ovSeriesSvg(valve, t0, t1, 0, 100, true),
+      nowY: mean === null ? null : ovSeriesY(mean, 0, 100),
+      nowCls: "primary",
+      yTop: "100 %",
+      yBot: "0 %",
+      hover: hoverOf(valve, (v) => fmt(v, 0, " %")),
+      t0,
+      t1,
+    });
+
+    // Outdoor: the shared sensor (else the pump's curve input), on whole
+    // degrees at least 2 K apart.
+    const outId = this._ovOutdoorId();
+    let tOut = outId ? this._stateNum(outId) : null;
+    const hp = (this._live && this._live.heat_pump) || null;
+    if (tOut === null && hp && hp.heating) {
+      tOut = num(hp.heating.t_out_c);
+    }
+    const outPts = close(outId ? H.data.get(outId) || [] : [], tOut);
+    const outVals = outPts.filter((p) => p.v !== null).map((p) => p.v);
+    let lo = outVals.length ? Math.floor(Math.min(...outVals)) : 0;
+    let hi = outVals.length ? Math.ceil(Math.max(...outVals)) : 2;
+    if (hi - lo < 2) {
+      lo = Math.floor((lo + hi) / 2) - 1;
+      hi = lo + 2;
+    }
+    O.cOut.val.textContent = fmt(tOut, 1, " °C");
+    O.cOut.sub.textContent =
+      outVals.length > 1
+        ? fmtStr(this._t("ov_minmax_24h"), {
+            min: fmt(Math.min(...outVals), 1, " °C"),
+            max: fmt(Math.max(...outVals), 1, " °C"),
+          })
+        : "";
+    this._ovPaintChart(O.cOut, {
+      sig: JSON.stringify([H.at, t1, tOut, outId]),
+      draw: () => ovSeriesSvg(outPts, t0, t1, lo, hi, false),
+      nowY: tOut === null ? null : ovSeriesY(tOut, lo, hi),
+      nowCls: "",
+      yTop: fmt(hi, 0, "°"),
+      yBot: fmt(lo, 0, "°"),
+      hover: hoverOf(outPts, (v) => fmt(v, 1, " °C")),
+      t0,
+      t1,
+    });
+
+    // The shared time axis: full six hours inside the window.
+    const xSig = `${t1}|${this._lang}`;
+    if (O.cDev.xSig === xSig) {
+      return;
+    }
+    // Local wall-clock steps (setHours), so a DST change keeps 00/06/12/18.
+    const tick = new Date(t0);
+    tick.setMinutes(0, 0, 0);
+    do {
+      tick.setHours(tick.getHours() + 1);
+    } while (tick.getHours() % 6);
+    const first = tick.getTime();
+    // "18:00", or a short "6 PM" where the locale counts twelve hours.
+    let hourFmt = null;
+    try {
+      hourFmt = new Intl.DateTimeFormat(this._lang, { hour: "2-digit", minute: "2-digit" });
+      if (hourFmt.resolvedOptions().hour12) {
+        hourFmt = new Intl.DateTimeFormat(this._lang, { hour: "numeric" });
+      }
+    } catch (err) {
+      hourFmt = null;
+    }
+    const ticks = [];
+    for (const d = new Date(first); d.getTime() < t1 - 3600 * 1000; ) {
+      ticks.push(new Date(d));
+      d.setHours(d.getHours() + 6);
+    }
+    for (const C of [O.cDev, O.cFloor, O.cOut]) {
+      C.xSig = xSig;
+      C.xTicks.textContent = "";
+      for (const d of ticks) {
+        C.xTicks.appendChild(
+          h("span", {
+            text: hourFmt ? hourFmt.format(d) : d.toLocaleTimeString(),
+            style: `left:${(((d.getTime() - t0) / (t1 - t0)) * 100).toFixed(2)}%`,
+          }),
+        );
+      }
+    }
+  }
+
+  /** Plant rows: heat pump, assist, condensation guard (cooling only). */
+  _ovRenderPlant(items, mode) {
+    const O = this._ovEls;
+    const live = this._live || {};
+    const hp = live.heat_pump || null;
+    const line = (parts) => parts.filter((x) => x).join(" · ");
+    const setChips = (K, chips) => {
+      const sig = JSON.stringify(chips);
+      if (K.extraSig !== sig) {
+        K.extraSig = sig;
+        K.extra.textContent = "";
+        for (const [cls, text] of chips) {
+          K.extra.appendChild(h("span", { class: cls, text }));
+        }
+      }
+    };
+
+    // Heat pump: the water setpoint for the mode (else the pump's mode), the
+    // compressor, then the mode-sync and DHW chips.
+    const PH = O.pHp;
+    PH.el.style.display = hp ? "" : "none";
+    if (hp) {
+      const water = mode === "cooling" ? hp.cooling : hp.heating;
+      const target = water ? num(water.target_c) : null;
+      let note;
+      if (target !== null) {
+        PH.val.textContent = fmt(target, 1, " °C");
+        PH.val.classList.remove("text");
+        note = this._t(mode === "cooling" ? "hp_cool_target" : "hp_heat_target");
+      } else {
+        PH.val.textContent = hp.current_option || "—";
+        PH.val.classList.add("text");
+        note = this._t("hp_current_option");
+      }
+      const gate = hp.heating && hp.heating.gate ? hp.heating.gate : null;
+      let freq = gate ? num(gate.compressor_freq_hz) : null;
+      if (freq === null && hp.flicker) {
+        freq = num(hp.flicker.compressor_freq_hz);
+      }
+      const comp =
+        freq === null
+          ? ""
+          : `${this._t("hp_flicker_freq")}: ` +
+            (freq > 0
+              ? `${this._t("hp_gate_running")} ${fmt(freq, 0, " Hz")}`
+              : this._t("hp_gate_idle"));
+      PH.sub.textContent = line([note, comp]);
+      // Mode sync + DHW exist only with the pump-mode select (as on the tab).
+      const chips = [];
+      if (hp.mode_entity_id) {
+        if (hp.in_sync === true || hp.in_sync === false) {
+          chips.push([
+            hp.in_sync ? "chip chip-ok" : "chip chip-warn",
+            `${this._t("hp_sec_mode")}: ` +
+              this._t(hp.in_sync ? "hp_in_sync" : "hp_diverged"),
+          ]);
+        }
+        chips.push([
+          "chip",
+          `${this._t("ov_dhw")} ${this._t(hp.dhw_active ? "tune_on" : "tune_off")}`,
+        ]);
+      }
+      setChips(PH, chips);
+    }
+
+    // Assist: running sources out of all, by direction (mode colours).
+    const PA = O.pAssist;
+    const withSrc = items.filter((d) => d.r.fastKind !== "none");
+    PA.el.style.display = withSrc.length ? "" : "none";
+    if (withSrc.length) {
+      const active = withSrc.filter(
+        (d) => d.ctl && d.r.fastOn && d.r.fastMode !== "off",
+      );
+      PA.val.textContent = `${active.length}/${withSrc.length}`;
+      const manual = withSrc.filter((d) => d.r.flags.includes("fast_source_manual")).length;
+      PA.sub.textContent = line([
+        this._t(active.length ? "ov_assist_note" : "ov_assist_idle"),
+        manual ? fmtStr(this._t("ov_assist_manual"), { n: manual }) : "",
+      ]);
+      const counts = new Map();
+      for (const d of active) {
+        const cls = fastModeCls(d.r.fastMode);
+        if (cls) {
+          counts.set(cls, (counts.get(cls) || 0) + 1);
+        }
+      }
+      const chips = [];
+      for (const [cls, key] of [
+        ["mode-heating", "assist_state_heating"],
+        ["mode-cooling", "assist_state_cooling"],
+        ["mode-dry", "assist_state_dry"],
+      ]) {
+        if (counts.get(cls)) {
+          chips.push(["ov-mode " + cls, `${this._t(key)}: ${counts.get(cls)}`]);
+        }
+      }
+      setChips(PA, chips);
+    }
+
+    // Condensation guard (cooling only): safe dew point, the highest room
+    // dew point, the S2 counts.
+    const PD = O.pDew;
+    const cooling = mode === "cooling";
+    PD.el.style.display = cooling ? "" : "none";
+    if (cooling) {
+      const dew = num(live.global_safe_dew_point_c);
+      PD.val.textContent = fmt(dew, 1, " °C");
+      let worst = null;
+      for (const d of items) {
+        if (d.ctl && d.r.dew !== null && (worst === null || d.r.dew > worst)) {
+          worst = d.r.dew;
+        }
+      }
+      // Counted, never named: the rooms are the Rooms tab's job.
+      const lacking = this._view.filter((r) => r.dewReason).length;
+      PD.sub.textContent = line([
+        this._t("dew_cap"),
+        dew === null
+          ? lacking
+            ? fmtStr(this._t("dew_none_collective"), { n: lacking })
+            : ""
+          : worst !== null
+            ? fmtStr(this._t("ov_dew_worst"), { v: fmt(worst, 1, " °C") })
+            : "",
+      ]);
+      const throttled = items.filter((d) => d.r.flags.includes("s2_throttle")).length;
+      const chips = [];
+      if (items.some((d) => d.r.flags.includes("s2_condensation"))) {
+        chips.push([
+          "chip chip-" + this._flagSev("s2_condensation"),
+          this._flagLabel("s2_condensation"),
+        ]);
+      }
+      if (throttled) {
+        chips.push([
+          "chip chip-warn",
+          fmtStr(this._t("ov_dew_throttled"), { n: throttled }),
+        ]);
+      }
+      setChips(PD, chips);
+    }
+    O.plant.style.display = hp || withSrc.length || cooling ? "" : "none";
+  }
+
+  /** Manifold rows: name, one bar per circuit filled to its opening, temps. */
+  _ovRenderManifolds() {
+    const O = this._ovEls;
+    const views =
+      this._live && Array.isArray(this._live.manifolds) ? this._live.manifolds : [];
+    O.mfCard.style.display = views.length ? "" : "none";
+    const circuitsOf = (v) => Math.max(1, Number(v.circuits) || 1);
+    const sig = views.map((v) => `${v.id}:${circuitsOf(v)}`).join("|");
+    if (sig !== O.mfSig) {
+      O.mfSig = sig;
+      O.mfList.textContent = "";
+      O.mfRows = views.map((v) => {
+        const row = {
+          name: h("span", { class: "ov-mf-name" }),
+          temps: h("span", { class: "ov-mf-temps" }),
+          slots: [],
+        };
+        const slotsEl = h("div", { class: "ov-mf-slots" });
+        for (let i = 0; i < circuitsOf(v); i += 1) {
+          const fill = h("i");
+          const slot = h("span", { class: "ov-mf-slot" }, [fill]);
+          row.slots.push({ slot, fill });
+          slotsEl.appendChild(slot);
+        }
+        O.mfList.appendChild(
+          h("div", { class: "ov-mf-row" }, [row.name, slotsEl, row.temps]),
+        );
+        return row;
+      });
+    }
+    views.forEach((v, idx) => {
+      const row = O.mfRows[idx];
+      const name = String(v.name || "");
+      row.name.textContent = name;
+      const main = v.main || {};
+      const sVal = num((main.supply || {}).value);
+      const rVal = num((main.return || {}).value);
+      const parts = [];
+      if (sVal !== null) {
+        parts.push(`${this._t("mf_supply")} ${fmt(sVal, 1, " °C")}`);
+      }
+      if (rVal !== null) {
+        parts.push(`${this._t("mf_return")} ${fmt(rVal, 1, " °C")}`);
+      }
+      if (sVal !== null && rVal !== null) {
+        parts.push(`${this._t("mf_dt")} ${signed(sVal - rVal, 1, " K")}`);
+      }
+      // Compact "supply → return" on the row; the words and ΔT in the title.
+      row.temps.textContent =
+        sVal === null && rVal === null ? "" : `${fmt(sVal, 1)} → ${fmt(rVal, 1, "°")}`;
+      row.temps.title = parts.join(" · ");
+      const positions = Array.isArray(v.positions) ? v.positions : [];
+      let open = 0;
+      row.slots.forEach((sl, i) => {
+        const pos = positions[i] || {};
+        const assigned = pos.room_name != null;
+        const pct = assigned ? num((pos.valve || {}).pct) : null;
+        const flagged = assigned && Array.isArray(pos.flags) && pos.flags.length > 0;
+        sl.slot.className =
+          "ov-mf-slot" + (assigned ? "" : " free") + (flagged ? " flag" : "");
+        sl.fill.style.height = (pct === null ? 0 : clamp(pct, 0, 100)) + "%";
+        sl.slot.title =
+          `${i + 1}. ` +
+          (assigned
+            ? `${pos.loop_label || pos.room_name} · ${fmt(pct, 0, " %")}`
+            : this._t("mf_free"));
+        if (pct !== null && pct >= MF_OPEN_THRESHOLD_PCT) {
+          open += 1;
+        }
+      });
+      row.name.title = `${name} · ${this._t("mf_open")} ${open}/${row.slots.length}`;
+    });
+  }
+
+  /**
+   * Fetch the 24 h chart batch — every room's `error_c` and
+   * `recommended_valve` diagnostic sensors plus the outdoor sensor — as
+   * 5-minute recorder statistics in ONE call, at most once per control cycle
+   * and only while the Overview is visible. Fails soft: a missing or failed
+   * series just draws no line.
+   */
+  _ovFetchHistory() {
+    const S = this._ovHist;
+    if (S.inflight || this._activeTab !== "overview" || !this._hass) {
+      return;
+    }
+    const ids = [];
+    for (const r of this._view) {
+      const diag = r.diagnosticEntities || {};
+      for (const key of ["error_c", "recommended_valve"]) {
+        if (diag[key] && !ids.includes(diag[key])) {
+          ids.push(diag[key]);
+        }
+      }
+    }
+    const outId = this._ovOutdoorId();
+    if (outId && !ids.includes(outId)) {
+      ids.push(outId);
+    }
+    const key = ids.join(",");
+    if (key === S.key && Date.now() - S.at < OV_HIST_MAXAGE_MS) {
+      return;
+    }
+    if (!ids.length) {
+      S.key = key;
+      S.at = Date.now();
+      S.data = new Map();
+      return;
+    }
+    S.inflight = true;
+    const end = new Date();
+    const start = new Date(end.getTime() - OV_HIST_HOURS * 3600 * 1000);
+    this._callWSSilent({
+      type: WS.statistics,
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      statistic_ids: ids,
+      period: OV_HIST_PERIOD,
+      types: ["mean"],
+    }).then((res) => {
+      const data = new Map();
+      for (const id of ids) {
+        data.set(id, statPoints(res && res[id], OV_HIST_PERIOD_MS));
+      }
+      S.data = data;
+      S.key = key;
+      S.at = Date.now();
+      S.inflight = false;
+      if (this._activeTab === "overview") {
+        this._renderOverview();
+      }
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -6083,13 +7572,13 @@ class TortoiseUfhPanel extends HTMLElement {
     p.err = h("span", { class: "err-val" });
     const errCell = h("td", { class: "col-error" }, [p.err]);
 
-    // Column 6: valve percent (no mini-bar here — that stays on the Valves tab).
+    // Column 6: valve percent (no bar here — the per-loop bars are on the
+    // Manifolds tab).
     p.valveVal = h("span", { class: "valve-val" });
     const valveCell = h("td", { class: "col-valve" }, [p.valveVal]);
 
     // Columns 7-8: loop supply / return temperature, read live from hass.states
-    // (same entities + helper the Valves tab uses; first loop when a room has
-    // several).
+    // (first loop when a room has several; the Manifolds tab shows every loop).
     p.supplyVal = h("span", { class: "meas-val" });
     const supplyCell = h("td", { class: "col-supply" }, [p.supplyVal]);
     p.returnVal = h("span", { class: "meas-val" });
@@ -6172,11 +7661,11 @@ class TortoiseUfhPanel extends HTMLElement {
       r.setpoint !== null && r.current !== null ? r.setpoint - r.current : null;
     p.err.textContent = signed(err, 1, " K");
 
-    // Valve percent (value only — the mini-bar stays on the Valves tab).
+    // Valve percent (value only — the per-loop bars are on the Manifolds tab).
     p.valveVal.textContent = fmt(r.valve, 0, "%");
 
     // Loop supply / return, read live from hass.states (first loop when a
-    // room has several — the full per-loop breakdown lives on the Valves tab).
+    // room has several — the full per-loop breakdown is on the Manifolds tab).
     const primaryLoop = this._roomLoops(r)[0] || null;
     p.supplyVal.textContent = fmt(
       primaryLoop ? this._stateNum(primaryLoop.supplyId) : null,
@@ -6241,10 +7730,16 @@ class TortoiseUfhPanel extends HTMLElement {
     const hadFocus = !!(detail && active && detail.contains(active));
     this._selectedRoom = null;
     this._render();
-    // Hand focus back to the room's table row when the close came from inside
-    // the inspector (keyboard flow); an outside click keeps its own focus.
+    // Hand focus back to the room's table row (or its Overview strip dot)
+    // when the close came from inside the inspector (keyboard flow); an
+    // outside click keeps its own focus.
     if (hadFocus && prev) {
-      const row = this._rows.get(prev);
+      // On the Overview a room without a dot hands focus to the tab itself
+      // (the Rooms table is hidden there).
+      const row =
+        this._activeTab === "overview" && this._ovEls
+          ? this._ovEls.dots.get(prev) || (this._tabs && this._tabs.btns.overview)
+          : this._rows.get(prev);
       if (row && row.isConnected) {
         row.focus();
       }
@@ -9498,6 +10993,265 @@ button { font-family: inherit; cursor: pointer; }
 .tab:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; border-radius: 6px; }
 .tab-section { min-width: 0; }
 
+/* Overview tab (dashboard): one screen of house-level aggregates (the
+   per-room detail lives on the Rooms tab), product-grade. Colour = meaning
+   only (blue too cold, red too warm, a light green comfort band, grey in
+   band); text stays in text tokens. A container query (not the viewport)
+   stacks the columns, so an open inspector or a collapsed HA sidebar
+   re-flow it correctly. */
+.ov {
+  container: ov / inline-size;
+  --ov-line: color-mix(in srgb, var(--t-fg) 9%, transparent);
+  --ov-soft: color-mix(in srgb, var(--t-fg) 5%, transparent);
+  --ov-shadow: 0 1px 2px rgba(0, 0, 0, .05), 0 10px 28px -16px rgba(0, 0, 0, .18);
+}
+.ov-layout {
+  display: grid; gap: 16px; align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(290px, 340px);
+  grid-template-areas: "main side";
+}
+.ov-main, .ov-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.ov-main { grid-area: main; }
+.ov-side { grid-area: side; }
+.ov-card {
+  background: var(--t-card); border: 1px solid var(--ov-line); border-radius: 16px;
+  box-shadow: var(--ov-shadow); padding: 16px 18px; min-width: 0;
+}
+.ov-eyebrow {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 8px;
+  font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--t-muted);
+}
+.ov-eyebrow .info-btn { margin-left: 0; }
+.ov-eyebrow .chip { margin-left: auto; letter-spacing: 0; text-transform: none; }
+/* Hero: comfort (left) beside what needs attention (right) */
+.ov-hero {
+  display: grid; gap: 14px 24px; align-items: stretch;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); padding: 16px 20px;
+  background:
+    radial-gradient(130% 170% at 0% 0%, color-mix(in srgb, var(--t-primary) 13%, transparent), transparent 55%),
+    var(--t-card);
+}
+.ov-hero-comfort, .ov-hero-att { display: flex; flex-direction: column; min-width: 0; }
+.ov-hero-att { padding-left: 24px; border-left: 1px solid var(--ov-line); }
+.ov-hero-fig { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 12px; }
+.ov-hero-val {
+  font-size: 48px; font-weight: 600; line-height: 1; letter-spacing: -.035em;
+  font-variant-numeric: tabular-nums;
+}
+.ov-hero-sub { font-size: 14px; line-height: 1.35; color: var(--t-muted); max-width: 22ch; }
+.ov-counts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.ov-count {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px;
+  border-radius: 999px; background: var(--ov-soft); font-size: 12px;
+}
+.ov-count i { width: 8px; height: 8px; border-radius: 50%; background: var(--t-muted); }
+.ov-count b { font-weight: 700; font-variant-numeric: tabular-nums; }
+.ov-count.cold i { background: var(--t-cool); }
+.ov-count.warm i { background: var(--t-heat); }
+.ov-count.nodata i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--t-muted); }
+.ov-count.off i { background: var(--t-disabled); }
+.ov-count.passive i { background: color-mix(in srgb, var(--t-cool) 35%, transparent); }
+.ov-strip { display: flex; flex-direction: column; gap: 3px; min-width: 0; margin-top: auto; padding-top: 8px; }
+.ov-strip-cap { margin-left: auto; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.ov-strip-plot { position: relative; height: 29px; margin: 0 12px; border-bottom: 1px solid var(--ov-line); }
+.ov-strip-band {
+  position: absolute; top: 0; bottom: 0; border-radius: 6px 6px 0 0;
+  background: color-mix(in srgb, var(--t-ok) 16%, transparent);
+}
+.ov-strip-zero {
+  position: absolute; top: 0; bottom: 0; left: 50%; width: 1px;
+  background: color-mix(in srgb, var(--t-fg) 18%, transparent);
+}
+.ov-dot {
+  position: absolute; width: 24px; height: 24px; margin-left: -12px; padding: 0;
+  border: 0; border-radius: 50%; background: transparent;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.ov-dot i {
+  width: 13px; height: 13px; border-radius: 50%; background: var(--t-muted);
+  box-shadow: 0 0 0 2px var(--t-card); transition: transform .12s ease;
+}
+.ov-dot.z-cold i { background: var(--t-cool); }
+.ov-dot.z-warm i { background: var(--t-heat); }
+.ov-dot:hover { z-index: 1; }
+.ov-dot:hover i { transform: scale(1.3); }
+.ov-dot:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; z-index: 1; }
+.ov-dot.selected i { box-shadow: 0 0 0 2px var(--t-card), 0 0 0 4px var(--t-primary); }
+.ov-strip-ticks {
+  position: relative; height: 14px; margin: 0 12px;
+  font-size: 10px; color: var(--t-muted); font-variant-numeric: tabular-nums;
+}
+.ov-strip-ticks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+/* Attention (the hero's right half): one line per flag, worst first */
+.ov-att-list { display: flex; flex-direction: column; gap: 6px; }
+.ov-att-row {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 2px 10px 2px 2px; border-radius: 10px;
+  background: color-mix(in srgb, var(--t-warn) 8%, transparent);
+}
+.ov-att-row .ov-ichip, .ov-att-ok .ov-ichip { width: 26px; height: 26px; border-radius: 8px; }
+.ov-att-row .ov-ichip .hicon, .ov-att-ok .ov-ichip .hicon { --mdc-icon-size: 16px; }
+.ov-att-row.sev-problem { background: color-mix(in srgb, var(--t-error) 7%, transparent); }
+.ov-att-row.sev-alarm { background: color-mix(in srgb, var(--t-error) 12%, transparent); }
+.ov-att-head {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 600; line-height: 1.35; white-space: nowrap;
+}
+.ov-att-head > :not(.ov-att-label) { flex: none; }
+.ov-att-head .info-btn { margin-left: 0; }
+.ov-att-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ov-att-row .flag-sx { background: var(--t-warn); color: var(--t-on-primary); }
+.ov-att-row.sev-problem .flag-sx, .ov-att-row.sev-alarm .flag-sx { background: var(--t-error); }
+.ov-att-where { flex: none; font-size: 12px; color: var(--t-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ov-link {
+  border: 0; background: none; padding: 0; font: inherit; color: var(--t-muted); cursor: pointer;
+  text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--t-fg) 22%, transparent);
+  text-underline-offset: 3px;
+}
+.ov-link:hover { color: var(--t-primary); text-decoration-color: currentColor; }
+.ov-link:focus-visible { outline: 2px solid var(--t-primary); outline-offset: 1px; border-radius: 3px; }
+.ov-att-more { align-self: flex-start; margin-left: 6px; font-size: 12px; }
+.ov-att-ok { display: flex; align-items: center; gap: 10px; }
+.ov-att-ok > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; }
+.ov-att-ok-title { font-size: 14px; font-weight: 600; }
+.ov-att-ok-sub { font-size: 12px; color: var(--t-muted); }
+.ov-att-info {
+  margin-top: 8px; font-size: 12px; line-height: 1.45; color: var(--t-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ov-att-info-cap { font-weight: 600; }
+/* House charts: three small multiples on one 24 h time axis */
+.ov-charts { display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ov-chart-card { display: flex; flex-direction: column; padding: 14px 16px 10px; }
+.ov-chart-fig { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; margin-bottom: 12px; }
+.ov-chart-val {
+  font-size: 26px; font-weight: 600; line-height: 1.15; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.ov-chart-sub { font-size: 12px; line-height: 1.35; color: var(--t-muted); }
+.ov-chart { position: relative; height: 92px; margin: auto 0 0 34px; }
+.ov-chart-box { position: absolute; inset: 0; }
+.ov-chart-y {
+  position: absolute; top: 0; bottom: 0; right: 100%; margin-right: 6px; white-space: nowrap;
+  font-size: 10px; color: var(--t-muted); font-variant-numeric: tabular-nums;
+}
+.ov-chart-y span { position: absolute; right: 0; }
+.ov-chart-y span:first-child { top: -6px; }
+.ov-chart-y span:last-child { bottom: -6px; }
+.ov-chart-guide {
+  position: absolute; top: 0; bottom: 0; width: 1px; margin-left: -.5px; pointer-events: none;
+  background: color-mix(in srgb, var(--t-fg) 40%, transparent);
+}
+.ov-chart-tip {
+  position: absolute; top: -8px; transform: translateY(-100%); z-index: 2; pointer-events: none;
+  width: max-content;
+  padding: 4px 8px; border-radius: 8px; font-size: 11px; line-height: 1.3;
+  background: var(--t-fg); color: var(--t-card); box-shadow: var(--ov-shadow);
+}
+.ov-chart-tip span { display: block; white-space: nowrap; }
+.ov-chart-tip .ov-chart-tip-t { opacity: .7; }
+.ov-chart-now {
+  position: absolute; right: 0; width: 7px; height: 7px; margin: -3.5px -3.5px 0 0; pointer-events: none;
+  border-radius: 50%; background: color-mix(in srgb, var(--t-fg) 70%, transparent);
+  box-shadow: 0 0 0 2px var(--t-card);
+}
+.ov-chart-now.primary { background: var(--t-primary); }
+/* The time-label row is the container a narrow plot is detected by (as
+   wide as the plot; a container on the flex card broke its height). */
+.ov-chart-x {
+  container: ovchart / inline-size;
+  position: relative; height: 14px; margin: 5px 0 0 34px;
+  font-size: 10px; color: var(--t-muted); font-variant-numeric: tabular-nums;
+}
+.ov-chart-x span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.ov-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.ov-band { fill: color-mix(in srgb, var(--t-ok) 18%, transparent); }
+.ov-zero { stroke: color-mix(in srgb, var(--t-fg) 16%, transparent); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.ov-env { fill: color-mix(in srgb, var(--t-fg) 10%, transparent); }
+.ov-warm { fill: color-mix(in srgb, var(--t-heat) 30%, transparent); }
+.ov-cold { fill: color-mix(in srgb, var(--t-cool) 30%, transparent); }
+.ov-area { fill: color-mix(in srgb, var(--t-primary) 16%, transparent); }
+.ov-line {
+  fill: none; stroke: color-mix(in srgb, var(--t-fg) 70%, transparent); stroke-width: 1.75;
+  vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round;
+}
+.ov-area ~ .ov-line { stroke: var(--t-primary); }
+/* Manifolds */
+.ov-mf { cursor: pointer; transition: border-color .12s ease; }
+.ov-mf:hover { border-color: color-mix(in srgb, var(--t-primary) 55%, transparent); }
+.ov-mf:focus-visible { outline: 2px solid var(--t-primary); outline-offset: 2px; }
+.ov-mf-list { display: flex; flex-direction: column; gap: 10px; }
+.ov-mf-row {
+  display: grid; grid-template-columns: minmax(0, 76px) minmax(0, 1fr) auto;
+  align-items: center; gap: 10px;
+}
+.ov-mf-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-mf-temps { font-size: 12px; color: var(--t-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ov-mf-slots { display: flex; gap: 3px; height: 22px; }
+.ov-mf-slot {
+  flex: 1 1 0; max-width: 22px; border-radius: 5px; background: var(--ov-soft);
+  display: flex; align-items: flex-end; overflow: hidden;
+}
+.ov-mf-slot i { display: block; width: 100%; height: 0; background: var(--t-primary); border-radius: 4px 4px 0 0; transition: height .3s ease; }
+.ov-mf-slot.free { background: transparent; box-shadow: inset 0 0 0 1px var(--ov-line); }
+.ov-mf-slot.flag { box-shadow: inset 0 0 0 1.5px var(--t-error); }
+/* Icon chips (attention, plant) */
+.ov-ichip {
+  flex: none; width: 30px; height: 30px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--t-primary); background: color-mix(in srgb, var(--t-primary) 13%, transparent);
+}
+.ov-ichip .hicon { --mdc-icon-size: 18px; color: inherit; }
+.ov-ichip .hicon-fallback { color: inherit; }
+.ov-ichip.ok { color: var(--t-ok); background: color-mix(in srgb, var(--t-ok) 15%, transparent); }
+.ov-ichip.warn { color: var(--t-warn); background: color-mix(in srgb, var(--t-warn) 16%, transparent); }
+.ov-ichip.problem { color: var(--t-error); background: color-mix(in srgb, var(--t-error) 14%, transparent); }
+/* Plant rows */
+.ov-plant { display: flex; flex-direction: column; gap: 2px; }
+.ov-plant .ov-eyebrow { margin-bottom: 6px; }
+.ov-prow { display: flex; align-items: center; gap: 12px; padding: 6px 8px; margin: 0 -8px; border-radius: 12px; }
+.ov-prow.link { cursor: pointer; transition: background-color .12s ease; }
+.ov-prow.link:hover { background: var(--ov-soft); }
+.ov-prow.link:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; }
+.ov-prow-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ov-prow-cap { font-size: 12px; color: var(--t-muted); }
+.ov-prow-fig { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; }
+.ov-prow-val {
+  font-size: 19px; font-weight: 600; letter-spacing: -.01em; line-height: 1.25;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.ov-prow-val.text { font-size: 15px; }
+.ov-prow-sub { font-size: 12px; color: var(--t-muted); }
+.ov-prow-extra { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
+.ov-prow-sub:empty, .ov-prow-extra:empty { display: none; }
+.ov-mode { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.ov-mode::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--t-accent); }
+.ov-mode.mode-heating::before { background: var(--t-heat); }
+.ov-mode.mode-cooling::before { background: var(--t-cool); }
+.ov-mode.mode-dry::before { background: var(--t-dry); }
+.ov-layout.no-side { grid-template-columns: minmax(0, 1fr); grid-template-areas: "main"; }
+.ov-layout.no-side .ov-side { display: none; }
+/* Below ~1100 px the main column would drop under ~750 px next to the side
+   column (cramped hero, unreadable chart axes): stack, side cards in a row. */
+@container ov (max-width: 1100px) {
+  .ov-layout { grid-template-columns: minmax(0, 1fr); grid-template-areas: "main" "side"; }
+  .ov-side { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: start; }
+}
+/* A narrow plot keeps every other time label (12 h apart). */
+@container ovchart (max-width: 150px) {
+  .ov-chart-x span:nth-child(even) { display: none; }
+}
+@container ov (max-width: 620px) {
+  .ov-hero { grid-template-columns: minmax(0, 1fr); }
+  .ov-hero-att { padding: 14px 0 0; border-left: 0; border-top: 1px solid var(--ov-line); }
+  .ov-hero-val { font-size: 44px; }
+  .ov-charts { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-dot i, .ov-mf-slot i { transition: none; }
+}
+
 /* Tuning tab */
 .tune { display: flex; flex-direction: column; gap: 14px; }
 .tune-intro { font-size: 12px; color: var(--t-muted); line-height: 1.4; }
@@ -9666,7 +11420,6 @@ button { font-family: inherit; cursor: pointer; }
 .sp-val { font-weight: 600; }
 .err-val { font-weight: 600; white-space: nowrap; }
 .trend { font-size: 12px; color: var(--t-muted); white-space: nowrap; }
-.valve-mini { display: flex; flex-direction: column; gap: 3px; min-width: 64px; }
 .valve-val { font-size: 13px; font-weight: 600; }
 .valve-track { height: 6px; border-radius: 999px; background: var(--t-chip); overflow: hidden; }
 .valve-fill { display: block; height: 100%; width: 0%; background: var(--t-primary); border-radius: 999px; transition: width .3s ease; }
@@ -9752,7 +11505,7 @@ details.flag-legend[open] > summary { margin-bottom: 12px; }
 .flag-row.is-on.sev-alarm .flag-row-status { color: var(--t-error); font-weight: 700; }
 .flag-row.is-on.sev-alarm .flag-dot { background: var(--t-error); box-shadow: 0 0 0 3px color-mix(in srgb, var(--t-error) 28%, transparent); }
 
-/* Valves + Assist tables (share the room-table look) */
+/* Assist table (shares the room-table look) */
 .assist-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 /* Sentence-case headers (A1) — consistent with the Rooms table. */
 .assist-table thead th {
@@ -9763,25 +11516,15 @@ details.flag-legend[open] > summary { margin-bottom: 12px; }
 .assist-table tbody td {
   padding: 8px 10px; border-bottom: 1px solid var(--t-line); vertical-align: middle;
 }
-.valve-row, .assist-row { cursor: pointer; transition: background-color .1s ease; }
-.valve-row:hover, .assist-row:hover { background: var(--t-chip); }
-.valve-row:focus-visible, .assist-row:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; }
-.valve-row.selected, .assist-row.selected { box-shadow: inset 3px 0 0 var(--t-primary); }
+.assist-row { cursor: pointer; transition: background-color .1s ease; }
+.assist-row:hover { background: var(--t-chip); }
+.assist-row:focus-visible { outline: 2px solid var(--t-primary); outline-offset: -2px; }
+.assist-row.selected { box-shadow: inset 3px 0 0 var(--t-primary); }
 .mono { font-family: ui-monospace, "Roboto Mono", monospace; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .mono.mode-heating { color: var(--t-heat); }
 .mono.mode-cooling { color: var(--t-cool); }
 .mono.mode-dry { color: var(--t-dry); }
 .mono.mismatch { color: var(--t-warn); }
-.loop-caret { border: 0; background: transparent; color: var(--t-muted); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 6px; transition: transform .15s ease; }
-.loop-caret:hover { color: var(--t-fg); background: var(--t-chip); }
-.loop-caret.open { transform: rotate(90deg); }
-.loop-caret .hicon { --mdc-icon-size: 16px; }
-.loop-detail td { background: color-mix(in srgb, var(--t-chip) 45%, transparent); }
-.loop-list { display: flex; flex-direction: column; gap: 4px; }
-.loop-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 12px; padding: 2px 0; }
-.loop-label { font-weight: 600; color: var(--t-muted); min-width: 60px; }
-.loop-metric { display: inline-flex; align-items: baseline; gap: 4px; }
-.loop-cap { font-size: 11px; color: var(--t-muted); text-transform: uppercase; letter-spacing: .03em; }
 .loop-link { border: 0; background: transparent; color: var(--t-primary); cursor: pointer; display: inline-flex; align-items: center; gap: 3px; padding: 0; font: inherit; }
 .loop-link:hover { text-decoration: underline; }
 .loop-link .hicon, .loop-link .hicon-fallback { --mdc-icon-size: 14px; opacity: .6; }

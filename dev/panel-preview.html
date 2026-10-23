@@ -15,8 +15,10 @@
       custom element and assigns hass.
 
       Open directly in a browser (file://) or serve the repo root. Use the
-      controls at the top to flip theme, language and scenario, and to simulate
-      the 5-second poll advancing the "last cycle" age.
+      controls at the top to flip theme, language, scenario and room count
+      (3 | 11 — the latter adds eight generated rooms so the panel can be
+      checked at the owner's scale), and to simulate the 5-second poll
+      advancing the "last cycle" age.
     -->
     <style>
       :root {
@@ -110,11 +112,16 @@
       <strong>Język</strong>
       <button data-lang-btn="pl" class="active">PL</button>
       <button data-lang-btn="en">EN</button>
+      <button data-lang-btn="de">DE</button>
       <span class="sep"></span>
       <strong>Scenariusz</strong>
       <button data-scenario-btn="heating" class="active">Grzanie</button>
       <button data-scenario-btn="cooling">Chłodzenie</button>
       <button data-scenario-btn="stale">Stale</button>
+      <span class="sep"></span>
+      <strong>Pokoje</strong>
+      <button data-rooms-btn="3" class="active">3</button>
+      <button data-rooms-btn="11">11</button>
       <span class="sep"></span>
       <!-- Per-room control is the two-state segment in the room table's first
            column (Off / Live) — click it to exercise set_room_state. -->
@@ -192,10 +199,336 @@
         },
       };
 
+      // --- Generated rooms for the "Pokoje: 11" scale check ------------------
+      // Eight rooms appended to the three hand-written ones when
+      // `state.roomCount >= 11`, so the panel can be checked at the owner's
+      // real scale. ONE table drives everything a room needs: its get_config
+      // entry, its get_live report per scenario, its hass.states entries
+      // (rebuilt on every push / poll, see syncExtraStates) and its manifold
+      // circuits.
+      //   area / offset / cooling / split / loops   config (loops = valves)
+      //   state     default control state; "off" gives the passive Mode.OFF
+      //             result (valve 0, split off, no flags)
+      //   upstairs  the loops sit on the "Piętro" manifold (eight rooms need
+      //             >= 8 circuits, so the ground-floor rooms stay unplaced)
+      //   stuck     loop whose actuator feedback stays at 0 % while the room is
+      //             live (pairs with the valve_mismatch flag); parked = where
+      //             the valves physically stand while the room is off
+      //   rhLost    humidity entity unavailable (pairs with rh_stale_gated)
+      //   h / c     heating / cooling view: err = setpoint - measured [K]
+      //             (heating: + cold; cooling: - warm), valve = commanded [%]
+      //             (raw = unclamped PI demand, thr = S2 throttle factor),
+      //             trend [K/h], dew = room dew point [degC] (<= 17.4, so the
+      //             global safe dew point of 19.4 stays the maximum), fast =
+      //             split mode while engaged (manual = adopted from the remote:
+      //             mirrored, no target), dwell = min-ON dwell left [s]
+      const BASE_ROOMS = ["Salon", "Kuchnia", "Łazienka"];
+      const EXTRA_ROOMS = [
+        {
+          name: "Sypialnia", slug: "sypialnia", area: 15.5, offset: -0.5,
+          cooling: true, split: true, loops: 1, state: "live", upstairs: true,
+          rhLost: true,
+          h: { err: 0.2, valve: 38, trend: 0.04, dew: 8.4, flags: ["rh_stale_gated"] },
+          c: { err: -0.2, valve: 30, trend: 0.03, dew: 13.4, flags: ["rh_stale_gated"] },
+        },
+        {
+          name: "Gabinet", slug: "gabinet", area: 12.0, offset: 0,
+          cooling: true, split: true, loops: 1, state: "live", upstairs: true,
+          h: {
+            err: 0.1, valve: 41, trend: 0.02, dew: 8.6,
+            fast: "heating", manual: true, flags: ["fast_source_manual"],
+          },
+          c: {
+            err: -0.1, valve: 24, trend: 0.02, dew: 13.1,
+            fast: "cooling", manual: true, flags: ["fast_source_manual"],
+          },
+        },
+        {
+          name: "Garderoba", slug: "garderoba", area: 6.0, offset: 0,
+          cooling: true, split: false, loops: 1, state: "off", upstairs: true,
+          parked: 30,
+          h: { err: -0.1, valve: 20, trend: 0.0, dew: 8.8 },
+          c: { err: 0.1, valve: 12, trend: 0.0, dew: 12.8 },
+        },
+        {
+          name: "Hol", slug: "hol", area: 9.5, offset: 0,
+          cooling: true, split: false, loops: 2, state: "live", upstairs: true,
+          stuck: 0,
+          h: { err: 0.0, valve: 33, trend: 0.0, dew: 9.0, flags: ["valve_mismatch"] },
+          c: { err: 0.0, valve: 20, trend: 0.0, dew: 13.6, flags: ["valve_mismatch"] },
+        },
+        {
+          name: "Jadalnia", slug: "jadalnia", area: 24.0, offset: 0,
+          cooling: true, split: false, loops: 3, state: "live", upstairs: false,
+          h: { err: 0.8, valve: 78, trend: 0.18, dew: 9.3 },
+          c: { err: -0.8, valve: 62, trend: 0.12, dew: 14.6 },
+        },
+        {
+          name: "Pokój gościnny", slug: "goscinny", area: 14.0, offset: 0,
+          cooling: true, split: true, loops: 1, state: "live", upstairs: true,
+          h: { err: -0.9, valve: 0, raw: -3, trend: -0.12, dew: 9.9 },
+          c: { err: 0.9, valve: 0, raw: -3, trend: -0.1, dew: 12.9 },
+        },
+        {
+          name: "Pralnia", slug: "pralnia", area: 7.5, offset: 0,
+          cooling: false, split: false, loops: 1, state: "live", upstairs: false,
+          h: { err: 0.3, valve: 55, trend: 0.08, dew: 10.6 },
+          c: { err: -0.3, valve: 0, trend: 0.04, dew: 14.2, flags: ["cooling_disabled"] },
+        },
+        {
+          name: "Pokój dziecięcy", slug: "dzieciecy", area: 13.0, offset: 0.5,
+          cooling: true, split: true, loops: 1, state: "live", upstairs: true,
+          h: {
+            err: 1.6, valve: 100, raw: 112, trend: 0.1, dew: 9.2,
+            fast: "heating", dwell: 360,
+          },
+          c: {
+            err: -1.6, valve: 25, raw: 62, thr: 0.4, trend: 0.18, dew: 17.2,
+            fast: "dry", dwell: 180, flags: ["s2_throttle"],
+          },
+        },
+      ];
+
+      /** Names of the rooms currently shown (3 hand-written, or all 11). */
+      function activeRoomNames() {
+        return state.roomCount >= 11
+          ? BASE_ROOMS.concat(EXTRA_ROOMS.map((r) => r.name))
+          : BASE_ROOMS;
+      }
+
+      /**
+       * Entity ids of one generated room. The valve / supply / return lists are
+       * parallel (one entry per loop) and follow the hand-written rooms'
+       * naming, which is also what sampleManifolds' loop() helper derives the
+       * probe ids from (valve -> supply / return, number. -> sensor.).
+       */
+      function extraIds(r) {
+        const list = (domain, key) =>
+          Array.from(
+            { length: r.loops },
+            (_, k) =>
+              domain + "." + r.slug + "_" + key + (r.loops > 1 ? "_" + (k + 1) : ""),
+          );
+        return {
+          temp: "sensor." + r.slug + "_temp",
+          rh: "sensor." + r.slug + "_rh",
+          valves: list("number", "valve"),
+          supply: list("sensor", "supply"),
+          return: list("sensor", "return"),
+          split: r.split ? "climate." + r.slug + "_split" : null,
+        };
+      }
+
+      /** One generated room's get_config entry. */
+      function extraConfigRoom(r) {
+        const id = extraIds(r);
+        // The registered diagnostic sensors (websocket._DIAGNOSTIC_SENSOR_KEYS).
+        const diagnostic = {};
+        for (const key of [
+          "recommended_valve",
+          "error_c",
+          "trend_c_per_h",
+          "room_dew_point",
+          "i_term",
+          "trend_term",
+          "fast_source_mode",
+        ]) {
+          diagnostic[key] = "sensor.tortoise_" + r.slug + "_" + key;
+        }
+        return {
+          name: r.name,
+          area_m2: r.area,
+          offset_c: r.offset,
+          cooling_enabled: r.cooling,
+          control_state: state.roomStates[r.name],
+          fast_source_kind: r.split ? "split" : "none",
+          fast_source_group: "",
+          fast_source_window_start: null,
+          fast_source_window_end: null,
+          entities: {
+            entity_temp_room: id.temp,
+            entity_humidity: id.rh,
+            entity_temp_outdoor: "sensor.outdoor_temp",
+            entity_valves: id.valves,
+            entity_supply: id.supply,
+            entity_return: id.return,
+            entity_fast_source: id.split,
+          },
+          diagnostic_entities: diagnostic,
+        };
+      }
+
+      /**
+       * One generated room's numbers for a scenario, honouring its control
+       * state (state.roomStates) and the home setpoint. An "off" room (core
+       * Mode.OFF) and a cooling-disabled room in cooling mode both give the
+       * passive result: valve 0, split off, PI idle.
+       */
+      function extraView(r, scenario) {
+        const cooling = scenario === "cooling";
+        const v = cooling ? r.c : r.h;
+        const live = state.roomStates[r.name] === "live";
+        const passive = !live || (cooling && !r.cooling);
+        const setpoint = +(state.homeSetpoint + r.offset).toFixed(2);
+        const valve = passive ? 0 : v.valve;
+        const raw = passive ? 0 : (v.raw ?? v.valve);
+        // PI split as the core reports it: error in the "needs more actuation"
+        // sign, dead-banded (0.3 K, kp 14); trend damping only while the room
+        // moves toward the setpoint (kt 12); the integrator is the remainder.
+        const dir = cooling ? -1 : 1;
+        const e = dir * v.err;
+        const p = passive
+          ? 0
+          : +(14 * Math.sign(e) * Math.max(0, Math.abs(e) - 0.3)).toFixed(1);
+        const trendTerm = passive ? 0 : +(-12 * Math.max(0, dir * v.trend)).toFixed(1);
+        const iTerm = passive ? 0 : +(raw - p - trendTerm).toFixed(1);
+        const fast = !passive && r.split && v.fast ? v.fast : "off";
+        const target =
+          fast === "off" || v.manual
+            ? null
+            : +(setpoint + { heating: 1, cooling: -1, dry: 0 }[fast]).toFixed(1);
+        const band =
+          Math.abs(v.err) <= 0.3
+            ? "W paśmie nastawy"
+            : v.err > 0
+              ? "Poniżej zadanej o " + v.err.toFixed(1) + " K"
+              : "Powyżej zadanej o " + (-v.err).toFixed(1) + " K";
+        const splitText =
+          fast === "off"
+            ? ""
+            : v.manual
+              ? ", split sterowany ręcznie"
+              : fast === "dry"
+                ? ", split osusza"
+                : ", split wspomaga do " + target + "°C";
+        return {
+          cooling,
+          live,
+          passive,
+          setpoint,
+          err: v.err,
+          temp: +(setpoint - v.err).toFixed(2),
+          trend: v.trend,
+          dew: v.dew,
+          valve,
+          raw,
+          throttle: passive ? 1.0 : (v.thr ?? 1.0),
+          p,
+          trendTerm,
+          iTerm,
+          fast,
+          target,
+          dwell: fast !== "off" && !v.manual ? (v.dwell ?? null) : null,
+          flags: live ? v.flags || [] : [],
+          // Mirrors classify_dew_eligibility: Mode.OFF reads as not cooling.
+          dewReason: !cooling || !live ? "not_cooling_mode" : r.cooling ? null : "cooling_disabled",
+          explanation: !live
+            ? "Off (" + r.name + "): zawor 0%, brak komend."
+            : passive
+              ? "Chlodzenie wykluczone (" + r.name + "): zawor 0%, split OFF."
+              : band + " — zawór " + valve + "%" + splitText + ".",
+          // Actuator feedback per loop: a live room follows its command except
+          // the stuck loop; an off room's valves stay where they were parked.
+          feedback: Array.from({ length: r.loops }, (_, k) =>
+            live ? (r.stuck === k ? 0 : valve) : (r.parked ?? 0),
+          ),
+        };
+      }
+
+      /** One generated room's get_live entry. */
+      function extraLive(r, scenario) {
+        const x = extraView(r, scenario);
+        return liveRoom({
+          valve_position_pct: x.valve,
+          setpoint_c: x.setpoint,
+          fast_source:
+            x.fast === "off"
+              ? undefined
+              : { on: true, mode: x.fast, target_temperature_c: x.target },
+          report: {
+            error_c: x.err,
+            trend_c_per_h: x.trend,
+            room_dew_point_c: x.dew,
+            room_temperature_c: x.temp,
+            p_term: x.p,
+            i_term: x.iTerm,
+            trend_term: x.trendTerm,
+            feedforward_term: 0.0,
+            raw_valve_pct: x.raw,
+            saturated: x.raw > 100,
+            dew_throttle_factor: x.throttle,
+            integrator_frozen: x.passive,
+            dew_excluded_reason: x.dewReason,
+            fast_dwell_remaining_s: x.dwell,
+            flags: x.flags,
+            explanation: x.explanation,
+          },
+        });
+      }
+
+      /**
+       * Loop water temperatures [degC]: the supply sits a little below the
+       * manifold main, the return one loop-dT below it (above it when cooling).
+       * A closed valve carries no flow, so its supply and return agree.
+       */
+      function extraLoopTemps(roomIdx, loopIdx, open, cooling) {
+        const main = cooling ? 17.2 : 34.6;
+        const supply = main - 0.3 - 0.1 * ((roomIdx + loopIdx) % 4);
+        const dt = open ? 3.0 + 0.7 * ((roomIdx * 3 + loopIdx * 2) % 4) : 0.2;
+        return [supply, cooling ? supply + dt : supply - dt];
+      }
+
+      /** Relative humidity [%] consistent with a temperature and dew point (Magnus). */
+      function rhFromDew(tempC, dewC) {
+        const a = 17.62;
+        const b = 243.12;
+        return 100 * Math.exp((a * dewC) / (b + dewC) - (a * tempC) / (b + tempC));
+      }
+
+      /**
+       * (Re)write the generated rooms' entries in STATES so hass.states agrees
+       * with the live payload: temperature, humidity, valve feedback, loop
+       * supply / return and the split's climate entity. Inert while the rooms
+       * are hidden; re-run on every push and live poll so a scenario flip, a
+       * room-state toggle or a new home setpoint is reflected.
+       */
+      function syncExtraStates(scenario) {
+        const reading = (value, unit) => ({
+          state: String(value),
+          attributes: { unit_of_measurement: unit },
+        });
+        const cooling = scenario === "cooling";
+        // Physical climate state + hvac_action per commanded split mode.
+        const climate = {
+          off: ["off", "off"],
+          heating: ["heat", "heating"],
+          cooling: ["cool", "cooling"],
+          dry: ["dry", "drying"],
+        };
+        EXTRA_ROOMS.forEach((r, roomIdx) => {
+          const x = extraView(r, scenario);
+          const id = extraIds(r);
+          STATES[id.temp] = reading(x.temp.toFixed(1), "°C");
+          STATES[id.rh] = r.rhLost
+            ? { state: "unavailable", attributes: {} }
+            : reading(Math.round(rhFromDew(x.temp, x.dew)), "%");
+          id.valves.forEach((valveId, k) => {
+            STATES[valveId] = reading(x.feedback[k], "%");
+            const [supply, ret] = extraLoopTemps(roomIdx, k, x.feedback[k] >= 5, cooling);
+            STATES[id.supply[k]] = reading(supply.toFixed(1), "°C");
+            STATES[id.return[k]] = reading(ret.toFixed(1), "°C");
+          });
+          if (id.split) {
+            const [physical, action] = climate[x.fast];
+            STATES[id.split] = { state: physical, attributes: { hvac_action: action } };
+          }
+        });
+      }
+
       // --- Sample get_config (matches ConfigResult.to_dict) -----------------
       function sampleConfig(scenario) {
         const mode = scenario === "cooling" ? "cooling" : "heating";
-        return {
+        const config = {
           home_setpoint_c: state.homeSetpoint,
           mode,
           global_safe_dew_point_entity_id: "sensor.tortoise_global_safe_dew_point",
@@ -287,6 +620,11 @@
             },
           ],
         };
+        // "Pokoje: 11" — append the generated rooms (see EXTRA_ROOMS).
+        if (state.roomCount >= 11) {
+          config.rooms.push(...EXTRA_ROOMS.map(extraConfigRoom));
+        }
+        return config;
       }
 
       // --- Sample get_live (matches LiveResult.to_dict) ---------------------
@@ -437,6 +775,12 @@
                 },
           ),
         };
+        // "Pokoje: 11" — the generated rooms (see EXTRA_ROOMS).
+        if (state.roomCount >= 11) {
+          for (const r of EXTRA_ROOMS) {
+            rooms[r.name] = extraLive(r, scenario);
+          }
+        }
         // Inject the canonical two-state control from the shared room-state
         // map (mirrors LiveRoomView.to_dict).
         for (const [name, lr] of Object.entries(rooms)) {
@@ -471,12 +815,16 @@
       function sampleManifolds(scenario) {
         const cooling = scenario === "cooling";
         const sup = cooling ? 17.2 : 34.6;
-        const loop = (position, room, index, label, valveId, pct, ts, tr, flags) => ({
+        // `pct` is the actuator feedback; `commandPct` (default: the same) the
+        // commanded position — they differ for a stuck or switched-off valve.
+        const loop = (
+          position, room, index, label, valveId, pct, ts, tr, flags, commandPct,
+        ) => ({
           position,
           room_name: room,
           loop_index: index,
           loop_label: label,
-          valve: { pct, command_pct: pct, entity_id: valveId },
+          valve: { pct, command_pct: commandPct ?? pct, entity_id: valveId },
           supply: { value: ts, entity_id: valveId ? valveId.replace("valve", "supply").replace("number.", "sensor.") : null },
           return: { value: tr, entity_id: valveId ? valveId.replace("valve", "return").replace("number.", "sensor.") : null },
           delta_k: ts !== null && tr !== null ? ts - tr : null,
@@ -494,7 +842,7 @@
           flags: [],
         });
         const d = (k) => (cooling ? -k : k);
-        return [
+        const manifolds = [
           {
             id: "wschod",
             name: "Wschód",
@@ -538,6 +886,54 @@
             ],
           },
         ];
+        // "Pokoje: 11" — a third distributor, "Piętro" (8 circuits, main on the
+        // left, both main probes): the upstairs rooms' loops in table order
+        // (7 of them), circuit 8 left free. Jadalnia and Pralnia (4 loops) sit
+        // on no mock manifold — a valve wired to no circuit simply isn't drawn.
+        if (state.roomCount >= 11) {
+          // Room flags that belong on every circuit of the room (manifold.py).
+          const loopFlags = ["s1_floor_overheat", "s2_condensation", "valve_mismatch"];
+          const positions = [];
+          EXTRA_ROOMS.forEach((r, roomIdx) => {
+            if (!r.upstairs) {
+              return;
+            }
+            const x = extraView(r, scenario);
+            extraIds(r).valves.forEach((valveId, k) => {
+              const feedback = x.feedback[k];
+              const [ts, tr] = extraLoopTemps(roomIdx, k, feedback >= 5, cooling);
+              positions.push(
+                loop(
+                  positions.length + 1,
+                  r.name,
+                  k,
+                  r.loops > 1 ? r.name + " " + (k + 1) : r.name,
+                  valveId,
+                  feedback,
+                  ts,
+                  tr,
+                  x.flags.filter((f) => loopFlags.includes(f)),
+                  x.valve,
+                ),
+              );
+            });
+          });
+          while (positions.length < 8) {
+            positions.push(free(positions.length + 1));
+          }
+          manifolds.push({
+            id: "pietro",
+            name: "Piętro",
+            circuits: 8,
+            side: "left",
+            main: {
+              supply: { value: sup, entity_id: "sensor.pietro_z0" },
+              return: { value: sup - d(4.4), entity_id: "sensor.pietro_p0" },
+            },
+            positions,
+          });
+        }
+        return manifolds;
       }
 
       // --- Sample heat-pump payload (matches HeatPumpRuntime.to_dict) -------
@@ -566,7 +962,9 @@
           heating: null, // heating setpoint entity not configured (default)
           hp_active: null,
           hp_active_configured: false,
-          writes_enabled: Object.values(state.roomStates).includes("live"),
+          // Only the rooms shown count (the generated ones are seeded "live"
+          // even while hidden).
+          writes_enabled: activeRoomNames().some((n) => state.roomStates[n] === "live"),
         };
       }
 
@@ -578,10 +976,19 @@
         const hours = tMs / 3600000;
         const k = id.toLowerCase();
         if (k.includes("valve") || k.includes("recommended")) {
-          return Math.max(0, Math.min(100, Math.round(50 + 42 * Math.sin(hours / 3))));
+          // Per-entity phase from the id hash, so the Overview's aggregated
+          // valve mean is not one room's wave.
+          const phase = 2 * Math.PI * ((hashId(k) & 0xff) / 255);
+          return Math.max(0, Math.min(100, Math.round(50 + 42 * Math.sin(hours / 3 + phase))));
         }
         if (k.includes("error")) {
-          return +(0.8 * Math.sin(hours / 2.5)).toFixed(2);
+          // Per-entity amplitude 0.4..1.2 K, phase and period divisor 2..4 h
+          // from the id hash, so every room's sparkline differs (|v| <= 1.2).
+          const h = hashId(k);
+          const amp = 0.4 + 0.8 * ((h & 0xff) / 255);
+          const phase = 2 * Math.PI * (((h >>> 8) & 0xff) / 255);
+          const period = 2 + 2 * (((h >>> 16) & 0xff) / 255);
+          return +(amp * Math.sin(hours / period + phase)).toFixed(2);
         }
         if (k.includes("dew")) {
           return +(12 + 3 * Math.sin(hours / 4)).toFixed(1);
@@ -595,6 +1002,15 @@
         let base = 21.5;
         if (k.includes("lazienka")) base = 22.8;
         return +(base + 1.1 * Math.sin(hours / 2.5) + 0.3 * Math.sin(hours)).toFixed(2);
+      }
+
+      // Small deterministic string hash (FNV-1a, unsigned 32-bit).
+      function hashId(id) {
+        let h = 2166136261;
+        for (let i = 0; i < id.length; i++) {
+          h = Math.imul(h ^ id.charCodeAt(i), 16777619) >>> 0;
+        }
+        return h;
       }
 
       function mockHistory(entityIds, startMs, endMs) {
@@ -613,16 +1029,35 @@
         return out;
       }
 
-      function mockStatistics(ids, startMs, endMs) {
-        const out = {};
-        const hourMs = 3600 * 1000;
-        for (const id of ids || []) {
-          const arr = [];
-          let t = Math.ceil(startMs / hourMs) * hourMs;
-          for (; t <= endMs; t += hourMs) {
-            arr.push({ start: t, end: t + hourMs, mean: waveValue(id, t) }); // ms
+      // `period` is HA's bucket size: "5minute" / "hour" (the default, also for
+      // an unknown value) are epoch-aligned, "day" starts at LOCAL midnight like
+      // HA's daily statistics. Rows keep `start` / `end` in epoch MILLISECONDS.
+      function mockStatistics(ids, startMs, endMs, period) {
+        const buckets = [];
+        if (period === "day") {
+          const day = new Date(startMs);
+          day.setHours(0, 0, 0, 0);
+          if (day.getTime() < startMs) {
+            day.setDate(day.getDate() + 1);
           }
-          out[id] = arr;
+          while (day.getTime() <= endMs) {
+            const start = day.getTime();
+            day.setDate(day.getDate() + 1);
+            buckets.push([start, day.getTime()]);
+          }
+        } else {
+          const stepMs = period === "5minute" ? 5 * 60 * 1000 : 3600 * 1000;
+          for (let t = Math.ceil(startMs / stepMs) * stepMs; t <= endMs; t += stepMs) {
+            buckets.push([t, t + stepMs]);
+          }
+        }
+        const out = {};
+        for (const id of ids || []) {
+          out[id] = buckets.map(([start, end]) => ({
+            start,
+            end,
+            mean: waveValue(id, start), // ms timestamps, as HA
+          }));
         }
         return out;
       }
@@ -636,7 +1071,13 @@
         lang: "pl",
         scenario: "heating",
         ageSeconds: 45,
-        roomStates: { Salon: "live", Kuchnia: "off", "Łazienka": "live" },
+        roomStates: Object.assign(
+          { Salon: "live", Kuchnia: "off", "Łazienka": "live" },
+          // The generated rooms (shown only with roomCount >= 11) — always seeded.
+          Object.fromEntries(EXTRA_ROOMS.map((r) => [r.name, r.state])),
+        ),
+        // Rooms shown: 3 (the hand-written ones) or 11 (+ EXTRA_ROOMS).
+        roomCount: 3,
         // Global home setpoint (read by get_config + get_live, written by
         // set_home_temperature).
         homeSetpoint: 21.0,
@@ -693,6 +1134,7 @@
       }
 
       function makeHass() {
+        syncExtraStates(state.scenario);
         return {
           language: state.lang,
           locale: { language: state.lang },
@@ -704,6 +1146,9 @@
               return Promise.resolve(sampleConfig(state.scenario));
             }
             if (msg.type === "tortoise_ufh/get_live") {
+              // Keep the generated rooms' entity states in step with the
+              // payload (a scenario / room-state change can come via the panel).
+              syncExtraStates(state.scenario);
               return Promise.resolve(sampleLive(state.scenario, state.ageSeconds));
             }
             if (msg.type === "history/history_during_period") {
@@ -714,7 +1159,9 @@
             if (msg.type === "recorder/statistics_during_period") {
               const startMs = Date.parse(msg.start_time);
               const endMs = msg.end_time ? Date.parse(msg.end_time) : Date.now();
-              return Promise.resolve(mockStatistics(msg.statistic_ids, startMs, endMs));
+              return Promise.resolve(
+                mockStatistics(msg.statistic_ids, startMs, endMs, msg.period),
+              );
             }
             // Writes: echo a tiny result and mutate local mock state so the
             // optimistic UI reconciles on the panel's follow-up poll.
@@ -766,9 +1213,20 @@
         };
       }
 
-      const panel = document.getElementById("panel");
+      let panel = document.getElementById("panel");
       function push() {
         panel.hass = makeHass();
+      }
+      // The panel fetches get_config only when it opens (re-pushing `hass`
+      // never reloads it), so a room-count switch mounts a fresh panel element:
+      // it loads the new room list exactly like opening the panel would. The
+      // active tab survives (the panel keeps it in localStorage).
+      function remountPanel() {
+        const fresh = document.createElement("tortoise-ufh-panel");
+        fresh.id = "panel";
+        panel.replaceWith(fresh);
+        panel = fresh;
+        push();
       }
       // The panel module is imported as a deferred <script type="module"> that
       // runs after this classic script, so wait for the definition before the
@@ -806,6 +1264,13 @@
           state.ageSeconds = state.scenario === "stale" ? 900 : 45;
           activate("data-scenario-btn", state.scenario);
           push();
+        }),
+      );
+      document.querySelectorAll("[data-rooms-btn]").forEach((b) =>
+        b.addEventListener("click", () => {
+          state.roomCount = Number(b.getAttribute("data-rooms-btn"));
+          activate("data-rooms-btn", String(state.roomCount));
+          remountPanel();
         }),
       );
       document.getElementById("poll-btn").addEventListener("click", () => {
