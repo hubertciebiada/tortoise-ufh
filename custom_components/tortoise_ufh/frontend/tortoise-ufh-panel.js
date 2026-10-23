@@ -6350,11 +6350,17 @@ class TortoiseUfhPanel extends HTMLElement {
     const x = ((best.t - C.t0) / span) * box.width;
     C.guide.style.display = "";
     C.guide.style.left = x.toFixed(1) + "px";
-    C.tip.textContent = `${this._tipTime("24h", best.t)} · ${best.text}`;
+    // The time over one line per value part (never wrapped mid-value).
+    C.tip.textContent = "";
+    C.tip.appendChild(
+      h("span", { class: "ov-chart-tip-t", text: this._tipTime("24h", best.t) }),
+    );
+    for (const part of best.text.split(" · ")) {
+      C.tip.appendChild(h("span", { text: part }));
+    }
     C.tip.style.display = "";
     // Follow the pointer inside the plot; a tooltip wider than the plot
-    // (it wraps at the plot + 32 px) centres over it instead, into the axis
-    // gutter and the card padding.
+    // centres over it instead, into the axis gutter and the card padding.
     const w = C.tip.offsetWidth;
     const left = w > box.width ? (box.width - w) / 2 : clamp(x - w / 2, 0, box.width - w);
     C.tip.style.left = left.toFixed(1) + "px";
@@ -11139,10 +11145,12 @@ button { font-family: inherit; cursor: pointer; }
 }
 .ov-chart-tip {
   position: absolute; top: -8px; transform: translateY(-100%); z-index: 2; pointer-events: none;
-  width: max-content; max-width: calc(100% + 32px);
+  width: max-content;
   padding: 4px 8px; border-radius: 8px; font-size: 11px; line-height: 1.3;
   background: var(--t-fg); color: var(--t-card); box-shadow: var(--ov-shadow);
 }
+.ov-chart-tip span { display: block; white-space: nowrap; }
+.ov-chart-tip .ov-chart-tip-t { opacity: .7; }
 .ov-chart-now {
   position: absolute; right: 0; width: 7px; height: 7px; margin: -3.5px -3.5px 0 0; pointer-events: none;
   border-radius: 50%; background: color-mix(in srgb, var(--t-fg) 70%, transparent);
