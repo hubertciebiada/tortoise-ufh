@@ -147,6 +147,21 @@ przełączniki były zbyt łatwe do trafienia przypadkiem.
 
 Zakładki:
 
+- **Przegląd** (zakładka domyślna) — cały dom na jednym ekranie, wyłącznie w agregatach
+  (szczegóły pokoi są w zakładce Pokoje). **Komfort**: ile sterowanych pokoi jest w paśmie
+  komfortu, liczniki za zimno / za ciepło / bez odczytu / wyłączone i oś odchyłek „teraz"
+  (kropka = pokój; najechanie pokazuje pokój, kliknięcie otwiera jego szczegóły). Obok
+  **Wymaga uwagi**: status algorytmu i aktywne flagi zliczone per flaga („Pokoje: 2"), trzy
+  najgroźniejsze, resztę otwiera odnośnik do zakładki Flagi; stany informacyjne w jednej
+  linii. Pod spodem trzy wykresy z ostatnich 24 godzin (średnie 5-minutowe z recordera,
+  jedno zapytanie): **Odchyłka od zadanej** (mediana i rozrzut od najzimniejszego do
+  najcieplejszego pokoju na tle pasma komfortu; liczba to część czasu, jaką pokoje spędziły
+  w paśmie), **Podłogówka** (średnie otwarcie zaworów ważone liczbą pętli) i **Temperatura
+  zewnętrzna** — najechanie pokazuje wartość z danej chwili. Wykresy liczą pokoje, które
+  sterują TERAZ (recorder nie pamięta historii stanu pokoju). Z boku **Instalacja** (pompa
+  ciepła, wspomaganie, w chłodzeniu ochrona przed rosą) i **Rozdzielacze** (wiersz na
+  rozdzielacz: obwody wypełnione do otwarcia, zasilanie → powrót; kliknięcie otwiera
+  zakładkę).
 - **Pokoje** — tabela: przełącznik stanu
   **Wyłączony/Steruje** (pierwsza kolumna),
   pomiar z trendem, zadana (z korektą), uchyb, zawór %, zasilanie/powrót pierwszej

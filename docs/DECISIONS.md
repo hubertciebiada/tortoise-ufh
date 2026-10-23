@@ -2334,3 +2334,55 @@ period, the +1 K raise (or one coarser grid step). No migration (overrides schem
 **Trade-off.** Evidence is one install, one pump family, and the kick has never run live —
 hence opt-in and Panasonic-specific. Worst case a kick that does not start the compressor
 leaves the pump 1 K above the curve until the next run, which the floor's mass absorbs.
+
+## 40. Overview tab — one screen of house-level aggregates (2026-10-23)
+
+**Problem (owner):** the panel carries a lot of information spread over six tabs and had no
+general view. The owner asked for a dashboard and, over three review rounds, fixed its shape:
+it fits ONE screen ("you open it and you have it", no scrolled list), it looks like a modern
+product rather than a Home Assistant card stack (keeping the panel's `--t-*` colour tokens),
+and it never repeats the per-room detail the Rooms tab already shows — it aggregates.
+
+**Decisions:**
+
+- **A new first tab, the default.** `TABS` starts with `overview` and `DEFAULT_TAB` is
+  `overview`; a tab remembered in `localStorage` still wins. Panel only: no backend, payload,
+  config or migration change — everything comes from `get_config`, `get_live`, the tuning
+  payload and recorder statistics the panel could already read.
+- **Hero = comfort beside attention.** Comfort: controlled (`live`) rooms inside their comfort
+  band (each room's effective `deadband_c`, the library default 0.3 K until the tuning payload
+  arrives), the counts outside it (too cold / too warm / no reading / off) and a "now" strip
+  of the deviations (measured − setpoint, worded rather than signed because the Rooms table's
+  error has the opposite sign). The strip is a distribution, not a list: its dots are the one
+  per-room element left (a name on hover, the room's inspector on click). Attention: the
+  algorithm status and every active warn-or-worse flag ONE line per flag with how many rooms
+  raise it ("Rooms: 2") — which rooms is the Rooms and Flags tabs' job — worst first, capped
+  at `OV_ATT_MAX` (3) with a "+N more" link to the Flags tab; `ok`/`info` states share one
+  quiet line.
+- **Three house charts instead of room tiles.** Small multiples on one 24 h time axis, each
+  with its own unit and scale (never a dual-axis chart): the rooms' deviation spread (median
+  line, coldest–warmest envelope, comfort band; red / blue where the envelope leaves the band;
+  the headline is the share of room-time inside the band), the floor valve opening weighted by
+  each room's loop count (headline: the live mean and open loops), and the outdoor
+  temperature (headline: live value, 24 h min/max). Data: ONE `recorder/statistics_during_period`
+  call (5-minute means of every room's `error_c` and `recommended_valve` diagnostic sensors
+  plus the outdoor sensor), at most once per control cycle and only while the tab is visible;
+  aggregated bucket by bucket (`ovAggregate`), a bucket no series holds breaks the line
+  (the `statPoints` rule), and every series ends in the live value at "now", so a headline
+  equals its chart's last point. Hover shows the bucket's time and value(s).
+- **Side column:** plant rows (heat pump target / mode, compressor, mode sync and DHW chips;
+  assist sources running out of all, by mode; in cooling the safe dew point, the highest
+  room dew point and the S2 counts) and one line per manifold (circuits filled to their
+  opening, supply → return; the words and ΔT in the tooltip; the card opens the Manifolds
+  tab). No number appears twice on the tab.
+- **Layout.** A container query on the tab (not the viewport) stacks the two columns below
+  880 px and the hero and charts below 620 px, so an open inspector or the HA sidebar re-flow
+  it; measured to fit 1184×780 (a 1440×900 laptop with the HA sidebar open), 1440×900 and
+  1664×955 in heating and cooling, light and dark, PL/EN/DE. A phone scrolls (stacked).
+
+**Trade-offs / not done:** the charts aggregate the rooms that are live NOW — the recorder
+keeps no history of a room's control state, so a room switched off an hour ago drops out of
+the whole 24 h; the deviation chart uses the global deadband for its band while the headline
+counts each room against its own; the attention cap hides the least severe entries behind
+one click. Tests: `tests/unit/test_panel_i18n.py` (every Overview string in PL/EN/DE, the
+tab first and default).

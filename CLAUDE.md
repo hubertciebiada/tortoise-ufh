@@ -65,10 +65,13 @@ Core talks to the outside only through plain frozen dataclasses and structural `
   specs (`CONTROLLER_NUMBER_KNOBS`) and `CONF_CONTROLLER` live in `const.py`. Imports the
   core via `.core`; is imported by nothing.
 - **Panel** — `custom_components/tortoise_ufh/frontend/tortoise-ufh-panel.js`. Self-contained
-  vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Seven tabs — Rooms (table
-  with the per-room two-state control), Flags, Tuning, Valves, Assist, Heat pump, Manifolds
-  (v0.21.0: an axonometric KAN-therm InoxFlow UFST drawing + circuit table per configured
-  distributor, from `get_live.manifolds`; the panel's one string-built SVG, HA text escaped) —
+  vanilla-JS sidebar panel (no build step, no CDN imports — CSP). Seven tabs — Overview (the
+  default: one screen of house-level aggregates, never per-room tiles — comfort beside the
+  attention list counted per flag, three 24 h charts aggregated from ONE 5-minute
+  recorder-statistics batch, plant rows, a line per manifold; DECISIONS §40), Rooms (table
+  with the per-room two-state control), Flags, Tuning, Manifolds (v0.21.0: an axonometric
+  KAN-therm InoxFlow UFST drawing + circuit table per configured distributor, from
+  `get_live.manifolds`; the panel's one string-built SVG, HA text escaped), Assist, Heat pump —
   rendering the black-box report. Fully localised PL/EN/DE from one per-language `STR` table with a
   guaranteed English fallback (`_resolveLang` maps the HA locale; unknown ⇒ English); the HA-side
   UI strings live in `translations/{en,pl,de}.json` (mirrors, key-parity enforced by

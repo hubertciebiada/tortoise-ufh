@@ -159,6 +159,22 @@ Klick daneben = abbrechen) — diese Schalter waren zu leicht versehentlich zu t
 
 Reiter:
 
+- **Übersicht** (Standardreiter) — das ganze Haus auf einem Bildschirm, nur als Aggregate
+  (Details je Raum stehen im Reiter Räume). **Komfort**: wie viele geregelte Räume im
+  Komfortband liegen, Zähler zu kalt / zu warm / ohne Messwert / aus und die Achse der
+  aktuellen Abweichungen (Punkt = Raum; Überfahren zeigt den Raum, ein Klick öffnet seine
+  Details). Daneben **Erfordert Aufmerksamkeit**: Algorithmusstatus und aktive Meldungen,
+  je Meldung gezählt („Räume: 2“), die drei schwerwiegendsten, den Rest öffnet ein Link zum
+  Reiter Meldungen; Informationszustände in einer Zeile. Darunter drei Diagramme der
+  letzten 24 Stunden (5-Minuten-Mittelwerte des Recorders, eine Abfrage): **Abweichung vom
+  Sollwert** (Median und Streuung vom kältesten bis zum wärmsten Raum vor dem Komfortband;
+  die Zahl ist der Zeitanteil der Räume im Band), **Fußbodenkreise** (mittlere
+  Ventilöffnung, gewichtet mit der Kreisanzahl) und **Außentemperatur** — Überfahren zeigt
+  den Wert zu diesem Zeitpunkt. Die Diagramme zählen die Räume, die JETZT aktiv sind (der
+  Recorder kennt keinen Verlauf des Raumzustands). Seitlich **Anlage** (Wärmepumpe,
+  Zusatzquelle, beim Kühlen der Kondensationsschutz) und **Verteiler** (eine Zeile je
+  Verteiler: Heizkreise bis zur Öffnung gefüllt, Vorlauf → Rücklauf; ein Klick öffnet den
+  Reiter).
 - **Räume** — Tabelle: Umschalter des Zustands
   **Aus/Aktiv** (erste Spalte),
   Messwert mit Trend, Sollwert (mit Offset), Regelabweichung, Ventil %,

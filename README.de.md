@@ -145,8 +145,11 @@ für Menschen und KI lesbare Erläuterung, was er getan hat und warum.
   *Aus* nimmt ihn von der Regelung aus (der Kern lässt ihn ruhen und es wird nie etwas geschrieben),
   *Aktiv* steuert seine Hardware. Ein „Hände weg“ für das ganze Haus ist einfach jeder Raum auf
   Aus (siehe unten).
-- **Seitenleisten-Panel** — ein abhängigkeitsfreies Home-Assistant-Panel mit sieben Reitern (Räume,
-  Meldungen, Abstimmung, Verteiler, Zusatzquelle, Wärmepumpe): eine Live-Tabelle je Raum
+- **Seitenleisten-Panel** — ein abhängigkeitsfreies Home-Assistant-Panel mit sieben Reitern
+  (Übersicht, Räume, Meldungen, Abstimmung, Verteiler, Zusatzquelle, Wärmepumpe): eine Übersicht
+  des ganzen Hauses auf einem Bildschirm (Räume im Komfortband, was Aufmerksamkeit erfordert,
+  24-Stunden-Diagramme der Abweichungsstreuung der Räume, der Ventilöffnung der Fußbodenkreise
+  und der Außentemperatur, die Anlage und die Verteiler), eine Live-Tabelle je Raum
   (Regelungszustand, gemessene Temperatur, Sollwert, Regelabweichung, Ventil %, Vorlauf-/
   Rücklaufwasser, Modus), ein Meldungs-Annunciator, die Reglerabstimmung (globale Verstärkungen plus
   vereinzelte Übersteuerungen je Raum), die optionale Wärmepumpen-Anbindung, der vollständige
